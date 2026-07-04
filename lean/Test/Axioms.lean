@@ -50,5 +50,23 @@ import SafeMesh
 /-- info: 'SafeMesh.deltaPNCounter_value_matches' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms SafeMesh.deltaPNCounter_value_matches
 
+/-- info: 'SafeMesh.deltaORSet_adds' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.deltaORSet_adds
+
+/-- info: 'SafeMesh.deltaORSet_tombs' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.deltaORSet_tombs
+
+/-- info: 'SafeMesh.deltaORSet_matches_full' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.deltaORSet_matches_full
+
+/-- info: 'SafeMesh.deltaORSet_elements_match' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.deltaORSet_elements_match
+
+/-- info: 'SafeMesh.deltaORSet_lookup_match' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.deltaORSet_lookup_match
+
+/-- info: 'SafeMesh.deltaORSet_lookup' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.deltaORSet_lookup
+
 def main : IO Unit :=
   IO.println "axiom gate passed: all checks pinned by #guard_msgs at compile time"
