@@ -68,5 +68,26 @@ import SafeMesh
 /-- info: 'SafeMesh.deltaORSet_lookup' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms SafeMesh.deltaORSet_lookup
 
+/-- info: 'SafeMesh.deltaRGA_placed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.deltaRGA_placed
+
+/-- info: 'SafeMesh.deltaRGA_tombs' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.deltaRGA_tombs
+
+/-- info: 'SafeMesh.deltaRGA_matches_full' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.deltaRGA_matches_full
+
+/-- info: 'SafeMesh.deltaRGA_read_match' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.deltaRGA_read_match
+
+/-- info: 'SafeMesh.deltaRGA_read_sec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.deltaRGA_read_sec
+
+/-- info: 'SafeMesh.deltaRGA_read_mem' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.deltaRGA_read_mem
+
+/-- info: 'SafeMesh.deltaRGA_read_sorted' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.deltaRGA_read_sorted
+
 def main : IO Unit :=
   IO.println "axiom gate passed: all checks pinned by #guard_msgs at compile time"
