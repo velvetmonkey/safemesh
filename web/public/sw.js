@@ -1,5 +1,5 @@
-const CACHE_NAME = 'safemesh-pwa-mvp-v1'
-const APP_SHELL = ['/', '/manifest.webmanifest', '/pwa-icon.svg', '/favicon.svg']
+const CACHE_NAME = 'safemesh-pwa-antientropy-v1'
+const APP_SHELL = ['/', '/README.md', '/manifest.webmanifest', '/pwa-icon.svg', '/favicon.svg']
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)))

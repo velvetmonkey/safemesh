@@ -2,6 +2,7 @@
   --bg: #f7f7f4;
   --panel: #ffffff;
   --field: #fbfbf8;
+  --soft: #eef6f1;
   --ink: #171717;
   --text: #3f4548;
   --muted: #667073;
@@ -19,6 +20,24 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111315;
+    --panel: #181b1f;
+    --field: #20242a;
+    --soft: #17231c;
+    --ink: #f4f7f6;
+    --text: #d1d8d6;
+    --muted: #99a5a2;
+    --line: #30363d;
+    --accent: #79a7ff;
+    --accent-soft: rgba(121, 167, 255, 0.18);
+    --good: #60c878;
+    --warn: #f3b544;
+    --bad: #ff7b72;
+  }
 }
 
 * {

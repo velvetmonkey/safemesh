@@ -5,6 +5,8 @@ import {
   bottomGCounter,
   bottomORSet,
   bumpDelta,
+  mergeGCounter,
+  mergeORSet,
   observedTokens,
   readGCounter,
   readORSet,
@@ -36,8 +38,9 @@ export type Packet = {
 export type LogEntry = {
   id: string
   at: number
-  text: string
-  tone: 'send' | 'deliver' | 'drop' | 'partition' | 'merge'
+  plain: string
+  technical: string
+  tone: 'send' | 'deliver' | 'drop' | 'partition' | 'merge' | 'anti-entropy'
 }
 
 export type Simulation = {
@@ -46,6 +49,8 @@ export type Simulation = {
   partitioned: boolean
   latencyMs: number
   dropRate: number
+  antiEntropyMs: number
+  nextAntiEntropyAt: number
   now: number
   nextId: number
   log: LogEntry[]
@@ -63,6 +68,8 @@ export function createSimulation(peerCount = 4): Simulation {
     partitioned: false,
     latencyMs: 550,
     dropRate: 0.08,
+    antiEntropyMs: 5000,
+    nextAntiEntropyAt: 5000,
     now: 0,
     nextId: 1,
     log: [],
@@ -75,15 +82,18 @@ export function setPeerCount(sim: Simulation, peerCount: number): Simulation {
     ...next,
     latencyMs: sim.latencyMs,
     dropRate: sim.dropRate,
+    antiEntropyMs: sim.antiEntropyMs,
+    nextAntiEntropyAt: sim.antiEntropyMs,
     log: appendLog(next, `reset mesh to ${peerCount} peers`, 'partition').log,
   }
 }
 
 export function setPartitioned(sim: Simulation, partitioned: boolean): Simulation {
   return appendLog(
-    { ...sim, partitioned },
-    partitioned ? 'partition enabled: generated deltas stay local' : 'partition healed: queued gossip resumes',
+    { ...sim, partitioned, nextAntiEntropyAt: partitioned ? sim.nextAntiEntropyAt : sim.now },
+    partitioned ? 'Network cut: new radio messages are stuck locally' : 'Network back up: camps catching up',
     'partition',
+    partitioned ? 'partition enabled: generated deltas stay local' : 'partition healed: queued gossip resumes',
   )
 }
 
@@ -95,11 +105,25 @@ export function setDropRate(sim: Simulation, dropRate: number): Simulation {
   return { ...sim, dropRate }
 }
 
+export function setAntiEntropyMs(sim: Simulation, antiEntropyMs: number): Simulation {
+  return {
+    ...sim,
+    antiEntropyMs,
+    nextAntiEntropyAt: antiEntropyMs > 0 ? sim.now + antiEntropyMs : Number.POSITIVE_INFINITY,
+  }
+}
+
 export function bumpCounter(sim: Simulation, peerId: number): Simulation {
   const peer = sim.peers[peerId]
   if (!peer) return sim
   const tally = peer.localTally + 1
-  return emitDelta(sim, peerId, bumpDelta(peerId, tally), `peer ${peerId} bumps G-Counter to ${tally}`)
+  return emitDelta(
+    sim,
+    peerId,
+    bumpDelta(peerId, tally),
+    `Camp ${peerId} increases headcount to ${tally}`,
+    `peer ${peerId} bumps G-Counter to ${tally}`,
+  )
 }
 
 export function addElement(sim: Simulation, peerId: number, element: string): Simulation {
@@ -107,7 +131,13 @@ export function addElement(sim: Simulation, peerId: number, element: string): Si
   const clean = element.trim()
   if (!peer || clean.length === 0) return sim
   const token = `p${peerId}-${sim.nextId}`
-  return emitDelta(sim, peerId, addDelta(clean, token), `peer ${peerId} adds "${clean}" (${token})`)
+  return emitDelta(
+    sim,
+    peerId,
+    addDelta(clean, token),
+    `Camp ${peerId} added '${clean}' to the supply list`,
+    `peer ${peerId} adds "${clean}" (${token})`,
+  )
 }
 
 export function removeElement(sim: Simulation, peerId: number, element: string): Simulation {
@@ -115,12 +145,18 @@ export function removeElement(sim: Simulation, peerId: number, element: string):
   if (!peer) return sim
   const tokens = observedTokens(peer.orset, element)
   if (tokens.length === 0) {
-    return appendLog(sim, `peer ${peerId} remove skipped; "${element}" is not observed`, 'drop')
+    return appendLog(
+      sim,
+      `Camp ${peerId} cannot remove '${element}' because it has not seen it`,
+      'drop',
+      `peer ${peerId} remove skipped; "${element}" is not observed`,
+    )
   }
   return emitDelta(
     sim,
     peerId,
     { kind: 'orset.remove', tokens },
+    `Camp ${peerId} removed the '${element}' supplies it had seen`,
     `peer ${peerId} removes observed "${element}" tokens [${tokens.join(', ')}]`,
   )
 }
@@ -141,14 +177,19 @@ export function tick(sim: Simulation, elapsedMs: number, random = Math.random): 
     }
 
     if (random() < sim.dropRate) {
-      next = appendLog(next, `dropped ${describeDelta(packet.delta)} ${packet.from}->${packet.to}`, 'drop')
+      next = appendLog(
+        next,
+        plainDrop(packet),
+        'drop',
+        `dropped ${describeDelta(packet.delta)} ${packet.from}->${packet.to}`,
+      )
       continue
     }
 
     next = deliverPacket(next, packet)
   }
 
-  return next
+  return maybeRunAntiEntropy(next)
 }
 
 export function convergence(sim: Simulation): {
@@ -181,7 +222,17 @@ export function convergence(sim: Simulation): {
   }
 }
 
-function emitDelta(sim: Simulation, peerId: number, delta: MeshDelta, message: string): Simulation {
+export function runAntiEntropyNow(sim: Simulation): Simulation {
+  return runAntiEntropy({ ...sim, nextAntiEntropyAt: sim.now })
+}
+
+function emitDelta(
+  sim: Simulation,
+  peerId: number,
+  delta: MeshDelta,
+  plainMessage: string,
+  technicalMessage: string,
+): Simulation {
   const local = applyDeltaToPeer(sim.peers[peerId], delta)
   const peers = sim.peers.map((peer) => (peer.id === peerId ? local : peer))
   const packetBase = sim.nextId
@@ -202,8 +253,11 @@ function emitDelta(sim: Simulation, peerId: number, delta: MeshDelta, message: s
       queue: [...sim.queue, ...packets],
       nextId: sim.nextId + 1,
     },
-    sim.partitioned ? `${message}; held by partition` : `${message}; queued to ${packets.length} peers`,
+    sim.partitioned
+      ? `${plainMessage} - stuck until reconnect`
+      : `${plainMessage} - sent to ${packets.length} camps`,
     'send',
+    sim.partitioned ? `${technicalMessage}; held by partition` : `${technicalMessage}; queued to ${packets.length} peers`,
   )
 }
 
@@ -211,8 +265,9 @@ function deliverPacket(sim: Simulation, packet: Packet): Simulation {
   const peers = sim.peers.map((peer) => (peer.id === packet.to ? applyDeltaToPeer(peer, packet.delta) : peer))
   return appendLog(
     { ...sim, peers },
-    `delivered ${describeDelta(packet.delta)} ${packet.from}->${packet.to}`,
+    plainDeliver(packet),
     'deliver',
+    `delivered ${describeDelta(packet.delta)} ${packet.from}->${packet.to}`,
   )
 }
 
@@ -228,8 +283,97 @@ function applyDeltaToPeer(peer: Peer, delta: MeshDelta): Peer {
   return { ...peer, orset: applyORSetDelta(peer.orset, delta) }
 }
 
-function appendLog(sim: Simulation, text: string, tone: LogEntry['tone']): Simulation {
-  const entry = { id: `l${sim.nextId}-${sim.log.length}`, at: sim.now, text, tone }
+function maybeRunAntiEntropy(sim: Simulation): Simulation {
+  if (sim.antiEntropyMs <= 0 || sim.now < sim.nextAntiEntropyAt) return sim
+  if (sim.partitioned) return sim
+  return runAntiEntropy(sim)
+}
+
+function runAntiEntropy(sim: Simulation): Simulation {
+  if (sim.partitioned || sim.antiEntropyMs <= 0) return sim
+
+  let peers = sim.peers
+  let next: Simulation = { ...sim, nextAntiEntropyAt: sim.now + sim.antiEntropyMs }
+
+  for (let i = 0; i < peers.length; i += 1) {
+    for (let j = i + 1; j < peers.length; j += 1) {
+      const left = peers[i]
+      const right = peers[j]
+      const rightToLeft = backfillDescriptions(left, right)
+      const leftToRight = backfillDescriptions(right, left)
+
+      if (rightToLeft.length === 0 && leftToRight.length === 0) continue
+
+      const merged = {
+        gcounter: mergeGCounter(left.gcounter, right.gcounter),
+        orset: mergeORSet(left.orset, right.orset),
+      }
+      peers = peers.map((peer) => {
+        if (peer.id === left.id) return normalizePeer({ ...left, ...merged })
+        if (peer.id === right.id) return normalizePeer({ ...right, ...merged })
+        return peer
+      })
+
+      for (const item of rightToLeft) {
+        next = appendLog(
+          { ...next, peers },
+          `Camp ${left.id} recovered ${item.plain} from Camp ${right.id}`,
+          'anti-entropy',
+          `anti-entropy: peer ${left.id} backfilled ${item.technical} from peer ${right.id}`,
+        )
+      }
+      for (const item of leftToRight) {
+        next = appendLog(
+          { ...next, peers },
+          `Camp ${right.id} recovered ${item.plain} from Camp ${left.id}`,
+          'anti-entropy',
+          `anti-entropy: peer ${right.id} backfilled ${item.technical} from peer ${left.id}`,
+        )
+      }
+    }
+  }
+
+  return { ...next, peers }
+}
+
+function backfillDescriptions(
+  target: Peer,
+  source: Peer,
+): Array<{ plain: string; technical: string }> {
+  const items: Array<{ plain: string; technical: string }> = []
+
+  source.gcounter.forEach((value, replica) => {
+    if (value > (target.gcounter[replica] ?? 0)) {
+      items.push({ plain: `headcount from Camp ${replica}`, technical: `G(${replica}:=${value})` })
+    }
+  })
+
+  for (const [token, element] of Object.entries(source.orset.adds)) {
+    if (!target.orset.adds[token]) {
+      items.push({ plain: `'${element}'`, technical: `OR-add(${element}, ${token})` })
+    }
+  }
+
+  for (const token of Object.keys(source.orset.tombstones)) {
+    if (!target.orset.tombstones[token]) {
+      items.push({ plain: `a removal marker (${token})`, technical: `OR-remove-token(${token})` })
+    }
+  }
+
+  return items
+}
+
+function normalizePeer(peer: Peer): Peer {
+  return { ...peer, localTally: Math.max(peer.localTally, peer.gcounter[peer.id] ?? 0) }
+}
+
+function appendLog(
+  sim: Simulation,
+  plain: string,
+  tone: LogEntry['tone'],
+  technical = plain,
+): Simulation {
+  const entry = { id: `l${sim.nextId}-${sim.log.length}`, at: sim.now, plain, technical, tone }
   return { ...sim, log: [entry, ...sim.log].slice(0, 80) }
 }
 
@@ -237,4 +381,24 @@ function describeDelta(delta: MeshDelta): string {
   if (delta.kind === 'gcounter.bump') return `G(${delta.replica}:=${delta.tally})`
   if (delta.kind === 'orset.add') return `OR-add(${delta.element}, ${delta.token})`
   return `OR-remove(${delta.tokens.length} tokens)`
+}
+
+function plainDeliver(packet: Packet): string {
+  if (packet.delta.kind === 'gcounter.bump') {
+    return `Camp ${packet.to} heard Camp ${packet.delta.replica}'s headcount`
+  }
+  if (packet.delta.kind === 'orset.add') {
+    return `Camp ${packet.to} received '${packet.delta.element}' from Camp ${packet.from}`
+  }
+  return `Camp ${packet.to} received removal notes from Camp ${packet.from}`
+}
+
+function plainDrop(packet: Packet): string {
+  if (packet.delta.kind === 'gcounter.bump') {
+    return `Camp ${packet.to} missed Camp ${packet.delta.replica}'s headcount (signal dropped)`
+  }
+  if (packet.delta.kind === 'orset.add') {
+    return `Camp ${packet.to} missed '${packet.delta.element}' (signal dropped)`
+  }
+  return `Camp ${packet.to} missed removal notes (signal dropped)`
 }

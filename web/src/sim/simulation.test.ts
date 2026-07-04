@@ -5,6 +5,8 @@ import {
   convergence,
   createSimulation,
   removeElement,
+  runAntiEntropyNow,
+  setAntiEntropyMs,
   setDropRate,
   setPartitioned,
   tick,
@@ -44,5 +46,36 @@ describe('mesh simulation', () => {
     for (let i = 0; i < 20; i += 1) sim = tick(sim, 250, () => 1)
 
     expect(convergence(sim).orsetElements).toEqual(['relay'])
+  })
+
+  it('recovers a dropped delta with anti-entropy state merge', () => {
+    let sim = setAntiEntropyMs(setDropRate(createSimulation(4), 1), 0)
+    sim = addElement(sim, 0, 'medkit')
+    sim = tick(sim, 2000, () => 0)
+
+    expect(sim.queue).toHaveLength(0)
+    expect(convergence(sim).sameRawState).toBe(false)
+
+    sim = setAntiEntropyMs(sim, 5000)
+    sim = runAntiEntropyNow(sim)
+
+    const status = convergence(sim)
+    expect(status.sameRawState).toBe(true)
+    expect(status.converged).toBe(true)
+    expect(status.orsetElements).toEqual(['medkit'])
+  })
+
+  it('does not run anti-entropy while partitioned, then reconciles after reconnect', () => {
+    let sim = setAntiEntropyMs(createSimulation(3), 5000)
+    sim = setPartitioned(sim, true)
+    sim = addElement(sim, 0, 'water')
+    sim = runAntiEntropyNow(sim)
+
+    expect(convergence(sim).sameRawState).toBe(false)
+
+    sim = setPartitioned(sim, false)
+    sim = runAntiEntropyNow(sim)
+
+    expect(convergence(sim).sameRawState).toBe(true)
   })
 })
