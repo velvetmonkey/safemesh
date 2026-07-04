@@ -23,3 +23,13 @@ globs = ["Test.+"]
 [[lean_exe]]
 name = "axiom_check"
 root = "Test.Axioms"
+
+# Conformance-corpus emitter — deliberately NOT a defaultTarget: it is the
+# compiled-evaluation side of the differential bridge (see Corpus.lean TCB
+# note) and must stay off the kernel-checked proof path.
+[[lean_lib]]
+name = "Corpus"
+
+[[lean_exe]]
+name = "corpus"
+root = "Corpus"

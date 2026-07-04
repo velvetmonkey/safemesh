@@ -1,0 +1,21 @@
+{"schema":"safemesh-conformance-v1","replicas":4,"gcounter":[
+  {"name":"g_empty","n":4,"bumps":[],"expected_state":[0,0,0,0],"expected_value":0},
+  {"name":"g_single","n":4,"bumps":[[0,5]],"expected_state":[5,0,0,0],"expected_value":5},
+  {"name":"g_two_replicas","n":4,"bumps":[[0,3],[2,7]],"expected_state":[3,0,7,0],"expected_value":10},
+  {"name":"g_monotone_same_replica","n":4,"bumps":[[1,1],[1,4],[1,2]],"expected_state":[0,4,0,0],"expected_value":4},
+  {"name":"g_all_replicas","n":4,"bumps":[[0,10],[1,20],[2,30],[3,40]],"expected_state":[10,20,30,40],"expected_value":100},
+  {"name":"g_perm_a","n":4,"bumps":[[0,2],[1,9],[3,6]],"expected_state":[2,9,0,6],"expected_value":17},
+  {"name":"g_perm_b","n":4,"bumps":[[3,6],[0,2],[1,9]],"expected_state":[2,9,0,6],"expected_value":17},
+  {"name":"g_redelivery","n":4,"bumps":[[2,8],[2,8],[2,8]],"expected_state":[0,0,8,0],"expected_value":8},
+  {"name":"g_mixed_order_dupes","n":4,"bumps":[[1,5],[0,1],[1,5],[3,3],[0,4]],"expected_state":[4,5,0,3],"expected_value":12}
+],"pncounter":[
+  {"name":"pn_empty","n":4,"ops":[],"expected_p":[0,0,0,0],"expected_n":[0,0,0,0],"expected_value":0},
+  {"name":"pn_inc_only","n":4,"ops":[["inc",0,5],["inc",2,3]],"expected_p":[5,0,3,0],"expected_n":[0,0,0,0],"expected_value":8},
+  {"name":"pn_dec_only","n":4,"ops":[["dec",1,4]],"expected_p":[0,0,0,0],"expected_n":[0,4,0,0],"expected_value":-4},
+  {"name":"pn_net_positive","n":4,"ops":[["inc",0,10],["dec",0,4]],"expected_p":[10,0,0,0],"expected_n":[4,0,0,0],"expected_value":6},
+  {"name":"pn_net_negative","n":4,"ops":[["inc",1,2],["dec",2,9]],"expected_p":[0,2,0,0],"expected_n":[0,0,9,0],"expected_value":-7},
+  {"name":"pn_perm_a","n":4,"ops":[["inc",0,7],["dec",1,3],["inc",2,5]],"expected_p":[7,0,5,0],"expected_n":[0,3,0,0],"expected_value":9},
+  {"name":"pn_perm_b","n":4,"ops":[["inc",2,5],["inc",0,7],["dec",1,3]],"expected_p":[7,0,5,0],"expected_n":[0,3,0,0],"expected_value":9},
+  {"name":"pn_redelivery","n":4,"ops":[["inc",3,6],["dec",3,6],["inc",3,6]],"expected_p":[0,0,0,6],"expected_n":[0,0,0,6],"expected_value":0},
+  {"name":"pn_all_coords","n":4,"ops":[["inc",0,1],["inc",1,2],["inc",2,3],["inc",3,4],["dec",0,1],["dec",3,2]],"expected_p":[1,2,3,4],"expected_n":[1,0,0,2],"expected_value":7}
+]}
