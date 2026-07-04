@@ -1,0 +1,25 @@
+name = "safemesh-lean"
+version = "0.1.0"
+# axiom_check MUST stay in defaultTargets: the #guard_msgs axiom gate in
+# Test/Axioms.lean only fires when that module is elaborated, and a plain
+# `lake build` skips non-default targets silently.
+defaultTargets = ["SafeMesh", "axiom_check"]
+
+# Mathlib-carrying library first so mathlib's transitive pins win Lake's
+# resolution order (same convention as seal-host). Mathlib v4.28.0 arrives
+# transitively through crdt-lean — no direct require, one source of truth.
+[[require]]
+name = "crdt-lean"
+git = "https://github.com/velvetmonkey/crdt-lean.git"
+rev = "7d9016164c7b9208b93bbb1eef2f5c018d626a32"
+
+[[lean_lib]]
+name = "SafeMesh"
+
+[[lean_lib]]
+name = "Test"
+globs = ["Test.+"]
+
+[[lean_exe]]
+name = "axiom_check"
+root = "Test.Axioms"
