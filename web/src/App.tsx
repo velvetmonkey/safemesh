@@ -6,6 +6,7 @@ import {
   bumpCounter,
   convergence,
   createSimulation,
+  propagationStats,
   removeElement,
   runAntiEntropyNow,
   setAntiEntropyMs,
@@ -13,6 +14,8 @@ import {
   setLatency,
   setPartitioned,
   setPeerCount,
+  startStorm,
+  stopStorm,
   tick,
   type Simulation,
 } from './sim'
@@ -37,7 +40,11 @@ function App() {
   }, [])
 
   const selected = sim.peers[selectedPeer] ?? sim.peers[0]
-  const banner = bannerState(sim, status)
+  const propagation = useMemo(() => propagationStats(sim), [sim])
+  const banner = bannerState(sim, status, propagation.missing)
+  const sweepActive = sim.lastSweepAt !== null && sim.now - sim.lastSweepAt < 1200
+  const snapActive = sim.lastConvergedAt !== null && sim.now - sim.lastConvergedAt < 1100
+  const proofActive = sim.lastProofAt !== null && sim.now - sim.lastProofAt < 2200
   const title = technical
     ? `${sim.peers.length} peers, simulated transport. Watch delta-state CRDTs converge.`
     : `${sim.peers.length} camps, no internet. Watch them stay in sync anyway.`
@@ -66,12 +73,39 @@ function App() {
       await sleep(wait)
     }
 
-    setTourCaption('All camps agree again. Drops caused delay, not permanent divergence.')
+      setTourCaption('All camps agree again. Drops caused delay, not permanent divergence.')
+      setTourRunning(false)
+  }
+
+  async function runStorm() {
+    setTourRunning(true)
+    let scripted = startStorm(setAntiEntropyMs(createSimulation(sim.peers.length), 1800))
+    scripted = addElement(scripted, 0, 'medkit')
+    scripted = addElement(scripted, 1, 'flour')
+    scripted = bumpCounter(scripted, 2)
+    setTourCaption('Storm on: the network is cut, drops are brutal, camps diverge.')
+    setSim(scripted)
+    await sleep(900)
+
+    scripted = tick(scripted, 1800, () => 0)
+    scripted = addElement(scripted, 3, 'radio')
+    setTourCaption('Messages are missing. Watch the counter and meter show the gap.')
+    setSim(scripted)
+    await sleep(900)
+
+    scripted = stopStorm(scripted)
+    setTourCaption('Storm breaks. The next sweep exchanges state digests.')
+    setSim(scripted)
+    await sleep(700)
+
+    scripted = runAntiEntropyNow(scripted)
+    setTourCaption('Sweep complete: recovered by merge_deltaState.')
+    setSim(scripted)
     setTourRunning(false)
   }
 
   return (
-    <main className="shell">
+    <main className={`shell ${sweepActive ? 'sweeping' : ''} ${snapActive ? 'snap' : ''}`}>
       <header className="hero">
         <div>
           <p className="eyebrow">SafeMesh supply-run demo</p>
@@ -82,11 +116,30 @@ function App() {
         </a>
       </header>
 
-      <section className={`banner ${banner.tone}`} aria-live="polite">
+      <section className={`banner ${banner.tone} ${propagation.status === 'syncing' ? 'pulse' : ''}`} aria-live="polite">
         <strong>
           <span aria-hidden="true">{banner.icon}</span> {banner.title}
         </strong>
         <span>{banner.detail}</span>
+        {proofActive && <em>recovered · guaranteed by merge_deltaState</em>}
+      </section>
+
+      <section className="convergence-panel" aria-label="Convergence meter">
+        <div className="meter-copy">
+          <h2>Convergence meter</h2>
+          <p>
+            {propagation.missing === 0
+              ? '0 items still propagating'
+              : `${propagation.missing} ${propagation.missing === 1 ? 'item' : 'items'} still propagating`}
+          </p>
+        </div>
+        <div className="meter-track" aria-hidden="true">
+          <span style={{ width: `${Math.round(propagation.progress * 100)}%` }} />
+        </div>
+        <div className="storm-tally">
+          longest divergence {(sim.storm.longestDivergenceMs / 1000).toFixed(1)}s · always recovered{' '}
+          {sim.storm.alwaysRecovered ? '✓' : '✗'} · {sim.storm.sweeps} sweeps
+        </div>
       </section>
 
       {introOpen && (
@@ -179,6 +232,9 @@ function App() {
         <button type="button" onClick={() => setSim(createSimulation(sim.peers.length))}>
           Reset
         </button>
+        <button type="button" className="storm-button" disabled={tourRunning} onClick={runStorm}>
+          Storm
+        </button>
       </section>
 
       <section className="actions">
@@ -224,22 +280,31 @@ function App() {
       </section>
 
       <section className="map" aria-label="Camp map">
+        <div className="sweep-wave" aria-hidden="true" />
         {sim.peers.map((peer) => {
           const elements = readORSet(peer.orset)
+          const pops = sim.recoveryPops.filter((pop) => pop.peerId === peer.id && sim.now - pop.at < 1800)
           return (
             <button
               type="button"
               key={peer.id}
-              className={`camp ${peer.id === selectedPeer ? 'selected' : ''}`}
+              className={`camp ${peer.id === selectedPeer ? 'selected' : ''} ${pops.length > 0 ? 'recovered' : ''}`}
               onClick={() => setSelectedPeer(peer.id)}
             >
               <span className="camp-title">{technical ? `Peer ${peer.id}` : `Camp ${peer.id}`}</span>
               <span className="headcount">{readGCounter(peer.gcounter)}</span>
               <span className="supplies">{elements.length > 0 ? elements.join(', ') : 'no supplies yet'}</span>
+              <span className="pop-stack" aria-live="polite">
+                {pops.slice(0, 2).map((pop) => (
+                  <span key={pop.id} className="recovery-pop">
+                    +{pop.label.replaceAll("'", '')}
+                  </span>
+                ))}
+              </span>
             </button>
           )
         })}
-        <div className={`network-line ${sim.partitioned ? 'cut' : ''}`}>
+        <div className={`network-line ${sim.partitioned ? 'cut' : ''} ${snapActive ? 'restored' : ''}`}>
           {sim.partitioned ? 'broken radio links' : 'connected radio links'}
         </div>
       </section>
@@ -283,11 +348,11 @@ function App() {
   )
 }
 
-function bannerState(sim: Simulation, status: ReturnType<typeof convergence>) {
+function bannerState(sim: Simulation, status: ReturnType<typeof convergence>, missing: number) {
   if (sim.partitioned) {
     return {
-      tone: 'warn',
-      icon: '◐',
+      tone: 'bad',
+      icon: '✗',
       title: 'Network split',
       detail: `${sim.peers.length} camps can keep working, but radio messages wait for reconnect.`,
     }
@@ -301,10 +366,10 @@ function bannerState(sim: Simulation, status: ReturnType<typeof convergence>) {
     }
   }
   return {
-    tone: 'bad',
-    icon: '✗',
-    title: 'Camps disagree',
-    detail: sim.antiEntropyMs > 0 ? 'A catch-up round will backfill dropped messages.' : 'Anti-entropy is off.',
+    tone: 'warn',
+    icon: '◐',
+    title: `Catching up (${missing} left)`,
+    detail: sim.antiEntropyMs > 0 ? 'A catch-up sweep is backfilling dropped messages.' : 'Anti-entropy is off.',
   }
 }
 

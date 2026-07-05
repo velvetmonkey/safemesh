@@ -43,6 +43,21 @@ export type LogEntry = {
   tone: 'send' | 'deliver' | 'drop' | 'partition' | 'merge' | 'anti-entropy'
 }
 
+export type RecoveryPop = {
+  id: string
+  peerId: number
+  label: string
+  at: number
+}
+
+export type StormStats = {
+  active: boolean
+  longestDivergenceMs: number
+  divergedSince: number | null
+  alwaysRecovered: boolean
+  sweeps: number
+}
+
 export type Simulation = {
   peers: Peer[]
   queue: Packet[]
@@ -53,6 +68,11 @@ export type Simulation = {
   nextAntiEntropyAt: number
   now: number
   nextId: number
+  lastSweepAt: number | null
+  lastConvergedAt: number | null
+  lastProofAt: number | null
+  recoveryPops: RecoveryPop[]
+  storm: StormStats
   log: LogEntry[]
 }
 
@@ -72,6 +92,17 @@ export function createSimulation(peerCount = 4): Simulation {
     nextAntiEntropyAt: 5000,
     now: 0,
     nextId: 1,
+    lastSweepAt: null,
+    lastConvergedAt: null,
+    lastProofAt: null,
+    recoveryPops: [],
+    storm: {
+      active: false,
+      longestDivergenceMs: 0,
+      divergedSince: null,
+      alwaysRecovered: true,
+      sweeps: 0,
+    },
     log: [],
   }
 }
@@ -84,6 +115,7 @@ export function setPeerCount(sim: Simulation, peerCount: number): Simulation {
     dropRate: sim.dropRate,
     antiEntropyMs: sim.antiEntropyMs,
     nextAntiEntropyAt: sim.antiEntropyMs,
+    storm: sim.storm.active ? { ...next.storm, active: true, alwaysRecovered: sim.storm.alwaysRecovered } : next.storm,
     log: appendLog(next, `reset mesh to ${peerCount} peers`, 'partition').log,
   }
 }
@@ -111,6 +143,40 @@ export function setAntiEntropyMs(sim: Simulation, antiEntropyMs: number): Simula
     antiEntropyMs,
     nextAntiEntropyAt: antiEntropyMs > 0 ? sim.now + antiEntropyMs : Number.POSITIVE_INFINITY,
   }
+}
+
+export function startStorm(sim: Simulation): Simulation {
+  return appendLog(
+    {
+      ...sim,
+      partitioned: true,
+      latencyMs: 1300,
+      dropRate: 0.78,
+      antiEntropyMs: 2000,
+      nextAntiEntropyAt: sim.now + 2000,
+      storm: { ...sim.storm, active: true, divergedSince: sim.storm.divergedSince ?? sim.now },
+    },
+    'Storm mode: network cut, heavy drops, long radio delay',
+    'partition',
+    'storm enabled: partition=true drop=0.78 latency=1300 antiEntropy=2000',
+  )
+}
+
+export function stopStorm(sim: Simulation): Simulation {
+  return appendLog(
+    {
+      ...sim,
+      partitioned: false,
+      dropRate: 0.12,
+      latencyMs: 700,
+      antiEntropyMs: 2000,
+      nextAntiEntropyAt: sim.now,
+      storm: { ...sim.storm, active: false },
+    },
+    'Storm easing: network back up, catch-up sweep ready',
+    'partition',
+    'storm disabled: partition=false drop=0.12 latency=700 antiEntropy=2000',
+  )
 }
 
 export function bumpCounter(sim: Simulation, peerId: number): Simulation {
@@ -189,7 +255,7 @@ export function tick(sim: Simulation, elapsedMs: number, random = Math.random): 
     next = deliverPacket(next, packet)
   }
 
-  return maybeRunAntiEntropy(next)
+  return updateStormStats(maybeRunAntiEntropy(next))
 }
 
 export function convergence(sim: Simulation): {
@@ -222,8 +288,29 @@ export function convergence(sim: Simulation): {
   }
 }
 
+export function propagationStats(sim: Simulation): {
+  missing: number
+  total: number
+  progress: number
+  status: 'converged' | 'syncing' | 'split'
+} {
+  if (sim.partitioned) {
+    const splitMissing = Math.max(1, countMissing(sim) + sim.queue.length)
+    return { missing: splitMissing, total: Math.max(splitMissing, countPossible(sim)), progress: 0, status: 'split' }
+  }
+
+  const missing = countMissing(sim) + sim.queue.length
+  const total = Math.max(missing, countPossible(sim), 1)
+  return {
+    missing,
+    total,
+    progress: missing === 0 ? 1 : Math.max(0, 1 - missing / total),
+    status: missing === 0 && sim.queue.length === 0 ? 'converged' : 'syncing',
+  }
+}
+
 export function runAntiEntropyNow(sim: Simulation): Simulation {
-  return runAntiEntropy({ ...sim, nextAntiEntropyAt: sim.now })
+  return updateStormStats(runAntiEntropy({ ...sim, nextAntiEntropyAt: sim.now }))
 }
 
 function emitDelta(
@@ -293,7 +380,13 @@ function runAntiEntropy(sim: Simulation): Simulation {
   if (sim.partitioned || sim.antiEntropyMs <= 0) return sim
 
   let peers = sim.peers
-  let next: Simulation = { ...sim, nextAntiEntropyAt: sim.now + sim.antiEntropyMs }
+  let next: Simulation = {
+    ...sim,
+    nextAntiEntropyAt: sim.now + sim.antiEntropyMs,
+    lastSweepAt: sim.now,
+    storm: { ...sim.storm, sweeps: sim.storm.sweeps + 1 },
+  }
+  const pops: RecoveryPop[] = []
 
   for (let i = 0; i < peers.length; i += 1) {
     for (let j = i + 1; j < peers.length; j += 1) {
@@ -315,6 +408,7 @@ function runAntiEntropy(sim: Simulation): Simulation {
       })
 
       for (const item of rightToLeft) {
+        pops.push({ id: `pop-${sim.now}-${left.id}-${pops.length}`, peerId: left.id, label: item.plain, at: sim.now })
         next = appendLog(
           { ...next, peers },
           `Camp ${left.id} recovered ${item.plain} from Camp ${right.id}`,
@@ -323,6 +417,7 @@ function runAntiEntropy(sim: Simulation): Simulation {
         )
       }
       for (const item of leftToRight) {
+        pops.push({ id: `pop-${sim.now}-${right.id}-${pops.length}`, peerId: right.id, label: item.plain, at: sim.now })
         next = appendLog(
           { ...next, peers },
           `Camp ${right.id} recovered ${item.plain} from Camp ${left.id}`,
@@ -333,7 +428,25 @@ function runAntiEntropy(sim: Simulation): Simulation {
     }
   }
 
-  return { ...next, peers }
+  const after = {
+    ...next,
+    peers,
+    queue: next.queue.filter((packet) => {
+      const target = peers[packet.to]
+      return target ? !deltaCovered(target, packet.delta) : false
+    }),
+    recoveryPops: [...pops, ...sim.recoveryPops].slice(0, 30),
+  }
+  const status = convergence(after)
+  if (status.converged && !convergence(sim).converged) {
+    return {
+      ...after,
+      lastConvergedAt: sim.now,
+      lastProofAt: sim.now,
+      storm: { ...after.storm, divergedSince: null, alwaysRecovered: after.storm.alwaysRecovered },
+    }
+  }
+  return after
 }
 
 function backfillDescriptions(
@@ -365,6 +478,73 @@ function backfillDescriptions(
 
 function normalizePeer(peer: Peer): Peer {
   return { ...peer, localTally: Math.max(peer.localTally, peer.gcounter[peer.id] ?? 0) }
+}
+
+function deltaCovered(peer: Peer, delta: MeshDelta): boolean {
+  if (delta.kind === 'gcounter.bump') {
+    return (peer.gcounter[delta.replica] ?? 0) >= delta.tally
+  }
+  if (delta.kind === 'orset.add') {
+    return peer.orset.adds[delta.token] === delta.element
+  }
+  return delta.tokens.every((token) => peer.orset.tombstones[token])
+}
+
+function updateStormStats(sim: Simulation): Simulation {
+  const status = convergence(sim)
+  if (status.converged) {
+    if (sim.storm.divergedSince === null) return sim
+    const longest = Math.max(sim.storm.longestDivergenceMs, sim.now - sim.storm.divergedSince)
+    return { ...sim, storm: { ...sim.storm, longestDivergenceMs: longest, divergedSince: null } }
+  }
+
+  if (sim.storm.divergedSince !== null) {
+    return {
+      ...sim,
+      storm: {
+        ...sim.storm,
+        longestDivergenceMs: Math.max(sim.storm.longestDivergenceMs, sim.now - sim.storm.divergedSince),
+      },
+    }
+  }
+  return { ...sim, storm: { ...sim.storm, divergedSince: sim.now } }
+}
+
+function countPossible(sim: Simulation): number {
+  const union = unionDigest(sim)
+  return sim.peers.length * (union.gcounter.length + Object.keys(union.adds).length + Object.keys(union.tombstones).length)
+}
+
+function countMissing(sim: Simulation): number {
+  const union = unionDigest(sim)
+  let missing = 0
+  for (const peer of sim.peers) {
+    union.gcounter.forEach((value, index) => {
+      if ((peer.gcounter[index] ?? 0) < value) missing += 1
+    })
+    for (const token of Object.keys(union.adds)) {
+      if (!peer.orset.adds[token]) missing += 1
+    }
+    for (const token of Object.keys(union.tombstones)) {
+      if (!peer.orset.tombstones[token]) missing += 1
+    }
+  }
+  return missing
+}
+
+function unionDigest(sim: Simulation): {
+  gcounter: GCounterState
+  adds: ORSetState['adds']
+  tombstones: ORSetState['tombstones']
+} {
+  return sim.peers.reduce(
+    (acc, peer) => ({
+      gcounter: mergeGCounter(acc.gcounter, peer.gcounter),
+      adds: { ...acc.adds, ...peer.orset.adds },
+      tombstones: { ...acc.tombstones, ...peer.orset.tombstones },
+    }),
+    { gcounter: bottomGCounter(sim.peers.length), adds: {}, tombstones: {} },
+  )
 }
 
 function appendLog(

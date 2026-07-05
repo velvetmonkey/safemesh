@@ -19,6 +19,7 @@ The app is static and has no backend. After a first load, the service worker cac
 - N simulated peers with local CRDT state.
 - Delta delivery with configurable partition/heal, latency, and drop rate.
 - Periodic anti-entropy between connected peers, so dropped one-shot messages can be recovered.
+- A convergence meter, visible anti-entropy sweep, recovery pops, and a Storm button for a high-drop showpiece.
 - G-Counter divergence under partition and convergence after reconnect.
 - OR-Set add-wins behavior using observed-token remove tombstones.
 - A live convergence indicator that compares raw states and reads.
@@ -38,6 +39,8 @@ Do not present this PWA as the verified artifact. It is the demo skin that a fut
 The simulator periodically exchanges compact state digests between connected peers and backfills missing G-Counter coordinates, OR-Set add tokens, and OR-Set tombstones. This is a transport/re-gossip behavior in the demo, not a new CRDT.
 
 The Lean anchor for this backfill is `SafeMesh.merge_deltaState`: merging replicas is equivalent to receiving the union of their delta sets. `SafeMesh.delta_dissemination_sec` is the separate order/redelivery-insensitivity result once deltas are delivered. Neither theorem makes this TypeScript implementation verified.
+
+The animated sweep and Storm tally are presentation only. They visualize the simulated transport catching up; they do not change the CRDT semantics or the honesty boundary.
 
 ## PWA Cache Note
 

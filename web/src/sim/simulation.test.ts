@@ -4,11 +4,14 @@ import {
   bumpCounter,
   convergence,
   createSimulation,
+  propagationStats,
   removeElement,
   runAntiEntropyNow,
   setAntiEntropyMs,
   setDropRate,
   setPartitioned,
+  startStorm,
+  stopStorm,
   tick,
 } from './simulation'
 
@@ -77,5 +80,26 @@ describe('mesh simulation', () => {
     sim = runAntiEntropyNow(sim)
 
     expect(convergence(sim).sameRawState).toBe(true)
+  })
+
+  it('drives storm propagation counter to zero after reconnect and sweeps', () => {
+    let sim = startStorm(setAntiEntropyMs(createSimulation(4), 2000))
+    sim = addElement(sim, 0, 'medkit')
+    sim = addElement(sim, 1, 'flour')
+    sim = bumpCounter(sim, 2)
+    sim = tick(sim, 2500, () => 0)
+
+    expect(propagationStats(sim).missing).toBeGreaterThan(0)
+    expect(convergence(sim).converged).toBe(false)
+
+    sim = stopStorm(sim)
+    sim = runAntiEntropyNow(sim)
+
+    const propagation = propagationStats(sim)
+    expect(propagation.missing).toBe(0)
+    expect(propagation.status).toBe('converged')
+    expect(convergence(sim).converged).toBe(true)
+    expect(sim.storm.sweeps).toBeGreaterThan(0)
+    expect(sim.storm.alwaysRecovered).toBe(true)
   })
 })

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'safemesh-pwa-antientropy-v1'
+const CACHE_NAME = 'safemesh-pwa-wow-v1'
 const APP_SHELL = ['/', '/README.md', '/manifest.webmanifest', '/pwa-icon.svg', '/favicon.svg']
 
 self.addEventListener('install', (event) => {
