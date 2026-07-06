@@ -4,6 +4,8 @@ This is the visual demo: replicas as live nodes, deltas moving across the wire, 
 
 ![Captured web hero showing four replicas and convergence controls](../assets/web-hero-desktop.png)
 
+![Captured mobile web hero with separated replica field and narrative](../assets/web-hero-mobile.png)
+
 ## 30-second run
 
 From the repository root:
@@ -14,13 +16,16 @@ npm install
 npm run dev
 ```
 
-Open the local Vite URL, then press **Guided run**.
+Open the local Vite URL. The first screen asks you to choose what can go wrong.
 
 ## What It Shows
 
 - Live replica state for G-Counter and OR-Set demo data.
 - Visible packet chips carrying a compact wire sketch.
-- Controls for partition, heal, drop, duplicate, reorder, and reset.
+- Use-case buttons for normal delivery, duplicate replay, out-of-order delivery, dropped-message recovery, and partition heal.
+- A full-width replica picture with Previous / Replay / Next controls directly under it.
+- Narrative and event log panels underneath the picture, explaining the chosen scenario before each step.
+- A collapsed Advanced lab with controls for partition, heal, drop, duplicate, reorder, and reset.
 - A technical/plain-language toggle so the honest claim boundary stays visible without making the first screen feel like docs.
 - A calm-motion toggle for reduced-motion users.
 

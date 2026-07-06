@@ -19,11 +19,15 @@ The app is static and has no backend. After a first load, the service worker cac
 ## What It Demonstrates
 
 - Simulated replicas with local CRDT state.
-- Delta delivery with partition/heal, latency, drop, duplicate, and reorder controls.
+- Five use-case buttons: normal delivery, duplicate replay, out-of-order delivery, dropped-message recovery, and partition heal.
+- Scenario steps that all start from the same message and end at the same visible state: `vaccine` plus audit count `1`.
+- A collapsed Advanced lab with partition/heal, latency, drop, duplicate, and reorder controls.
 - Periodic anti-entropy between connected peers so dropped one-shot messages can be recovered.
 - G-Counter and OR-Set divergence under partition and convergence after reconnect.
 - A live convergence indicator that compares raw states and reads.
 - A technical/plain-language claim toggle and reduced-motion mode.
+
+The scenario flow is intentionally manual: choose what can go wrong, then use the Previous / Replay / Next buttons directly under the replica picture. The Advanced lab keeps the free-form controls available without making them the first thing a new viewer has to understand.
 
 ## Honesty Boundary
 
