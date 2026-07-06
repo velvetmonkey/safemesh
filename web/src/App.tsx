@@ -281,66 +281,68 @@ function App() {
           </div>
         </div>
 
-        <aside className="narrative-panel" aria-label="Narrative arc">
-          {advancedOpen ? (
-            <>
-              <p className="eyebrow">Advanced lab</p>
-              <h2>{story.label}</h2>
-              <p>{story.detail}</p>
-              <div className="watch-card">
-                <strong>Current state</strong>
-                <span>{sandboxReadout(sim, status)}</span>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="eyebrow">
-                Scenario: {activeScenario.label} · Step {stepIndex + 1} of {activeScenario.steps.length}
-              </p>
-              <h2>{activeStep.title}</h2>
-              <p>{activeStep.plainExplanation}</p>
-              <div className="watch-card">
-                <strong>Setup</strong>
-                <span>{activeScenario.setup}</span>
-              </div>
-              <div className="watch-card">
-                <strong>Why it matters</strong>
-                <span>{activeScenario.whyItMatters}</span>
-              </div>
-              <div className="watch-card">
-                <strong>Watch</strong>
-                <span>{activeStep.watchFor}</span>
-              </div>
-              <div className="watch-card success">
-                <strong>Finish line</strong>
-                <span>{activeScenario.successState}</span>
-              </div>
-            </>
-          )}
-          <p className="claim-line">TypeScript is the demo mirror. The Lean-backed Rust core is the proof-carrying surface for modeled CRDT semantics.</p>
-        </aside>
-
-        <aside className="log-panel" aria-label={advancedOpen ? 'Story log' : 'Events in this step'}>
-          <header>
-            <BadgeCheck size={18} />
-            <h2>{advancedOpen ? (technical ? 'Raw transport log' : 'Story log') : 'Events in this step'}</h2>
-          </header>
-          <ol>
-            {visibleLog.length === 0 ? (
-              <li className="empty-log">
-                <time>--</time>
-                <span>No transport event in this step yet.</span>
-              </li>
+        <div className="story-row">
+          <aside className="narrative-panel" aria-label="Narrative arc">
+            {advancedOpen ? (
+              <>
+                <p className="eyebrow">Advanced lab</p>
+                <h2>{story.label}</h2>
+                <p>{story.detail}</p>
+                <div className="watch-card">
+                  <strong>Current state</strong>
+                  <span>{sandboxReadout(sim, status)}</span>
+                </div>
+              </>
             ) : (
-              visibleLog.map((entry) => (
-                <li key={entry.id} className={entry.tone}>
-                  <time>{(entry.at / 1000).toFixed(1)}s</time>
-                  <span>{technical ? entry.technical : entry.plain}</span>
-                </li>
-              ))
+              <>
+                <p className="eyebrow">
+                  Scenario: {activeScenario.label} · Step {stepIndex + 1} of {activeScenario.steps.length}
+                </p>
+                <h2>{activeStep.title}</h2>
+                <p>{activeStep.plainExplanation}</p>
+                <div className="watch-card">
+                  <strong>Setup</strong>
+                  <span>{activeScenario.setup}</span>
+                </div>
+                <div className="watch-card">
+                  <strong>Why it matters</strong>
+                  <span>{activeScenario.whyItMatters}</span>
+                </div>
+                <div className="watch-card">
+                  <strong>Watch</strong>
+                  <span>{activeStep.watchFor}</span>
+                </div>
+                <div className="watch-card success">
+                  <strong>Finish line</strong>
+                  <span>{activeScenario.successState}</span>
+                </div>
+              </>
             )}
-          </ol>
-        </aside>
+            <p className="claim-line">TypeScript is the demo mirror. The Lean-backed Rust core is the proof-carrying surface for modeled CRDT semantics.</p>
+          </aside>
+
+          <aside className="log-panel" aria-label={advancedOpen ? 'Story log' : 'Events in this step'}>
+            <header>
+              <BadgeCheck size={18} />
+              <h2>{advancedOpen ? (technical ? 'Raw transport log' : 'Story log') : 'Events in this step'}</h2>
+            </header>
+            <ol>
+              {visibleLog.length === 0 ? (
+                <li className="empty-log">
+                  <time>--</time>
+                  <span>No transport event in this step yet.</span>
+                </li>
+              ) : (
+                visibleLog.map((entry) => (
+                  <li key={entry.id} className={entry.tone}>
+                    <time>{(entry.at / 1000).toFixed(1)}s</time>
+                    <span>{technical ? entry.technical : entry.plain}</span>
+                  </li>
+                ))
+              )}
+            </ol>
+          </aside>
+        </div>
       </section>
 
       <section className={`control-dock ${advancedOpen ? 'open' : ''}`} aria-label="Advanced controls">
@@ -555,10 +557,31 @@ function packetPoint(packet: Packet, sim: Simulation, positions: Array<{ x: numb
   const from = positions[packet.from] ?? { x: 50, y: 50 }
   const to = positions[packet.to] ?? { x: 50, y: 50 }
   const progress = clamp((sim.now - packet.sentAt) / Math.max(1, packet.deliverAt - packet.sentAt), 0, 1)
+  const displayProgress = clamp(progress + packetProgressStagger(packet), 0.08, 0.92)
+  const dx = to.x - from.x
+  const dy = to.y - from.y
+  const length = Math.hypot(dx, dy) || 1
+  const lane = packetLane(packet)
+  const perpendicular = { x: -dy / length, y: dx / length }
+
   return {
-    x: from.x + (to.x - from.x) * progress,
-    y: from.y + (to.y - from.y) * progress,
+    x: clamp(from.x + dx * displayProgress + perpendicular.x * lane, 6, 94),
+    y: clamp(from.y + dy * displayProgress + perpendicular.y * lane, 8, 92),
   }
+}
+
+function packetLane(packet: Packet): number {
+  const kindLane = packet.delta.kind === 'gcounter.bump' ? -2.4 : packet.delta.kind === 'orset.add' ? 2.4 : 0
+  const destinationLane = ((packet.to + packet.from) % 3) - 1
+  const duplicateLane = packet.duplicated ? 2.2 : 0
+  return (kindLane + destinationLane * 1.4 + duplicateLane) * 1.9
+}
+
+function packetProgressStagger(packet: Packet): number {
+  const kindShift = packet.delta.kind === 'gcounter.bump' ? -0.07 : packet.delta.kind === 'orset.add' ? 0.07 : 0
+  const destinationShift = (((packet.to + packet.from) % 3) - 1) * 0.025
+  const duplicateShift = packet.duplicated ? 0.09 : 0
+  return kindShift + destinationShift + duplicateShift
 }
 
 function packetLabel(packet: Packet): string {

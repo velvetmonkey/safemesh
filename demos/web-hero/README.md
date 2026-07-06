@@ -23,8 +23,8 @@ Open the local Vite URL. The first screen asks you to choose what can go wrong.
 - Live replica state for G-Counter and OR-Set demo data.
 - Visible packet chips carrying a compact wire sketch.
 - Use-case buttons for normal delivery, duplicate replay, out-of-order delivery, dropped-message recovery, and partition heal.
-- Previous / Replay / Next controls placed directly under the replica picture.
-- Narrative and event log panels that explain the chosen scenario before each step.
+- A full-width replica picture with Previous / Replay / Next controls directly under it.
+- Narrative and event log panels underneath the picture, explaining the chosen scenario before each step.
 - A collapsed Advanced lab with controls for partition, heal, drop, duplicate, reorder, and reset.
 - A technical/plain-language toggle so the honest claim boundary stays visible without making the first screen feel like docs.
 - A calm-motion toggle for reduced-motion users.

@@ -168,9 +168,9 @@ h2 {
 
 .demo-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 370px) minmax(310px, 390px);
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .stage-shell {
@@ -183,8 +183,8 @@ h2 {
 
 .stage {
   min-width: 0;
-  height: 430px;
-  min-height: 430px;
+  height: clamp(520px, 39vw, 620px);
+  min-height: 520px;
   position: relative;
   overflow: hidden;
   background:
@@ -405,8 +405,16 @@ h2 {
 .stage-step-controls {
   min-height: 50px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(112px, auto)) minmax(92px, 1fr);
+  grid-template-columns: repeat(4, minmax(124px, max-content)) minmax(92px, 1fr);
   gap: 8px;
+  align-items: stretch;
+}
+
+.story-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(420px, 0.92fr) minmax(390px, 1.08fr);
+  gap: 14px;
   align-items: stretch;
 }
 
@@ -433,7 +441,7 @@ h2 {
 .narrative-panel,
 .log-panel {
   min-width: 0;
-  min-height: 490px;
+  min-height: 360px;
   display: grid;
   align-content: start;
   gap: 12px;
@@ -496,7 +504,7 @@ h2 {
   display: grid;
   gap: 8px;
   min-height: 0;
-  max-height: 488px;
+  max-height: 360px;
   margin: 0;
   padding: 0;
   overflow: auto;
@@ -745,6 +753,10 @@ button:disabled {
   .scenario-buttons,
   .tuning-bank {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .story-row {
+    grid-template-columns: 1fr;
   }
 
   .stage-step-controls {
