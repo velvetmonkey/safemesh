@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use safemesh_crdt::{
-    Crdt, EventLog, GCounter, GCounterDelta, LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta,
-    PnCounter, PnCounterDelta, Rga, RgaDelta,
+    Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta, LwwRegister,
+    LwwRegisterDelta, OrSet, OrSetDelta, PnCounter, PnCounterDelta, Rga, RgaDelta,
 };
 
 #[test]
@@ -73,6 +73,30 @@ fn rga_read_is_sorted_by_position_not_delivery() {
     rga.apply_delta(RgaDelta::Delete { position: 20 });
 
     assert_eq!(rga.read_positions(), vec![10, 30]);
+}
+
+#[test]
+fn enable_wins_flag_keeps_concurrent_enable_live() {
+    let mut flag = EnableWinsFlag::new();
+    flag.apply_delta(EnableWinsFlagDelta::Enable { token: 10_u64 });
+    assert!(flag.value());
+
+    let observed = flag.observed_tokens().into_iter().collect::<Vec<_>>();
+    flag.apply_delta(EnableWinsFlagDelta::Disable { tokens: observed });
+    assert!(!flag.value());
+
+    let mut concurrent = EnableWinsFlag::new();
+    concurrent.apply_delta(EnableWinsFlagDelta::Enable { token: 11 });
+    flag.merge(&concurrent);
+    assert!(flag.value());
+    assert_eq!(
+        flag.enables().iter().copied().collect::<Vec<_>>(),
+        vec![10, 11]
+    );
+    assert_eq!(
+        flag.tombstones().iter().copied().collect::<Vec<_>>(),
+        vec![10]
+    );
 }
 
 #[test]

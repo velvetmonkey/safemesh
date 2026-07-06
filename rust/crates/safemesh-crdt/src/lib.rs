@@ -470,6 +470,95 @@ impl<P: Ord + Clone, V: Ord + Clone> Crdt for Rga<P, V> {
     }
 }
 
+/// Delta for an observed-token enable-wins flag.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EnableWinsFlagDelta<K> {
+    Enable { token: K },
+    Disable { tokens: Vec<K> },
+}
+
+/// Enable-wins boolean flag.
+///
+/// This is a flat tested-not-proven type. It mirrors an OR-Set over a unit
+/// element: enable adds a unique token, disable tombstones observed tokens, and
+/// concurrent unobserved enables remain live.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnableWinsFlag<K: Ord> {
+    enables: BTreeSet<K>,
+    tombstones: BTreeSet<K>,
+}
+
+impl<K: Ord> EnableWinsFlag<K> {
+    pub fn new() -> Self {
+        EnableWinsFlag {
+            enables: BTreeSet::new(),
+            tombstones: BTreeSet::new(),
+        }
+    }
+
+    pub fn enable(&mut self, token: K) {
+        self.enables.insert(token);
+    }
+
+    pub fn disable<I>(&mut self, tokens: I)
+    where
+        I: IntoIterator<Item = K>,
+    {
+        self.tombstones.extend(tokens);
+    }
+
+    pub fn merge(&mut self, other: &Self)
+    where
+        K: Clone,
+    {
+        self.enables.extend(other.enables.iter().cloned());
+        self.tombstones.extend(other.tombstones.iter().cloned());
+    }
+
+    pub fn enables(&self) -> &BTreeSet<K> {
+        &self.enables
+    }
+
+    pub fn tombstones(&self) -> &BTreeSet<K> {
+        &self.tombstones
+    }
+}
+
+impl<K: Ord + Clone> EnableWinsFlag<K> {
+    pub fn observed_tokens(&self) -> BTreeSet<K> {
+        self.enables.iter().cloned().collect()
+    }
+
+    pub fn value(&self) -> bool {
+        self.enables
+            .iter()
+            .any(|token| !self.tombstones.contains(token))
+    }
+}
+
+impl<K: Ord> Default for EnableWinsFlag<K> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<K: Ord + Clone> Mergeable for EnableWinsFlag<K> {
+    fn merge(&mut self, other: &Self) {
+        EnableWinsFlag::merge(self, other);
+    }
+}
+
+impl<K: Ord + Clone> Crdt for EnableWinsFlag<K> {
+    type Delta = EnableWinsFlagDelta<K>;
+
+    fn apply_delta(&mut self, delta: Self::Delta) {
+        match delta {
+            EnableWinsFlagDelta::Enable { token } => self.enable(token),
+            EnableWinsFlagDelta::Disable { tokens } => self.disable(tokens),
+        }
+    }
+}
+
 /// Total-order dot for last-writer-wins registers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LwwDot {
@@ -895,6 +984,9 @@ const TAG_ORSET_U64: u8 = 0x30;
 const TAG_RGA_U64: u8 = 0x40;
 const TAG_LWW_REGISTER_DELTA_U64: u8 = 0x50;
 const TAG_LWW_REGISTER_U64: u8 = 0x51;
+const TAG_ENABLE_WINS_FLAG_ENABLE_U64: u8 = 0x60;
+const TAG_ENABLE_WINS_FLAG_DISABLE_U64: u8 = 0x61;
+const TAG_ENABLE_WINS_FLAG_U64: u8 = 0x62;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WireError {
@@ -1256,6 +1348,79 @@ impl WireDecode for LwwRegister<u64> {
             }
             _ => Err(WireError::InvalidTag),
         }
+    }
+}
+
+impl WireEncode for EnableWinsFlagDelta<u64> {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        match self {
+            EnableWinsFlagDelta::Enable { token } => {
+                write_u8(out, TAG_ENABLE_WINS_FLAG_ENABLE_U64);
+                write_u64(out, *token);
+            }
+            EnableWinsFlagDelta::Disable { tokens } => {
+                write_u8(out, TAG_ENABLE_WINS_FLAG_DISABLE_U64);
+                let mut sorted = tokens.clone();
+                sorted.sort();
+                sorted.dedup();
+                write_len(out, sorted.len())?;
+                for token in sorted {
+                    write_u64(out, token);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl WireDecode for EnableWinsFlagDelta<u64> {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        let tag = cursor.read_u8()?;
+        match tag {
+            TAG_ENABLE_WINS_FLAG_ENABLE_U64 => Ok(EnableWinsFlagDelta::Enable {
+                token: cursor.read_u64()?,
+            }),
+            TAG_ENABLE_WINS_FLAG_DISABLE_U64 => {
+                let len = cursor.read_len()?;
+                let mut tokens = Vec::new();
+                for _ in 0..len {
+                    tokens.push(cursor.read_u64()?);
+                }
+                Ok(EnableWinsFlagDelta::Disable { tokens })
+            }
+            _ => Err(WireError::InvalidTag),
+        }
+    }
+}
+
+impl WireEncode for EnableWinsFlag<u64> {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        write_u8(out, TAG_ENABLE_WINS_FLAG_U64);
+        write_len(out, self.enables.len())?;
+        for token in self.enables.iter() {
+            write_u64(out, *token);
+        }
+        write_len(out, self.tombstones.len())?;
+        for token in self.tombstones.iter() {
+            write_u64(out, *token);
+        }
+        Ok(())
+    }
+}
+
+impl WireDecode for EnableWinsFlag<u64> {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        read_tag(cursor, TAG_ENABLE_WINS_FLAG_U64)?;
+        let enable_len = cursor.read_len()?;
+        let mut flag = EnableWinsFlag::new();
+        for _ in 0..enable_len {
+            flag.enable(cursor.read_u64()?);
+        }
+        let tombstone_len = cursor.read_len()?;
+        for _ in 0..tombstone_len {
+            flag.disable([cursor.read_u64()?]);
+        }
+        Ok(flag)
     }
 }
 

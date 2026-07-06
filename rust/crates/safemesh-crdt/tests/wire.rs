@@ -5,8 +5,9 @@
 use std::fmt::Debug;
 
 use safemesh_crdt::{
-    EventLog, GCounterDelta, GSet, LwwRegister, LwwRegisterDelta, OrSet, PnCounterDelta, Record,
-    RecordId, Rga, WireDecode, WireEncode, WireError,
+    EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounterDelta, GSet, LwwRegister,
+    LwwRegisterDelta, OrSet, PnCounterDelta, Record, RecordId, Rga, WireDecode, WireEncode,
+    WireError,
 };
 
 fn roundtrip<T>(value: T)
@@ -154,6 +155,56 @@ fn lww_register_wire_is_stable_and_roundtrips() {
         ],
     );
     roundtrip(register);
+}
+
+#[test]
+fn enable_wins_flag_wire_is_stable_and_roundtrips() {
+    let enable = EnableWinsFlagDelta::Enable { token: 42 };
+    assert_eq!(
+        enable.to_wire_bytes().unwrap(),
+        vec![
+            0x60, // enable-wins flag enable delta tag
+            0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ],
+    );
+    roundtrip(enable);
+
+    let disable = EnableWinsFlagDelta::Disable { tokens: vec![9, 2] };
+    assert_eq!(
+        disable.to_wire_bytes().unwrap(),
+        vec![
+            0x61, // enable-wins flag disable delta tag
+            0x02, 0x00, 0x00, 0x00, // token count
+            0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sorted token
+            0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sorted token
+        ],
+    );
+    roundtrip(EnableWinsFlagDelta::Disable { tokens: vec![2, 9] });
+    assert_eq!(
+        EnableWinsFlagDelta::Disable {
+            tokens: vec![9, 2, 2]
+        }
+        .to_wire_bytes()
+        .unwrap(),
+        disable.to_wire_bytes().unwrap(),
+    );
+
+    let mut flag = EnableWinsFlag::new();
+    flag.enable(9);
+    flag.enable(2);
+    flag.disable([9]);
+    assert_eq!(
+        flag.to_wire_bytes().unwrap(),
+        vec![
+            0x62, // enable-wins flag state tag
+            0x02, 0x00, 0x00, 0x00, // enable count
+            0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sorted enable
+            0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sorted enable
+            0x01, 0x00, 0x00, 0x00, // tombstone count
+            0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sorted tombstone
+        ],
+    );
+    roundtrip(flag);
 }
 
 #[test]

@@ -15,6 +15,7 @@ SafeMesh is the builder's mesh: a convergent state fabric for infrastructure whe
 | Lean delta suite (`lean/`): SEC-for-deltas + delta G-Counter, PN-Counter, OR-Set, RGA | **Proven** — zero `sorry`, axioms ⊆ {propext, Classical.choice, Quot.sound}, machine-gated (`Test/Axioms.lean`, a `lake build` default target) |
 | Rust `safemesh-crdt` (`rust/`): G-Set, delta G-Counter, delta PN-Counter, delta OR-Set, RGA/Text, `no_std + alloc` (builds for `thumbv7em-none-eabihf`) | **Differentially tested** against the Lean oracle over corpus C (`tests/corpus.json`, emitted by the proven definitions via `lake exe corpus`) |
 | LWW Register | **Tested, not proven** — flat max-register over `(timestamp, replica, value)`, covered by laws and wire tests but not by the Lean oracle corpus |
+| Enable-wins Flag | **Tested, not proven** — flat observed-token boolean flag, covered by laws and wire tests but not by the Lean oracle corpus |
 | Rust EventLog API | **Engineered** — append/merge/since/version record log with deterministic dedup; useful infrastructure, not the Lean-proven CRDT theorem itself |
 | Canonical wire format | **Engineered + tested** — fixed tags, little-endian integers, length-prefixed records, and sorted set encodings; round-trip, malformed-input, and byte-stability tests cover the current Rust surface |
 | C ABI spine (`safemesh-ffi`) | **Engineered + tested** — thin wrapper over the Rust core with a committed `include/safemesh.h` header and drift check |
@@ -91,7 +92,7 @@ The in-memory adapter is for CI fault campaigns. It can drop the next send, dupl
 
 SafeMesh v0 is flat-first. It does not cover references between objects, trees, ordered move operations, leader election, hardware pucks, radio-delivery proofs, or a claim to be a faster Yjs. Binding glue, demos, and user-defined reducers are engineered and tested; they are not proof-carrying artifacts.
 
-`LwwRegister` is included as a tested flat type for builders who need it, but it is intentionally outside the current Lean-proven surface. Its docs and claims must stay in the tested-not-proven bucket unless a Lean proof and oracle corpus are added.
+`LwwRegister` and `EnableWinsFlag` are included as tested flat types for builders who need them, but they are intentionally outside the current Lean-proven surface. Their docs and claims must stay in the tested-not-proven bucket unless Lean proofs and oracle corpora are added.
 
 ## License
 

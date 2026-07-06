@@ -6,8 +6,8 @@
 
 use safemesh_crdt::laws::{check_crdt_convergence, check_merge_laws};
 use safemesh_crdt::{
-    GCounter, GCounterDelta, GSet, LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta, PnCounter,
-    PnCounterDelta, Rga, RgaDelta,
+    EnableWinsFlag, EnableWinsFlagDelta, GCounter, GCounterDelta, GSet, LwwRegister,
+    LwwRegisterDelta, OrSet, OrSetDelta, PnCounter, PnCounterDelta, Rga, RgaDelta,
 };
 
 #[test]
@@ -33,6 +33,14 @@ fn merge_laws_hold_for_in_house_samples() {
     let mut reg_c = LwwRegister::new();
     reg_c.set(2, 2, 30);
     assert!(check_merge_laws(&LwwRegister::new(), &[reg_a, reg_b, reg_c]).is_ok());
+
+    let mut flag_a = EnableWinsFlag::new();
+    flag_a.enable(1_u64);
+    let mut flag_b = EnableWinsFlag::new();
+    flag_b.disable([1]);
+    let mut flag_c = EnableWinsFlag::new();
+    flag_c.enable(2);
+    assert!(check_merge_laws(&EnableWinsFlag::new(), &[flag_a, flag_b, flag_c]).is_ok());
 }
 
 #[test]
@@ -133,6 +141,16 @@ fn convergence_harness_hammers_delta_delivery_shapes() {
                 replica: 2,
                 value: 30,
             },
+        ],
+    )
+    .is_ok());
+
+    assert!(check_crdt_convergence(
+        &EnableWinsFlag::new(),
+        &[
+            EnableWinsFlagDelta::Enable { token: 1_u64 },
+            EnableWinsFlagDelta::Disable { tokens: vec![1] },
+            EnableWinsFlagDelta::Enable { token: 2 },
         ],
     )
     .is_ok());
