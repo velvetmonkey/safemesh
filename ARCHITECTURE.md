@@ -32,6 +32,10 @@ The canonical Rust wire format uses fixed one-byte tags, little-endian integer f
 
 `rust/crates/safemesh-wasm` and `rust/crates/safemesh-python` are the first language bindings. They expose G-Counter operations and canonical delta bytes by calling the same Rust core. They do not reimplement merge logic, and they stay in the engineered/tested bucket.
 
+## Break-it demo
+
+`cargo run -p safemesh-crdt --example break_it` is the CI-friendly showpiece. It drives G-Counter, OR-Set, and RGA state through partition, drop, duplicate, reorder, and heal phases, then exits nonzero unless all replicas converge.
+
 ## Honesty
 
 - **Proven (universal):** everything in `lean/SafeMesh/` — kernel-checked, zero `sorry`, axioms ⊆ {propext, Classical.choice, Quot.sound}, pinned per-theorem by `#guard_msgs` in `Test/Axioms.lean` (a default build target, so the gate cannot silently not-run).

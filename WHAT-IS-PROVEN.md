@@ -39,6 +39,8 @@ The wire format and C ABI are also engineered infrastructure. They are covered b
 
 WASM/TypeScript and Python bindings are engineered wrappers over the Rust core. Their tests show they call the core and preserve canonical bytes; they are not separate proofs.
 
+The break-it demo is also engineered evidence. It is useful because it is visible and re-runnable, but it is not a substitute for the Lean proof or differential corpus.
+
 ## The honesty boundary
 
 The Lean theorems are universal over their mathematical models. The Rust implementation is not itself proven in Lean. It is differentially tested against the Lean-generated corpus. This corpus bridge is the honesty artifact that keeps "verified" tied to the proof.

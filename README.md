@@ -19,6 +19,7 @@ SafeMesh is the builder's mesh: a convergent state fabric for infrastructure whe
 | C ABI spine (`safemesh-ffi`) | **Engineered + tested** — thin wrapper over the Rust core with a committed `include/safemesh.h` header and drift check |
 | WASM / TypeScript binding (`safemesh-wasm`) | **Engineered + tested** — wasm-bindgen wrapper over the Rust core, with a committed TypeScript surface and wasm32 build check |
 | Python binding (`safemesh-python`) | **Engineered + tested** — PyO3/maturin wrapper over the Rust core, with pyproject metadata and Rust-side binding tests |
+| Break-it demo (`cargo run -p safemesh-crdt --example break_it`) | **Runnable showpiece** — deterministic partition/drop/duplicate/reorder/heal scenario that exits nonzero unless the replicas converge |
 | Laws harness (`--features laws`) | **Reusable tests** — checks merge laws and drop/dup/reorder convergence scenarios for any type implementing the SafeMesh traits; supplemental to the Lean-oracle diff |
 | User-defined types | **Tested, not proven** — users can implement the same merge contract and run the laws harness, but SafeMesh does not prove arbitrary application code |
 
@@ -55,6 +56,17 @@ The first bindings are thin wrappers over the same Rust core:
 - `rust/crates/safemesh-python` exposes the same G-Counter and canonical delta bytes through PyO3, with `pyproject.toml` configured for maturin.
 
 Neither binding reimplements merge logic. Both are engineered/tested glue around the verified core.
+
+## Break-it demo
+
+Run:
+
+```sh
+cd rust
+cargo run -p safemesh-crdt --example break_it
+```
+
+The demo partitions four replicas, drops cross-partition packets, delivers same-partition packets in reverse order, duplicates a packet, then heals with anti-entropy. It prints `CONVERGED=true ...` and exits nonzero if convergence fails.
 
 ## Non-goals
 
