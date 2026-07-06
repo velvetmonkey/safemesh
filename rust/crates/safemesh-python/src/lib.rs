@@ -5,8 +5,8 @@
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use safemesh_crdt::{
-    EventLog, GCounter, GCounterDelta, LwwRegister, LwwRegisterDelta, Record, WireDecode,
-    WireEncode,
+    Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta, LwwRegister,
+    LwwRegisterDelta, Record, WireDecode, WireEncode,
 };
 
 fn encode_bytes<'py>(
@@ -119,6 +119,66 @@ pub fn lww_register_delta_to_wire(
     )
 }
 
+#[pyclass(name = "EnableWinsFlag")]
+pub struct PyEnableWinsFlag {
+    inner: EnableWinsFlag<u64>,
+}
+
+#[pymethods]
+impl PyEnableWinsFlag {
+    #[new]
+    pub fn new() -> Self {
+        PyEnableWinsFlag {
+            inner: EnableWinsFlag::new(),
+        }
+    }
+
+    pub fn enable(&mut self, token: u64) {
+        self.inner.enable(token);
+    }
+
+    pub fn disable_observed(&mut self) {
+        let tokens = self.inner.observed_tokens();
+        self.inner.disable(tokens);
+    }
+
+    pub fn value(&self) -> bool {
+        self.inner.value()
+    }
+
+    pub fn enabled_tokens(&self) -> Vec<u64> {
+        self.inner.enables().iter().copied().collect()
+    }
+
+    pub fn tombstone_tokens(&self) -> Vec<u64> {
+        self.inner.tombstones().iter().copied().collect()
+    }
+}
+
+#[pyfunction]
+pub fn enable_wins_flag_enable_delta_to_wire(
+    py: Python<'_>,
+    token: u64,
+) -> PyResult<Bound<'_, PyBytes>> {
+    encode_bytes(
+        py,
+        EnableWinsFlagDelta::Enable { token }.to_wire_bytes(),
+        "failed to encode enable-wins flag enable delta",
+    )
+}
+
+#[pyfunction]
+pub fn enable_wins_flag_disable_delta_to_wire(
+    py: Python<'_>,
+    tokens: Vec<u64>,
+) -> PyResult<Bound<'_, PyBytes>> {
+    encode_bytes(
+        py,
+        EnableWinsFlagDelta::Disable { tokens }.to_wire_bytes(),
+        "failed to encode enable-wins flag disable delta",
+    )
+}
+
 #[pyclass(name = "GCounterReplica")]
 pub struct PyGCounterReplica {
     replica_id: u64,
@@ -190,6 +250,94 @@ impl PyGCounterReplica {
 
     pub fn state(&self) -> Vec<u64> {
         self.state.state().to_vec()
+    }
+}
+
+#[pyclass(name = "EnableWinsFlagReplica")]
+pub struct PyEnableWinsFlagReplica {
+    replica_id: u64,
+    state: EnableWinsFlag<u64>,
+    log: EventLog<EnableWinsFlagDelta<u64>>,
+}
+
+#[pymethods]
+impl PyEnableWinsFlagReplica {
+    #[new]
+    pub fn new(replica_id: u64) -> Self {
+        PyEnableWinsFlagReplica {
+            replica_id,
+            state: EnableWinsFlag::new(),
+            log: EventLog::new(),
+        }
+    }
+
+    pub fn append_enable<'py>(
+        &mut self,
+        py: Python<'py>,
+        token: u64,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let delta = EnableWinsFlagDelta::Enable { token };
+        self.state.apply_delta(delta.clone());
+        let id = self.log.append(self.replica_id, delta.clone());
+        encode_bytes(
+            py,
+            Record { id, delta }.to_wire_bytes(),
+            "failed to encode record",
+        )
+    }
+
+    pub fn append_disable_observed<'py>(
+        &mut self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let delta = EnableWinsFlagDelta::Disable {
+            tokens: self.state.observed_tokens().into_iter().collect(),
+        };
+        self.state.apply_delta(delta.clone());
+        let id = self.log.append(self.replica_id, delta.clone());
+        encode_bytes(
+            py,
+            Record { id, delta }.to_wire_bytes(),
+            "failed to encode record",
+        )
+    }
+
+    pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
+        let record = Record::<EnableWinsFlagDelta<u64>>::from_wire_bytes(bytes)
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode record"))?;
+        self.state.apply_delta(record.delta.clone());
+        self.log.merge_records([record]);
+        Ok(())
+    }
+
+    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
+        let log = EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes(bytes)
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode event log"))?;
+        for record in log.records().iter().cloned() {
+            self.state.apply_delta(record.delta.clone());
+            self.log.merge_records([record]);
+        }
+        Ok(())
+    }
+
+    pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
+    }
+
+    pub fn version_for(&self, replica: u64) -> u64 {
+        self.log.version().get(replica)
+    }
+
+    pub fn value(&self) -> bool {
+        self.state.value()
+    }
+
+    pub fn enabled_tokens(&self) -> Vec<u64> {
+        self.state.enables().iter().copied().collect()
+    }
+
+    pub fn tombstone_tokens(&self) -> Vec<u64> {
+        self.state.tombstones().iter().copied().collect()
     }
 }
 
@@ -295,8 +443,12 @@ fn safemesh_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGCounterReplica>()?;
     m.add_class::<PyLwwRegister>()?;
     m.add_class::<PyLwwRegisterReplica>()?;
+    m.add_class::<PyEnableWinsFlag>()?;
+    m.add_class::<PyEnableWinsFlagReplica>()?;
     m.add_function(wrap_pyfunction!(gcounter_delta_to_wire, m)?)?;
     m.add_function(wrap_pyfunction!(lww_register_delta_to_wire, m)?)?;
+    m.add_function(wrap_pyfunction!(enable_wins_flag_enable_delta_to_wire, m)?)?;
+    m.add_function(wrap_pyfunction!(enable_wins_flag_disable_delta_to_wire, m)?)?;
     Ok(())
 }
 
@@ -378,6 +530,81 @@ mod tests {
             let bytes = lww_register_delta_to_wire(py, 9, 2, 42).unwrap();
             assert_eq!(bytes.as_bytes().len(), 25);
             assert_eq!(bytes.as_bytes()[0], 0x50);
+        });
+    }
+
+    #[test]
+    fn python_enable_wins_flag_calls_rust_core() {
+        let mut flag = PyEnableWinsFlag::new();
+        assert!(!flag.value());
+        flag.enable(2);
+        flag.enable(1);
+        assert!(flag.value());
+        assert_eq!(flag.enabled_tokens(), vec![1, 2]);
+
+        flag.disable_observed();
+        assert!(!flag.value());
+        assert_eq!(flag.tombstone_tokens(), vec![1, 2]);
+
+        flag.enable(3);
+        assert!(flag.value());
+    }
+
+    #[test]
+    fn python_enable_wins_flag_wire_helpers_use_canonical_bytes() {
+        with_python(|py| {
+            let enable = enable_wins_flag_enable_delta_to_wire(py, 42).unwrap();
+            assert_eq!(enable.as_bytes().len(), 9);
+            assert_eq!(enable.as_bytes()[0], 0x60);
+
+            let disable = enable_wins_flag_disable_delta_to_wire(py, vec![9, 2, 2]).unwrap();
+            assert_eq!(disable.as_bytes().len(), 21);
+            assert_eq!(disable.as_bytes()[0], 0x61);
+            assert_eq!(&disable.as_bytes()[1..5], &[2, 0, 0, 0]);
+        });
+    }
+
+    #[test]
+    fn python_flag_replicas_exchange_canonical_record_bytes() {
+        with_python(|py| {
+            let mut left = PyEnableWinsFlagReplica::new(1);
+            let mut right = PyEnableWinsFlagReplica::new(2);
+
+            let enable_10 = left.append_enable(py, 10).unwrap().as_bytes().to_vec();
+            let expected = Record {
+                id: RecordId {
+                    replica: 1,
+                    sequence: 1,
+                },
+                delta: EnableWinsFlagDelta::Enable { token: 10 },
+            }
+            .to_wire_bytes()
+            .unwrap();
+            assert_eq!(enable_10, expected);
+
+            right.merge_record_bytes(&enable_10).unwrap();
+            right.merge_record_bytes(&enable_10).unwrap();
+            assert!(right.value());
+            assert_eq!(right.version_for(1), 1);
+
+            let disable_10 = right
+                .append_disable_observed(py)
+                .unwrap()
+                .as_bytes()
+                .to_vec();
+            assert!(!right.value());
+
+            let enable_11 = left.append_enable(py, 11).unwrap().as_bytes().to_vec();
+            right.merge_record_bytes(&enable_11).unwrap();
+            assert!(right.value());
+
+            left.merge_record_bytes(&disable_10).unwrap();
+            assert!(left.value());
+            let log_bytes = right.log_bytes(py).unwrap().as_bytes().to_vec();
+            left.merge_log_bytes(&log_bytes).unwrap();
+            assert_eq!(left.value(), right.value());
+            assert_eq!(left.enabled_tokens(), vec![10, 11]);
+            assert_eq!(left.tombstone_tokens(), vec![10]);
         });
     }
 
