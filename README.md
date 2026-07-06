@@ -20,6 +20,7 @@ SafeMesh is the builder's mesh: a convergent state fabric for infrastructure whe
 | WASM / TypeScript binding (`safemesh-wasm`) | **Engineered + tested** — wasm-bindgen wrapper over the Rust core, with a committed TypeScript surface and wasm32 build check |
 | Python binding (`safemesh-python`) | **Engineered + tested** — PyO3/maturin wrapper over the Rust core, with pyproject metadata and Rust-side binding tests |
 | Break-it demo (`cargo run -p safemesh-crdt --example break_it`) | **Runnable showpiece** — deterministic partition/drop/duplicate/reorder/heal scenario that exits nonzero unless the replicas converge |
+| Transport coverage contract | **Engineered + tested** — `TransportAdapter`, `InMemoryTransport`, and `anti_entropy` exercise subscribe/send/connectivity under drop, duplicate, reorder, partition, and heal campaigns |
 | Laws harness (`--features laws`) | **Reusable tests** — checks merge laws and drop/dup/reorder convergence scenarios for any type implementing the SafeMesh traits; supplemental to the Lean-oracle diff |
 | User-defined types | **Tested, not proven** — users can implement the same merge contract and run the laws harness, but SafeMesh does not prove arbitrary application code |
 
@@ -67,6 +68,12 @@ cargo run -p safemesh-crdt --example break_it
 ```
 
 The demo partitions four replicas, drops cross-partition packets, delivers same-partition packets in reverse order, duplicates a packet, then heals with anti-entropy. It prints `CONVERGED=true ...` and exits nonzero if convergence fails.
+
+## Transport Coverage Contract
+
+The core crate exposes `TransportAdapter`, `InMemoryTransport`, and `anti_entropy`. The adapter contract covers peer subscription, link connectivity, sending record batches, draining subscribed inboxes, and version-vector anti-entropy via `EventLog::since`.
+
+The in-memory adapter is for CI fault campaigns. It can drop the next send, duplicate the next send, reverse pending delivery for a peer, partition a link, and heal it. These tests show the engineered adapter meets the coverage contract; they do not prove a real radio or network delivers packets.
 
 ## Non-goals
 

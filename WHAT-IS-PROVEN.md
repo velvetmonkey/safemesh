@@ -41,6 +41,8 @@ WASM/TypeScript and Python bindings are engineered wrappers over the Rust core. 
 
 The break-it demo is also engineered evidence. It is useful because it is visible and re-runnable, but it is not a substitute for the Lean proof or differential corpus.
 
+The transport coverage contract is engineered/tested. `InMemoryTransport` validates subscription, connectivity, drop, duplicate, reorder, partition, heal, and version-vector anti-entropy behavior in CI. This does not prove radio or network delivery.
+
 ## The honesty boundary
 
 The Lean theorems are universal over their mathematical models. The Rust implementation is not itself proven in Lean. It is differentially tested against the Lean-generated corpus. This corpus bridge is the honesty artifact that keeps "verified" tied to the proof.
