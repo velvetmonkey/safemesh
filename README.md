@@ -107,6 +107,8 @@ The demo partitions four replicas, drops cross-partition packets, delivers same-
 
 ## Integrity Vertical Kill-Test
 
+Python story walkthrough: [`demos/python-cold-chain/README.md`](demos/python-cold-chain/README.md).
+
 `KILL-TEST.md` records the first software-only integrity vertical: field-science cold-chain sample custody. Run `cargo run -p safemesh-crdt --example cold_chain_kill_test` to exercise `EventLog`, `InMemoryTransport`, and the flat CRDT carriers through drop, duplicate, reorder, partition, and heal. This is an engineered evaluation artifact, not proof of sensors, custody law, storage durability, or real network delivery.
 
 ## Transport Coverage Contract

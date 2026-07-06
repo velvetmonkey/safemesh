@@ -35,6 +35,8 @@ print(left.value(), right.value())
 
 ## Demo
 
+Narrated walkthrough: [`../../../demos/python-cold-chain/README.md`](../../../demos/python-cold-chain/README.md).
+
 Run the data-mule demo after installing the local wheel:
 
 ```sh
