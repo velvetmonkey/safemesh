@@ -1,14 +1,11 @@
-/* Generated with cbindgen; do not edit by hand. */
 #ifndef SAFEMESH_H
 #define SAFEMESH_H
+
+/* Generated with cbindgen; do not edit by hand. */
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 typedef struct SafeMeshGCounter SafeMeshGCounter;
 
@@ -18,23 +15,24 @@ typedef struct SafeMeshBytes {
   size_t cap;
 } SafeMeshBytes;
 
-SafeMeshGCounter *safemesh_gcounter_new(size_t replicas);
+#ifdef __cplusplus
+extern "C" {
+#endif // __cplusplus
 
-void safemesh_gcounter_free(SafeMeshGCounter *counter);
+struct SafeMeshGCounter *safemesh_gcounter_new(size_t replicas);
 
-bool safemesh_gcounter_apply_bump(SafeMeshGCounter *counter,
-                                  size_t replica,
-                                  uint64_t tally);
+void safemesh_gcounter_free(struct SafeMeshGCounter *counter);
 
-uint64_t safemesh_gcounter_value(const SafeMeshGCounter *counter);
+bool safemesh_gcounter_apply_bump(struct SafeMeshGCounter *counter, size_t replica, uint64_t tally);
 
-SafeMeshBytes safemesh_gcounter_delta_to_wire(size_t replica,
-                                              uint64_t tally);
+uint64_t safemesh_gcounter_value(const struct SafeMeshGCounter *counter);
 
-void safemesh_bytes_free(SafeMeshBytes bytes);
+struct SafeMeshBytes safemesh_gcounter_delta_to_wire(size_t replica, uint64_t tally);
+
+void safemesh_bytes_free(struct SafeMeshBytes bytes);
 
 #ifdef __cplusplus
-}
-#endif
+}  // extern "C"
+#endif  // __cplusplus
 
-#endif /* SAFEMESH_H */
+#endif  /* SAFEMESH_H */

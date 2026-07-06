@@ -11,6 +11,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Cache Lean toolchain and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan
+            lean/.lake
+          key: ${{ runner.os }}-lean-${{ hashFiles('lean/lean-toolchain', 'lean/lakefile.toml', 'lean/lake-manifest.json', 'lean/**/*.lean') }}
+          restore-keys: |
+            ${{ runner.os }}-lean-${{ hashFiles('lean/lean-toolchain', 'lean/lakefile.toml', 'lean/lake-manifest.json') }}-
+            ${{ runner.os }}-lean-
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -18,6 +29,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -30,6 +47,17 @@ jobs:
         uses: leanprover/lean-action@v1
         with:
           lake-package-directory: lean
+
+      - name: Install distribution tools
+        run: |
+          if ! command -v wasm-pack >/dev/null 2>&1; then
+            cargo install wasm-pack --version 0.15.0 --locked
+          fi
+          if ! command -v cbindgen >/dev/null 2>&1; then
+            cargo install cbindgen --version 0.28.0 --locked
+          fi
+          python3 -m pip install --user "maturin>=1.7,<2"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run full gate
         run: ./scripts/ci.sh

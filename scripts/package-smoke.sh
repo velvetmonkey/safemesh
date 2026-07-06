@@ -10,9 +10,19 @@ trap 'rm -rf "$tmp_dir"' EXIT
   cargo package -p safemesh-crdt --allow-dirty --no-verify
 )
 
-python3 -m pip wheel "$repo_root/rust/crates/safemesh-python" \
-  --wheel-dir "$tmp_dir/wheels" \
-  --no-deps
+if ! command -v maturin >/dev/null 2>&1; then
+  if command -v pipx >/dev/null 2>&1; then
+    pipx install "maturin>=1.7,<2"
+  else
+    python3 -m pip install --user "maturin>=1.7,<2"
+  fi
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+
+(
+  cd "$repo_root/rust/crates/safemesh-python"
+  maturin build --release --features extension-module --out "$tmp_dir/wheels"
+)
 
 python3 -m venv "$tmp_dir/venv"
 "$tmp_dir/venv/bin/pip" install \

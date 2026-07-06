@@ -11,6 +11,10 @@ readme = "../../../README.md"
 name = "safemesh_python"
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+extension-module = ["pyo3/extension-module"]
+
 [dependencies]
 pyo3 = { version = "0.22", features = ["abi3-py38"] }
 safemesh-crdt = { path = "../safemesh-crdt", version = "0.1.0" }

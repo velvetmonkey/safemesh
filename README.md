@@ -1,5 +1,7 @@
 # SafeMesh for builders
 
+[![SafeMesh CI](https://github.com/velvetmonkey/safemesh/actions/workflows/ci.yml/badge.svg)](https://github.com/velvetmonkey/safemesh/actions/workflows/ci.yml)
+
 A verified convergent-state layer you build on. Append events anywhere, sync over anything, and every replica provably converges. No duplicates, no lost events, no conflict bugs. The merge is machine-checked, and re-runnable in your CI.
 
 SafeMesh ships small, embeddable building blocks whose correctness is machine-checked in Lean 4, not just tested. Each primitive is a dual artifact: a Lean proof of its key property, and a thin `no_std`-friendly Rust crate that is differential-tested against that proof.
