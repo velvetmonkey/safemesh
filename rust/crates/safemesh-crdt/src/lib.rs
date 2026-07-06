@@ -647,6 +647,150 @@ impl<V: Ord + Clone> Crdt for LwwRegister<V> {
     }
 }
 
+/// Delta for a last-writer-wins map.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LwwMapDelta<K: Ord, V: Ord> {
+    Set {
+        key: K,
+        timestamp: u64,
+        replica: u64,
+        value: V,
+    },
+    Remove {
+        key: K,
+        timestamp: u64,
+        replica: u64,
+    },
+}
+
+/// Last-writer-wins map.
+///
+/// This is a flat tested-not-proven type. Each key has an optional max-dot value
+/// entry and an optional max-dot remove tombstone. A key is visible when its
+/// value dot is greater than its remove dot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LwwMap<K: Ord, V: Ord> {
+    entries: BTreeMap<K, LwwEntry<V>>,
+    removals: BTreeMap<K, LwwDot>,
+}
+
+impl<K: Ord, V: Ord> LwwMap<K, V> {
+    pub fn new() -> Self {
+        LwwMap {
+            entries: BTreeMap::new(),
+            removals: BTreeMap::new(),
+        }
+    }
+
+    pub fn set(&mut self, key: K, timestamp: u64, replica: u64, value: V) {
+        self.apply_entry(
+            key,
+            LwwEntry {
+                dot: LwwDot { timestamp, replica },
+                value,
+            },
+        );
+    }
+
+    pub fn remove(&mut self, key: K, timestamp: u64, replica: u64) {
+        self.apply_removal(key, LwwDot { timestamp, replica });
+    }
+
+    pub fn get(&self, key: &K) -> Option<&V> {
+        self.visible_entry(key).map(|entry| &entry.value)
+    }
+
+    pub fn visible_entry(&self, key: &K) -> Option<&LwwEntry<V>> {
+        let entry = self.entries.get(key)?;
+        match self.removals.get(key) {
+            Some(removal) if entry.dot <= *removal => None,
+            _ => Some(entry),
+        }
+    }
+
+    pub fn entries(&self) -> &BTreeMap<K, LwwEntry<V>> {
+        &self.entries
+    }
+
+    pub fn removals(&self) -> &BTreeMap<K, LwwDot> {
+        &self.removals
+    }
+
+    fn apply_entry(&mut self, key: K, entry: LwwEntry<V>) {
+        match self.entries.get(&key) {
+            Some(current) if current >= &entry => {}
+            _ => {
+                self.entries.insert(key, entry);
+            }
+        }
+    }
+
+    fn apply_removal(&mut self, key: K, dot: LwwDot) {
+        match self.removals.get(&key) {
+            Some(current) if *current >= dot => {}
+            _ => {
+                self.removals.insert(key, dot);
+            }
+        }
+    }
+}
+
+impl<K: Ord + Clone, V: Ord + Clone> LwwMap<K, V> {
+    pub fn merge(&mut self, other: &Self) {
+        for (key, entry) in other.entries.iter() {
+            self.apply_entry(key.clone(), entry.clone());
+        }
+        for (key, dot) in other.removals.iter() {
+            self.apply_removal(key.clone(), *dot);
+        }
+    }
+
+    pub fn value(&self) -> BTreeMap<K, V> {
+        self.entries
+            .iter()
+            .filter_map(|(key, entry)| {
+                if self.visible_entry(key).is_some() {
+                    Some((key.clone(), entry.value.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+}
+
+impl<K: Ord, V: Ord> Default for LwwMap<K, V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<K: Ord + Clone, V: Ord + Clone> Mergeable for LwwMap<K, V> {
+    fn merge(&mut self, other: &Self) {
+        LwwMap::merge(self, other);
+    }
+}
+
+impl<K: Ord + Clone, V: Ord + Clone> Crdt for LwwMap<K, V> {
+    type Delta = LwwMapDelta<K, V>;
+
+    fn apply_delta(&mut self, delta: Self::Delta) {
+        match delta {
+            LwwMapDelta::Set {
+                key,
+                timestamp,
+                replica,
+                value,
+            } => self.set(key, timestamp, replica, value),
+            LwwMapDelta::Remove {
+                key,
+                timestamp,
+                replica,
+            } => self.remove(key, timestamp, replica),
+        }
+    }
+}
+
 /// Stable identity for an event-log record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RecordId {
@@ -987,6 +1131,9 @@ const TAG_LWW_REGISTER_U64: u8 = 0x51;
 const TAG_ENABLE_WINS_FLAG_ENABLE_U64: u8 = 0x60;
 const TAG_ENABLE_WINS_FLAG_DISABLE_U64: u8 = 0x61;
 const TAG_ENABLE_WINS_FLAG_U64: u8 = 0x62;
+const TAG_LWW_MAP_SET_U64: u8 = 0x70;
+const TAG_LWW_MAP_REMOVE_U64: u8 = 0x71;
+const TAG_LWW_MAP_U64: u8 = 0x72;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WireError {
@@ -1421,6 +1568,97 @@ impl WireDecode for EnableWinsFlag<u64> {
             flag.disable([cursor.read_u64()?]);
         }
         Ok(flag)
+    }
+}
+
+impl WireEncode for LwwMapDelta<u64, u64> {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        match self {
+            LwwMapDelta::Set {
+                key,
+                timestamp,
+                replica,
+                value,
+            } => {
+                write_u8(out, TAG_LWW_MAP_SET_U64);
+                write_u64(out, *key);
+                write_u64(out, *timestamp);
+                write_u64(out, *replica);
+                write_u64(out, *value);
+            }
+            LwwMapDelta::Remove {
+                key,
+                timestamp,
+                replica,
+            } => {
+                write_u8(out, TAG_LWW_MAP_REMOVE_U64);
+                write_u64(out, *key);
+                write_u64(out, *timestamp);
+                write_u64(out, *replica);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl WireDecode for LwwMapDelta<u64, u64> {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        let tag = cursor.read_u8()?;
+        match tag {
+            TAG_LWW_MAP_SET_U64 => Ok(LwwMapDelta::Set {
+                key: cursor.read_u64()?,
+                timestamp: cursor.read_u64()?,
+                replica: cursor.read_u64()?,
+                value: cursor.read_u64()?,
+            }),
+            TAG_LWW_MAP_REMOVE_U64 => Ok(LwwMapDelta::Remove {
+                key: cursor.read_u64()?,
+                timestamp: cursor.read_u64()?,
+                replica: cursor.read_u64()?,
+            }),
+            _ => Err(WireError::InvalidTag),
+        }
+    }
+}
+
+impl WireEncode for LwwMap<u64, u64> {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        write_u8(out, TAG_LWW_MAP_U64);
+        write_len(out, self.entries.len())?;
+        for (key, entry) in self.entries.iter() {
+            write_u64(out, *key);
+            write_u64(out, entry.dot.timestamp);
+            write_u64(out, entry.dot.replica);
+            write_u64(out, entry.value);
+        }
+        write_len(out, self.removals.len())?;
+        for (key, dot) in self.removals.iter() {
+            write_u64(out, *key);
+            write_u64(out, dot.timestamp);
+            write_u64(out, dot.replica);
+        }
+        Ok(())
+    }
+}
+
+impl WireDecode for LwwMap<u64, u64> {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        read_tag(cursor, TAG_LWW_MAP_U64)?;
+        let entry_len = cursor.read_len()?;
+        let mut map = LwwMap::new();
+        for _ in 0..entry_len {
+            map.set(
+                cursor.read_u64()?,
+                cursor.read_u64()?,
+                cursor.read_u64()?,
+                cursor.read_u64()?,
+            );
+        }
+        let removal_len = cursor.read_len()?;
+        for _ in 0..removal_len {
+            map.remove(cursor.read_u64()?, cursor.read_u64()?, cursor.read_u64()?);
+        }
+        Ok(map)
     }
 }
 

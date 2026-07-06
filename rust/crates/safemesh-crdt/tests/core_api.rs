@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use safemesh_crdt::{
-    Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta, LwwRegister,
-    LwwRegisterDelta, OrSet, OrSetDelta, PnCounter, PnCounterDelta, Rga, RgaDelta,
+    Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta, LwwMap,
+    LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta, PnCounter, PnCounterDelta, Rga,
+    RgaDelta,
 };
 
 #[test]
@@ -96,6 +97,40 @@ fn enable_wins_flag_keeps_concurrent_enable_live() {
     assert_eq!(
         flag.tombstones().iter().copied().collect::<Vec<_>>(),
         vec![10]
+    );
+}
+
+#[test]
+fn lww_map_tracks_value_and_remove_dots_per_key() {
+    let mut map = LwwMap::new();
+    map.apply_delta(LwwMapDelta::Set {
+        key: 7_u64,
+        timestamp: 10,
+        replica: 1,
+        value: 100_u64,
+    });
+    assert_eq!(map.get(&7), Some(&100));
+
+    map.apply_delta(LwwMapDelta::Remove {
+        key: 7,
+        timestamp: 11,
+        replica: 1,
+    });
+    assert_eq!(map.get(&7), None);
+
+    let mut stale_writer = LwwMap::new();
+    stale_writer.set(7, 10, 2, 200);
+    map.merge(&stale_writer);
+    assert_eq!(map.get(&7), None);
+
+    let mut later_writer = LwwMap::new();
+    later_writer.set(7, 12, 1, 300);
+    later_writer.set(2, 1, 1, 20);
+    map.merge(&later_writer);
+    assert_eq!(map.get(&7), Some(&300));
+    assert_eq!(
+        map.value().into_iter().collect::<Vec<_>>(),
+        vec![(2, 20), (7, 300)]
     );
 }
 
