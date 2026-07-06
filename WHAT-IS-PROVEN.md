@@ -37,7 +37,7 @@ The CRDT carriers are `no_std + alloc`, forbid `unsafe`, and are checked by `tes
 
 The wire format and C ABI are also engineered infrastructure. They are covered by exact-byte, round-trip, malformed-input, FFI smoke, and header-drift tests, not by Lean theorems.
 
-WASM/TypeScript and Python bindings are engineered wrappers over the Rust core. Their tests show they call the core and preserve canonical bytes; they are not separate proofs.
+WASM/TypeScript and Python bindings are engineered wrappers over the Rust core. Their tests show they call the core, preserve canonical record/log bytes, and converge by merging those bytes through the shared Rust implementation; they are not separate proofs.
 
 The break-it demo is also engineered evidence. It is useful because it is visible and re-runnable, but it is not a substitute for the Lean proof or differential corpus.
 

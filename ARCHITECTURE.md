@@ -30,7 +30,7 @@ The canonical Rust wire format uses fixed one-byte tags, little-endian integer f
 
 ## Bindings
 
-`rust/crates/safemesh-wasm` and `rust/crates/safemesh-python` are the first language bindings. They expose G-Counter operations and canonical delta bytes by calling the same Rust core. They do not reimplement merge logic, and they stay in the engineered/tested bucket.
+`rust/crates/safemesh-wasm` and `rust/crates/safemesh-python` are the first language bindings. They expose G-Counter operations, G-Counter replica/event-log exchange, and canonical record/log bytes by calling the same Rust core. They do not reimplement merge logic, and they stay in the engineered/tested bucket.
 
 ## Break-it demo
 

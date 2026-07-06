@@ -7,4 +7,16 @@ export class SafeMeshGCounter {
   free(): void;
 }
 
+export class SafeMeshGCounterReplica {
+  constructor(replicaId: bigint, replicas: number);
+  appendBump(counterReplica: number, tally: bigint): Uint8Array;
+  mergeRecordBytes(bytes: Uint8Array): void;
+  mergeLogBytes(bytes: Uint8Array): void;
+  logBytes(): Uint8Array;
+  versionFor(replica: bigint): bigint;
+  value(): bigint;
+  state(): BigUint64Array;
+  free(): void;
+}
+
 export function gcounterDeltaToWire(replica: number, tally: bigint): Uint8Array;
