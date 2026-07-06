@@ -42,3 +42,14 @@ assert reg_left.value_or(0) == reg_right.value_or(0) == 200
 
 print("PYTHON_INSTALL_SMOKE=true")
 PY
+
+if ! command -v wasm-pack >/dev/null 2>&1; then
+  cargo install wasm-pack --version 0.15.0 --locked
+fi
+
+wasm-pack build "$repo_root/rust/crates/safemesh-wasm" \
+  --target bundler \
+  --out-dir "$tmp_dir/wasm-pkg" \
+  --release
+
+npm pack --dry-run "$tmp_dir/wasm-pkg"
