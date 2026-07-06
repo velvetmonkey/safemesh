@@ -1,12 +1,34 @@
-# SafeMesh for builders
+# SafeMesh
 
 [![SafeMesh CI](https://github.com/velvetmonkey/safemesh/actions/workflows/ci.yml/badge.svg)](https://github.com/velvetmonkey/safemesh/actions/workflows/ci.yml)
 
-A verified convergent-state layer you build on. Append events anywhere, sync over anything, and every replica provably converges. No duplicates, no lost events, no conflict bugs. The merge is machine-checked, and re-runnable in your CI.
+Lean-backed CRDT convergence for small, embeddable state sync.
 
-SafeMesh ships small, embeddable building blocks whose correctness is machine-checked in Lean 4, not just tested. Each primitive is a dual artifact: a Lean proof of its key property, and a thin `no_std`-friendly Rust crate that is differential-tested against that proof.
+SafeMesh v0.1 packages one Rust core behind Rust, C ABI, WASM/TypeScript, and Python surfaces. The verified claim is intentionally narrow: G-Set, G-Counter, PN-Counter, OR-Set, and RGA/Text are backed by Lean proofs and by Rust differential tests against a Lean-generated oracle corpus. `EventLog`, wire encoding, bindings, demos, LWW Register, Enable-wins Flag, and LWW Map are engineered and tested product surfaces, not separate Lean proofs.
 
-SafeMesh is the builder's mesh: a convergent state fabric for infrastructure where silent divergence is expensive. You bring the transport and the application schema; SafeMesh gives you verified merge behavior for the in-house CRDT types and honest test harnesses for your own types.
+You bring the transport and application schema. SafeMesh gives you flat CRDT carriers, append/merge/since event-log plumbing, canonical bytes, and packaging smoke tests that keep the proof bridge visible in CI.
+
+Honest claim map: `CLAIMS.md`, `WHAT-IS-PROVEN.md`, and `ARCHITECTURE.md`.
+
+## Install matrix
+
+SafeMesh v0.1 is publish-ready only. These commands are dry-run or local wheel/package flows; this branch does not publish to any registry.
+
+| Surface | Consumer command after registry publish | v0.1 dry-run/local command |
+|---|---|---|
+| Rust core | `cargo add safemesh-crdt@0.1.0` | `cd rust && cargo publish --dry-run -p safemesh-crdt --allow-dirty` |
+| WASM / TypeScript | `npm install safemesh-wasm@0.1.0` | `tmp=$(mktemp -d) && wasm-pack build rust/crates/safemesh-wasm --target bundler --out-dir "$tmp/pkg" --release && npm pack --dry-run "$tmp/pkg"` |
+| Python | `pip install safemesh-python==0.1.0` | `tmp=$(mktemp -d) && (cd rust/crates/safemesh-python && maturin build --release --features extension-module --out "$tmp/wheels") && python3 -m venv "$tmp/venv" && "$tmp/venv/bin/pip" install --no-index --find-links "$tmp/wheels" safemesh-python` |
+
+## Run the break-it demos
+
+Each one-liner exits nonzero unless the modeled replicas converge and prints `CONVERGED=true` on success.
+
+| Surface | One-liner from the repo root |
+|---|---|
+| Rust | `cd rust && cargo run -p safemesh-crdt --example break_it` |
+| WASM / Node | `tmp=$(mktemp -d) && wasm-pack build rust/crates/safemesh-wasm --target nodejs --out-dir "$tmp/pkg" --release && node rust/crates/safemesh-wasm/examples/node-convergence.mjs "$tmp/pkg"` |
+| Python | `tmp=$(mktemp -d) && (cd rust/crates/safemesh-python && maturin build --release --features extension-module --out "$tmp/wheels") && python3 -m venv "$tmp/venv" && "$tmp/venv/bin/pip" install --no-index --find-links "$tmp/wheels" safemesh-python && "$tmp/venv/bin/python" rust/crates/safemesh-python/examples/data_mule_demo.py` |
 
 ## Status
 
@@ -49,7 +71,7 @@ See `ARCHITECTURE.md`, `CLAIMS.md`, and `WHAT-IS-PROVEN.md`.
 
 Run `./scripts/ci.sh` to execute the same full gate used by the repository workflow: Lean build, Rust formatting/tests/features/examples, the break-it and cold-chain demos, embedded and WASM target builds, and the web test/build pair.
 
-Run `./scripts/package-smoke.sh` to verify packaging basics: `safemesh-crdt` can be packed by Cargo, the Python wheel builds through PEP 517/maturin, the installed wheel exchanges canonical record/log bytes using Python `bytes`, and the WASM binding builds into an npm-packable wasm-pack package.
+Run `./scripts/package-smoke.sh` to verify packaging basics: `safemesh-crdt` passes `cargo publish --dry-run`, the Python wheel builds through maturin, the installed wheel exchanges canonical record/log bytes and runs the data-mule demo, and the WASM binding builds into an npm-packable wasm-pack package with a Node convergence demo.
 
 ## Laws harness
 
@@ -65,10 +87,10 @@ The FFI spine lives in `rust/crates/safemesh-ffi`. It exposes opaque G-Counter h
 
 The first bindings are thin wrappers over the same Rust core:
 
-- `rust/crates/safemesh-wasm` exposes G-Counter, `GCounterReplica`, LWW Register, `LwwRegisterReplica`, Enable-wins Flag, `EnableWinsFlagReplica`, LWW Map, `LwwMapReplica`, canonical record/log bytes, and merge-from-bytes through wasm-bindgen, with a committed TypeScript declaration file.
-- `rust/crates/safemesh-python` exposes the same G-Counter and LWW Register replica/event-log surface through PyO3, with `pyproject.toml` configured for maturin.
+- `rust/crates/safemesh-wasm` exposes `SafeMeshGCounter`, `SafeMeshGCounterReplica`, `SafeMeshLwwRegister`, `SafeMeshLwwRegisterReplica`, `SafeMeshEnableWinsFlag`, `SafeMeshEnableWinsFlagReplica`, `SafeMeshLwwMap`, `SafeMeshLwwMapReplica`, canonical record/log bytes, and merge-from-bytes through wasm-bindgen, with a committed TypeScript declaration file.
+- `rust/crates/safemesh-python` exposes G-Counter, LWW Register, Enable-wins Flag, LWW Map, and their replica/event-log surfaces through PyO3, with `pyproject.toml` configured for maturin.
 
-Neither binding reimplements merge logic. Both are engineered/tested glue around the Rust core, and both have tests that exchange canonical record/log bytes and converge through that core. The G-Counter binding rides the Lean-backed surface; the LWW Register binding remains tested-not-proven.
+Neither binding reimplements merge logic. Both are engineered/tested glue around the Rust core, and both have tests that exchange canonical record/log bytes and converge through that core. The G-Counter binding rides the Lean-backed surface; LWW Register, Enable-wins Flag, and LWW Map remain tested-not-proven.
 
 ## Break-it demo
 
