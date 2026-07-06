@@ -29,3 +29,5 @@ rustup target add thumbv7em-none-eabihf wasm32-unknown-unknown
   npm test
   npm run build
 )
+
+"$repo_root/scripts/package-smoke.sh"

@@ -45,6 +45,8 @@ See `ARCHITECTURE.md`, `CLAIMS.md`, and `WHAT-IS-PROVEN.md`.
 
 Run `./scripts/ci.sh` to execute the same full gate used by the repository workflow: Lean build, Rust formatting/tests/features/examples, the break-it and cold-chain demos, embedded and WASM target builds, and the web test/build pair.
 
+Run `./scripts/package-smoke.sh` to verify packaging basics: `safemesh-crdt` can be packed by Cargo, the Python wheel builds through PEP 517/maturin, and the installed wheel exchanges canonical record/log bytes using Python `bytes`.
+
 ## Laws harness
 
 Enable `--features laws` to use `safemesh_crdt::laws`. The harness checks merge commutativity, associativity, idempotence, identity, deterministic shuffle convergence, redelivery, and split/drop-then-merge recovery over supplied sample states and deltas. This is the CI bar for custom types; it does not make custom code proven.

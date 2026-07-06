@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 description = "PyO3/maturin binding for the SafeMesh Rust core"
+repository = "https://github.com/velvetmonkey/safemesh"
+readme = "../../../README.md"
 
 [lib]
 name = "safemesh_python"
@@ -11,4 +13,4 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pyo3 = { version = "0.22", features = ["abi3-py38"] }
-safemesh-crdt = { path = "../safemesh-crdt" }
+safemesh-crdt = { path = "../safemesh-crdt", version = "0.1.0" }
