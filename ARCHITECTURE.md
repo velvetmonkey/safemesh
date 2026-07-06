@@ -36,6 +36,10 @@ The canonical Rust wire format uses fixed one-byte tags, little-endian integer f
 
 `cargo run -p safemesh-crdt --example break_it` is the CI-friendly showpiece. It drives G-Counter, OR-Set, and RGA state through partition, drop, duplicate, reorder, and heal phases, then exits nonzero unless all replicas converge.
 
+## Integrity Vertical Kill-Test
+
+`cargo run -p safemesh-crdt --example cold_chain_kill_test` is the first software-only vertical check. It models field-science cold-chain sample custody with `EventLog`, `InMemoryTransport`, `GSet`, `OrSet`, `Rga`, and `GCounter`, then runs through drop, duplicate, reorder, partition, and heal. This validates that the current flat-first surface can express one load-bearing workflow slice; it is not a proof of domain procedure, sensor truth, durability, or real transport delivery.
+
 ## Transport Coverage Contract
 
 `TransportAdapter` is the engineered boundary for send/subscribe/connectivity. `anti_entropy` uses `EventLog::since(remote_version)` to resend missing records once a link is available. `InMemoryTransport` is the deterministic CI adapter for fault campaigns: drop, duplicate, reverse delivery, partition, and heal. This validates adapter behavior under the coverage contract; it is not a proof of real network delivery.

@@ -40,7 +40,7 @@ The wire format and C ABI are also engineered infrastructure. They are covered b
 
 WASM/TypeScript and Python bindings are engineered wrappers over the Rust core. Their tests show they call the core, preserve canonical record/log bytes, and converge by merging those bytes through the shared Rust implementation; they are not separate proofs.
 
-The break-it demo is also engineered evidence. It is useful because it is visible and re-runnable, but it is not a substitute for the Lean proof or differential corpus.
+The break-it demo and cold-chain kill-test are also engineered evidence. They are useful because they are visible and re-runnable, but they are not substitutes for the Lean proof or differential corpus.
 
 The transport coverage contract is engineered/tested. `InMemoryTransport` validates subscription, connectivity, drop, duplicate, reorder, partition, heal, and version-vector anti-entropy behavior in CI. This does not prove radio or network delivery.
 
