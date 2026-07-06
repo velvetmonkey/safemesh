@@ -9,10 +9,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.0
 
       - name: Cache Lean toolchain and build artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v6.1.0
         with:
           path: |
             ~/.elan
@@ -26,25 +26,31 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: actions/cache@v6.1.0
         with:
-          workspaces: rust
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/Cargo.lock', 'rust/**/*.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6.3.0
         with:
           python-version: "3.11"
           cache: pip
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6.4.0
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
           cache-dependency-path: web/package-lock.json
 
       - name: Set up Lean
-        uses: leanprover/lean-action@v1
+        uses: leanprover/lean-action@v1.5.0
         with:
           lake-package-directory: lean
 
