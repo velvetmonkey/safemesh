@@ -94,6 +94,8 @@ Neither binding reimplements merge logic. Both are engineered/tested glue around
 
 ## Break-it demo
 
+Narrated walkthrough: [`demos/rust-break-it/README.md`](demos/rust-break-it/README.md).
+
 Run:
 
 ```sh
