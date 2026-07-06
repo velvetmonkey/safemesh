@@ -37,6 +37,8 @@ The CRDT carriers are `no_std + alloc`, forbid `unsafe`, and are checked by `tes
 
 The wire format and C ABI are also engineered infrastructure. They are covered by exact-byte, round-trip, malformed-input, FFI smoke, and header-drift tests, not by Lean theorems.
 
+WASM/TypeScript and Python bindings are engineered wrappers over the Rust core. Their tests show they call the core and preserve canonical bytes; they are not separate proofs.
+
 ## The honesty boundary
 
 The Lean theorems are universal over their mathematical models. The Rust implementation is not itself proven in Lean. It is differentially tested against the Lean-generated corpus. This corpus bridge is the honesty artifact that keeps "verified" tied to the proof.

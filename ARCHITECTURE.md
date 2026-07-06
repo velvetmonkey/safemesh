@@ -28,6 +28,10 @@ The canonical Rust wire format uses fixed one-byte tags, little-endian integer f
 
 `rust/crates/safemesh-ffi` is the first C ABI spine. It exposes opaque G-Counter handles and a delta-to-wire helper through `include/safemesh.h`. The crate carries `cbindgen.toml`; the committed header is protected by a drift test so ABI changes are explicit.
 
+## Bindings
+
+`rust/crates/safemesh-wasm` and `rust/crates/safemesh-python` are the first language bindings. They expose G-Counter operations and canonical delta bytes by calling the same Rust core. They do not reimplement merge logic, and they stay in the engineered/tested bucket.
+
 ## Honesty
 
 - **Proven (universal):** everything in `lean/SafeMesh/` — kernel-checked, zero `sorry`, axioms ⊆ {propext, Classical.choice, Quot.sound}, pinned per-theorem by `#guard_msgs` in `Test/Axioms.lean` (a default build target, so the gate cannot silently not-run).

@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "safemesh-python"
+version = "0.1.0"
+description = "Python binding for the SafeMesh Rust core"
+requires-python = ">=3.8"
+license = { text = "AGPL-3.0-or-later" }
+
+[tool.maturin]
+module-name = "safemesh_python"
+bindings = "pyo3"

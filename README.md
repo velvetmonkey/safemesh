@@ -17,6 +17,8 @@ SafeMesh is the builder's mesh: a convergent state fabric for infrastructure whe
 | Rust EventLog API | **Engineered** — append/merge/since/version record log with deterministic dedup; useful infrastructure, not the Lean-proven CRDT theorem itself |
 | Canonical wire format | **Engineered + tested** — fixed tags, little-endian integers, length-prefixed records, and sorted set encodings; round-trip, malformed-input, and byte-stability tests cover the current Rust surface |
 | C ABI spine (`safemesh-ffi`) | **Engineered + tested** — thin wrapper over the Rust core with a committed `include/safemesh.h` header and drift check |
+| WASM / TypeScript binding (`safemesh-wasm`) | **Engineered + tested** — wasm-bindgen wrapper over the Rust core, with a committed TypeScript surface and wasm32 build check |
+| Python binding (`safemesh-python`) | **Engineered + tested** — PyO3/maturin wrapper over the Rust core, with pyproject metadata and Rust-side binding tests |
 | Laws harness (`--features laws`) | **Reusable tests** — checks merge laws and drop/dup/reorder convergence scenarios for any type implementing the SafeMesh traits; supplemental to the Lean-oracle diff |
 | User-defined types | **Tested, not proven** — users can implement the same merge contract and run the laws harness, but SafeMesh does not prove arbitrary application code |
 
@@ -44,6 +46,15 @@ Enable `--features laws` to use `safemesh_crdt::laws`. The harness checks merge 
 The core crate exposes `WireEncode` / `WireDecode` for the current u64-oriented wire surface and for `Record` / `EventLog` framing. The format is deliberately boring: one-byte tags, little-endian integer fields, u32 length prefixes, and BTree-backed sorted encodings for set-like state.
 
 The FFI spine lives in `rust/crates/safemesh-ffi`. It exposes opaque G-Counter handles and a delta-to-wire helper through `include/safemesh.h`. The header is committed and checked by tests; `cbindgen.toml` is present for regeneration when `cbindgen` is installed.
+
+## Bindings
+
+The first bindings are thin wrappers over the same Rust core:
+
+- `rust/crates/safemesh-wasm` exposes G-Counter and canonical delta bytes through wasm-bindgen, with a committed TypeScript declaration file.
+- `rust/crates/safemesh-python` exposes the same G-Counter and canonical delta bytes through PyO3, with `pyproject.toml` configured for maturin.
+
+Neither binding reimplements merge logic. Both are engineered/tested glue around the verified core.
 
 ## Non-goals
 
