@@ -470,6 +470,94 @@ impl<P: Ord + Clone, V: Ord + Clone> Crdt for Rga<P, V> {
     }
 }
 
+/// Total-order dot for last-writer-wins registers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LwwDot {
+    pub timestamp: u64,
+    pub replica: u64,
+}
+
+/// One LWW register assignment.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LwwEntry<V: Ord> {
+    pub dot: LwwDot,
+    pub value: V,
+}
+
+/// Delta for a last-writer-wins register.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LwwRegisterDelta<V: Ord> {
+    pub timestamp: u64,
+    pub replica: u64,
+    pub value: V,
+}
+
+/// Last-writer-wins register.
+///
+/// This is a flat tested-not-proven type. It is a max register over the total
+/// order `(timestamp, replica, value)`, which gives deterministic merge and
+/// tie-breaking. It is not currently part of the Lean-proven product surface.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LwwRegister<V: Ord> {
+    entry: Option<LwwEntry<V>>,
+}
+
+impl<V: Ord> LwwRegister<V> {
+    pub fn new() -> Self {
+        LwwRegister { entry: None }
+    }
+
+    pub fn set(&mut self, timestamp: u64, replica: u64, value: V) {
+        self.apply_entry(LwwEntry {
+            dot: LwwDot { timestamp, replica },
+            value,
+        });
+    }
+
+    pub fn entry(&self) -> Option<&LwwEntry<V>> {
+        self.entry.as_ref()
+    }
+
+    pub fn value(&self) -> Option<&V> {
+        self.entry.as_ref().map(|entry| &entry.value)
+    }
+
+    fn apply_entry(&mut self, entry: LwwEntry<V>) {
+        match &self.entry {
+            Some(current) if current >= &entry => {}
+            _ => self.entry = Some(entry),
+        }
+    }
+}
+
+impl<V: Ord> Default for LwwRegister<V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<V: Ord + Clone> LwwRegister<V> {
+    pub fn merge(&mut self, other: &Self) {
+        if let Some(entry) = other.entry.clone() {
+            self.apply_entry(entry);
+        }
+    }
+}
+
+impl<V: Ord + Clone> Mergeable for LwwRegister<V> {
+    fn merge(&mut self, other: &Self) {
+        LwwRegister::merge(self, other);
+    }
+}
+
+impl<V: Ord + Clone> Crdt for LwwRegister<V> {
+    type Delta = LwwRegisterDelta<V>;
+
+    fn apply_delta(&mut self, delta: Self::Delta) {
+        self.set(delta.timestamp, delta.replica, delta.value);
+    }
+}
+
 /// Stable identity for an event-log record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RecordId {
@@ -773,6 +861,8 @@ const TAG_PNCOUNTER_DEC: u8 = 0x12;
 const TAG_GSET_U64: u8 = 0x20;
 const TAG_ORSET_U64: u8 = 0x30;
 const TAG_RGA_U64: u8 = 0x40;
+const TAG_LWW_REGISTER_DELTA_U64: u8 = 0x50;
+const TAG_LWW_REGISTER_U64: u8 = 0x51;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WireError {
@@ -1081,6 +1171,59 @@ impl<D: WireDecode> WireDecode for EventLog<D> {
             log.merge_records([Record::<D>::from_wire_bytes(record_bytes)?]);
         }
         Ok(log)
+    }
+}
+
+impl WireEncode for LwwRegisterDelta<u64> {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        write_u8(out, TAG_LWW_REGISTER_DELTA_U64);
+        write_u64(out, self.timestamp);
+        write_u64(out, self.replica);
+        write_u64(out, self.value);
+        Ok(())
+    }
+}
+
+impl WireDecode for LwwRegisterDelta<u64> {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        read_tag(cursor, TAG_LWW_REGISTER_DELTA_U64)?;
+        Ok(LwwRegisterDelta {
+            timestamp: cursor.read_u64()?,
+            replica: cursor.read_u64()?,
+            value: cursor.read_u64()?,
+        })
+    }
+}
+
+impl WireEncode for LwwRegister<u64> {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        write_u8(out, TAG_LWW_REGISTER_U64);
+        match self.entry() {
+            Some(entry) => {
+                write_u8(out, 1);
+                write_u64(out, entry.dot.timestamp);
+                write_u64(out, entry.dot.replica);
+                write_u64(out, entry.value);
+            }
+            None => write_u8(out, 0),
+        }
+        Ok(())
+    }
+}
+
+impl WireDecode for LwwRegister<u64> {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        read_tag(cursor, TAG_LWW_REGISTER_U64)?;
+        let present = cursor.read_u8()?;
+        match present {
+            0 => Ok(LwwRegister::new()),
+            1 => {
+                let mut register = LwwRegister::new();
+                register.set(cursor.read_u64()?, cursor.read_u64()?, cursor.read_u64()?);
+                Ok(register)
+            }
+            _ => Err(WireError::InvalidTag),
+        }
     }
 }
 

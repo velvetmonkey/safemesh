@@ -5,8 +5,8 @@
 use std::fmt::Debug;
 
 use safemesh_crdt::{
-    EventLog, GCounterDelta, GSet, OrSet, PnCounterDelta, Record, RecordId, Rga, WireDecode,
-    WireEncode, WireError,
+    EventLog, GCounterDelta, GSet, LwwRegister, LwwRegisterDelta, OrSet, PnCounterDelta, Record,
+    RecordId, Rga, WireDecode, WireEncode, WireError,
 };
 
 fn roundtrip<T>(value: T)
@@ -121,6 +121,39 @@ fn event_log_roundtrips_and_preserves_deduped_records() {
     assert_eq!(decoded.records().len(), 2);
     assert_eq!(decoded.version().get(1), 2);
     assert_eq!(decoded.to_wire_bytes().unwrap(), bytes);
+}
+
+#[test]
+fn lww_register_wire_is_stable_and_roundtrips() {
+    let delta = LwwRegisterDelta {
+        timestamp: 9,
+        replica: 2,
+        value: 42,
+    };
+    assert_eq!(
+        delta.to_wire_bytes().unwrap(),
+        vec![
+            0x50, // LWW register delta tag
+            0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // timestamp
+            0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // replica
+            0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // value
+        ],
+    );
+    roundtrip(delta);
+
+    let mut register = LwwRegister::new();
+    assert_eq!(register.to_wire_bytes().unwrap(), vec![0x51, 0x00]);
+    register.set(9, 2, 42);
+    assert_eq!(
+        register.to_wire_bytes().unwrap(),
+        vec![
+            0x51, 0x01, // LWW register tag + present
+            0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // timestamp
+            0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // replica
+            0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // value
+        ],
+    );
+    roundtrip(register);
 }
 
 #[test]

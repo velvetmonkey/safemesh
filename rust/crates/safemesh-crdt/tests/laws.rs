@@ -6,7 +6,8 @@
 
 use safemesh_crdt::laws::{check_crdt_convergence, check_merge_laws};
 use safemesh_crdt::{
-    GCounter, GCounterDelta, GSet, OrSet, OrSetDelta, PnCounter, PnCounterDelta, Rga, RgaDelta,
+    GCounter, GCounterDelta, GSet, LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta, PnCounter,
+    PnCounterDelta, Rga, RgaDelta,
 };
 
 #[test]
@@ -24,6 +25,14 @@ fn merge_laws_hold_for_in_house_samples() {
     let mut set_b = GSet::new();
     set_b.insert(2);
     assert!(check_merge_laws(&GSet::new(), &[set_a, set_b]).is_ok());
+
+    let mut reg_a = LwwRegister::new();
+    reg_a.set(1, 1, 10_u64);
+    let mut reg_b = LwwRegister::new();
+    reg_b.set(2, 1, 20);
+    let mut reg_c = LwwRegister::new();
+    reg_c.set(2, 2, 30);
+    assert!(check_merge_laws(&LwwRegister::new(), &[reg_a, reg_b, reg_c]).is_ok());
 }
 
 #[test]
@@ -102,6 +111,28 @@ fn convergence_harness_hammers_delta_delivery_shapes() {
                 value: 2
             },
             RgaDelta::Delete { position: 10 },
+        ],
+    )
+    .is_ok());
+
+    assert!(check_crdt_convergence(
+        &LwwRegister::new(),
+        &[
+            LwwRegisterDelta {
+                timestamp: 1,
+                replica: 1,
+                value: 10_u64,
+            },
+            LwwRegisterDelta {
+                timestamp: 2,
+                replica: 1,
+                value: 20,
+            },
+            LwwRegisterDelta {
+                timestamp: 2,
+                replica: 2,
+                value: 30,
+            },
         ],
     )
     .is_ok());

@@ -9,6 +9,7 @@ SafeMesh's verified claim is deliberately narrow:
 - The Lean delta suite in `lean/SafeMesh/` proves Strong Eventual Consistency for delta dissemination over the supported CRDT carriers.
 - G-Set, G-Counter, PN-Counter, OR-Set, and RGA/Text have Rust implementations that are differentially tested against `tests/corpus.json`, emitted from the Lean definitions by `lake exe corpus`.
 - The Rust `EventLog` is a deduplicating append/merge/since/version infrastructure layer. It supports the product surface, but the proven convergence claim lives in the CRDT carriers and their Lean-backed corpus bridge.
+- `LwwRegister` is tested-not-proven. It is a flat max-register over `(timestamp, replica, value)` and is covered by Rust laws/wire tests, but it is not in the current Lean oracle corpus.
 
 ## Tested, not proven
 
@@ -24,7 +25,7 @@ SafeMesh's verified claim is deliberately narrow:
 - Leader election or consensus.
 - Guaranteed network delivery or radio-transport correctness.
 - Hardware puck behavior.
-- Register, Flag, or Map as proven SafeMesh product types, unless matching Lean proofs and corpus-backed Rust conformance are added.
+- Flag or Map as proven SafeMesh product types, unless matching Lean proofs and corpus-backed Rust conformance are added. `LwwRegister` exists, but remains tested-not-proven until that proof bridge lands.
 
 ## Wording rule
 

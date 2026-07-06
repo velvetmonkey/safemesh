@@ -32,8 +32,9 @@ The upstream `crdt-lean` corpus also proves the state-based CvRDT laws, conditio
 - `OrSet`
 - `Rga`
 - `EventLog`
+- `LwwRegister`
 
-The CRDT carriers are `no_std + alloc`, forbid `unsafe`, and are checked by `tests/conformance.rs` against `tests/corpus.json`. `EventLog` is engineered infrastructure and is tested by Rust unit tests; it is not by itself a Lean-proven application-state convergence theorem.
+The Lean-backed CRDT carriers are `no_std + alloc`, forbid `unsafe`, and are checked by `tests/conformance.rs` against `tests/corpus.json`. `EventLog` is engineered infrastructure and is tested by Rust unit tests; it is not by itself a Lean-proven application-state convergence theorem. `LwwRegister` is also engineered/tested, not Lean-proven.
 
 The wire format and C ABI are also engineered infrastructure. They are covered by exact-byte, round-trip, malformed-input, FFI smoke, and header-drift tests, not by Lean theorems.
 

@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use safemesh_crdt::{
-    Crdt, EventLog, GCounter, GCounterDelta, OrSet, OrSetDelta, PnCounter, PnCounterDelta, Rga,
-    RgaDelta,
+    Crdt, EventLog, GCounter, GCounterDelta, LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta,
+    PnCounter, PnCounterDelta, Rga, RgaDelta,
 };
 
 #[test]
@@ -115,4 +115,35 @@ fn event_log_deduplicates_and_serves_since_version() {
     let missing = left.since(right.version());
     assert_eq!(missing.len(), 1);
     assert_eq!(missing[0].id, third);
+}
+
+#[test]
+fn lww_register_uses_total_ordered_winner() {
+    let mut register = LwwRegister::new();
+    register.apply_delta(LwwRegisterDelta {
+        timestamp: 10,
+        replica: 1,
+        value: "alpha",
+    });
+    register.apply_delta(LwwRegisterDelta {
+        timestamp: 9,
+        replica: 99,
+        value: "stale",
+    });
+    register.apply_delta(LwwRegisterDelta {
+        timestamp: 10,
+        replica: 2,
+        value: "beta",
+    });
+
+    assert_eq!(register.value(), Some(&"beta"));
+
+    let mut other = LwwRegister::new();
+    other.apply_delta(LwwRegisterDelta {
+        timestamp: 10,
+        replica: 2,
+        value: "alpha",
+    });
+    register.merge(&other);
+    assert_eq!(register.value(), Some(&"beta"));
 }
