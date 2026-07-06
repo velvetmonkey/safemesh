@@ -5,7 +5,9 @@ edition = "2021"
 license = "AGPL-3.0-or-later"
 description = "PyO3/maturin binding for the SafeMesh Rust core"
 repository = "https://github.com/velvetmonkey/safemesh"
-readme = "../../../README.md"
+readme = "README.md"
+keywords = ["crdt", "python", "pyo3", "event-log", "mesh"]
+categories = ["api-bindings", "data-structures"]
 
 [lib]
 name = "safemesh_python"

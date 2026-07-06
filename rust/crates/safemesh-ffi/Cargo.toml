@@ -5,7 +5,9 @@ edition = "2021"
 license = "AGPL-3.0-or-later"
 description = "Thin C ABI spine for the SafeMesh Rust core"
 repository = "https://github.com/velvetmonkey/safemesh"
-readme = "../../../README.md"
+readme = "README.md"
+keywords = ["crdt", "ffi", "event-log", "mesh"]
+categories = ["api-bindings", "data-structures"]
 
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]

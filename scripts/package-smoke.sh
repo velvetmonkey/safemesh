@@ -7,7 +7,7 @@ trap 'rm -rf "$tmp_dir"' EXIT
 
 (
   cd "$repo_root/rust"
-  cargo package -p safemesh-crdt --allow-dirty --no-verify
+  cargo publish --dry-run -p safemesh-crdt --allow-dirty
 )
 
 if ! command -v maturin >/dev/null 2>&1; then
