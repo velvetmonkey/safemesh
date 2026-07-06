@@ -118,6 +118,51 @@ fn event_log_deduplicates_and_serves_since_version() {
 }
 
 #[test]
+fn event_log_version_does_not_hide_out_of_order_gaps() {
+    let mut source = EventLog::new();
+    let first = source.append(
+        1,
+        GCounterDelta {
+            replica: 1,
+            tally: 1,
+        },
+    );
+    let second = source.append(
+        1,
+        GCounterDelta {
+            replica: 1,
+            tally: 2,
+        },
+    );
+    let third = source.append(
+        1,
+        GCounterDelta {
+            replica: 1,
+            tally: 3,
+        },
+    );
+
+    let mut reordered = EventLog::new();
+    reordered.merge_records([source.records()[2].clone()]);
+    assert_eq!(reordered.version().get(1), 0);
+    assert_eq!(
+        source
+            .since(reordered.version())
+            .into_iter()
+            .map(|record| record.id)
+            .collect::<Vec<_>>(),
+        vec![first, second, third]
+    );
+
+    reordered.merge_records([source.records()[1].clone()]);
+    assert_eq!(reordered.version().get(1), 0);
+
+    reordered.merge_records([source.records()[0].clone()]);
+    assert_eq!(reordered.version().get(1), 3);
+    assert!(source.since(reordered.version()).is_empty());
+}
+
+#[test]
 fn lww_register_uses_total_ordered_winner() {
     let mut register = LwwRegister::new();
     register.apply_delta(LwwRegisterDelta {

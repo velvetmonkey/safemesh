@@ -572,7 +572,11 @@ pub struct Record<D> {
     pub delta: D,
 }
 
-/// Per-replica high-water marks for anti-entropy pulls.
+/// Per-replica contiguous prefixes for anti-entropy pulls.
+///
+/// `get(replica) == n` means every sequence `1..=n` for that replica is known.
+/// Later records that arrive before earlier records must not advance this
+/// prefix, otherwise `since` could hide gaps.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct VersionVector {
     entries: BTreeMap<u64, u64>,
@@ -589,10 +593,13 @@ impl VersionVector {
         self.entries.get(&replica).copied().unwrap_or(0)
     }
 
+    /// Advance this prefix only when `id` is the next contiguous sequence.
+    ///
+    /// Use `EventLog` to ingest out-of-order records; the log remembers gaps
+    /// and advances this vector once the prefix is complete.
     pub fn observe(&mut self, id: RecordId) {
-        let current = self.entries.entry(id.replica).or_insert(0);
-        if id.sequence > *current {
-            *current = id.sequence;
+        if self.get(id.replica).checked_add(1) == Some(id.sequence) {
+            self.set(id.replica, id.sequence);
         }
     }
 
@@ -602,6 +609,14 @@ impl VersionVector {
 
     pub fn entries(&self) -> &BTreeMap<u64, u64> {
         &self.entries
+    }
+
+    fn set(&mut self, replica: u64, sequence: u64) {
+        if sequence == 0 {
+            self.entries.remove(&replica);
+        } else {
+            self.entries.insert(replica, sequence);
+        }
     }
 }
 
@@ -649,9 +664,26 @@ impl<D> EventLog<D> {
     }
 
     fn insert_record(&mut self, record: Record<D>) {
-        if self.seen.insert(record.id) {
-            self.version.observe(record.id);
+        let id = record.id;
+        if self.seen.insert(id) {
             self.records.push(record);
+            self.advance_contiguous_version(id.replica);
+        }
+    }
+
+    fn advance_contiguous_version(&mut self, replica: u64) {
+        loop {
+            let Some(next) = self.version.get(replica).checked_add(1) else {
+                break;
+            };
+            if self.seen.contains(&RecordId {
+                replica,
+                sequence: next,
+            }) {
+                self.version.set(replica, next);
+            } else {
+                break;
+            }
         }
     }
 }

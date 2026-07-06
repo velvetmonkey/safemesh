@@ -42,7 +42,7 @@ The canonical Rust wire format uses fixed one-byte tags, little-endian integer f
 
 ## Transport Coverage Contract
 
-`TransportAdapter` is the engineered boundary for send/subscribe/connectivity. `anti_entropy` uses `EventLog::since(remote_version)` to resend missing records once a link is available. `InMemoryTransport` is the deterministic CI adapter for fault campaigns: drop, duplicate, reverse delivery, partition, and heal. This validates adapter behavior under the coverage contract; it is not a proof of real network delivery.
+`TransportAdapter` is the engineered boundary for send/subscribe/connectivity. `anti_entropy` uses `EventLog::since(remote_version)` to resend missing records once a link is available. Event-log versions advance only over contiguous per-replica prefixes, so receiving a later sequence before an earlier one does not mask the gap. `InMemoryTransport` is the deterministic CI adapter for fault campaigns: drop, duplicate, reverse delivery, partition, and heal. This validates adapter behavior under the coverage contract; it is not a proof of real network delivery.
 
 ## Honesty
 
