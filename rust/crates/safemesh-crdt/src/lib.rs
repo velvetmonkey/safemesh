@@ -20,8 +20,32 @@
 #![deny(unsafe_code)]
 
 extern crate alloc;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec;
 use alloc::vec::Vec;
+
+/// State-based merge contract: `merge` is expected to be a semilattice join.
+///
+/// For in-house types, this contract is backed by the Lean proof suite and
+/// differential conformance corpus. For user-defined types, it is a tested
+/// contract enforced by the laws harness, not a proof.
+pub trait Mergeable {
+    fn merge(&mut self, other: &Self);
+}
+
+/// Delta application surface for CRDT product types.
+pub trait Crdt: Mergeable {
+    type Delta;
+
+    fn apply_delta(&mut self, delta: Self::Delta);
+}
+
+/// Delta for a grow-only counter: one replica coordinate and its asserted tally.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GCounterDelta {
+    pub replica: usize,
+    pub tally: u64,
+}
 
 /// A grow-only counter: one tally per replica, join = pointwise max.
 ///
@@ -87,6 +111,75 @@ impl GCounter {
     }
 }
 
+impl Mergeable for GCounter {
+    fn merge(&mut self, other: &Self) {
+        GCounter::merge(self, other);
+    }
+}
+
+impl Crdt for GCounter {
+    type Delta = GCounterDelta;
+
+    fn apply_delta(&mut self, delta: Self::Delta) {
+        self.apply_bump(delta.replica, delta.tally);
+    }
+}
+
+/// A grow-only set: merge = union.
+///
+/// This mirrors the upstream `crdt-lean` G-Set carrier (`Finset α`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GSet<T: Ord> {
+    elements: BTreeSet<T>,
+}
+
+impl<T: Ord> GSet<T> {
+    pub fn new() -> Self {
+        GSet {
+            elements: BTreeSet::new(),
+        }
+    }
+
+    pub fn insert(&mut self, element: T) {
+        self.elements.insert(element);
+    }
+
+    pub fn merge(&mut self, other: &Self)
+    where
+        T: Clone,
+    {
+        self.elements.extend(other.elements.iter().cloned());
+    }
+
+    pub fn contains(&self, element: &T) -> bool {
+        self.elements.contains(element)
+    }
+
+    pub fn elements(&self) -> &BTreeSet<T> {
+        &self.elements
+    }
+}
+
+impl<T: Ord> Default for GSet<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Ord + Clone> Mergeable for GSet<T> {
+    fn merge(&mut self, other: &Self) {
+        GSet::merge(self, other);
+    }
+}
+
+impl<T: Ord + Clone> Crdt for GSet<T> {
+    type Delta = T;
+
+    fn apply_delta(&mut self, delta: Self::Delta) {
+        self.insert(delta);
+    }
+}
+
 /// An increment/decrement counter: a pair of G-Counters (increments `P`,
 /// decrements `N`), join = componentwise.
 ///
@@ -101,10 +194,19 @@ pub struct PnCounter {
     n: GCounter,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PnCounterDelta {
+    Inc { replica: usize, tally: u64 },
+    Dec { replica: usize, tally: u64 },
+}
+
 impl PnCounter {
     /// Fresh counter for `n` replicas — the lattice bottom `(⊥, ⊥)`.
     pub fn new(n: usize) -> Self {
-        PnCounter { p: GCounter::new(n), n: GCounter::new(n) }
+        PnCounter {
+            p: GCounter::new(n),
+            n: GCounter::new(n),
+        }
     }
 
     /// Apply `SafeMesh.deltaBumpP replica tally` — increment side, one
@@ -139,5 +241,345 @@ impl PnCounter {
     /// `Crdt.pncounterValue` (ℤ in the model, `i64` here).
     pub fn value(&self) -> i64 {
         self.p.value() as i64 - self.n.value() as i64
+    }
+}
+
+impl Mergeable for PnCounter {
+    fn merge(&mut self, other: &Self) {
+        PnCounter::merge(self, other);
+    }
+}
+
+impl Crdt for PnCounter {
+    type Delta = PnCounterDelta;
+
+    fn apply_delta(&mut self, delta: Self::Delta) {
+        match delta {
+            PnCounterDelta::Inc { replica, tally } => self.apply_inc(replica, tally),
+            PnCounterDelta::Dec { replica, tally } => self.apply_dec(replica, tally),
+        }
+    }
+}
+
+/// Delta for an observed-remove set.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OrSetDelta<T, K> {
+    Add { element: T, token: K },
+    Remove { tokens: Vec<K> },
+}
+
+/// Observed-remove set with add-wins semantics.
+///
+/// Lean model: `Crdt.ORSet.State α τ = Finset (α × τ) × Finset τ`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OrSet<T: Ord, K: Ord> {
+    adds: BTreeSet<(T, K)>,
+    tombstones: BTreeSet<K>,
+}
+
+impl<T: Ord, K: Ord> OrSet<T, K> {
+    pub fn new() -> Self {
+        OrSet {
+            adds: BTreeSet::new(),
+            tombstones: BTreeSet::new(),
+        }
+    }
+
+    pub fn add(&mut self, element: T, token: K) {
+        self.adds.insert((element, token));
+    }
+
+    pub fn apply_remove<I>(&mut self, tokens: I)
+    where
+        I: IntoIterator<Item = K>,
+    {
+        self.tombstones.extend(tokens);
+    }
+
+    pub fn merge(&mut self, other: &Self)
+    where
+        T: Clone,
+        K: Clone,
+    {
+        self.adds.extend(other.adds.iter().cloned());
+        self.tombstones.extend(other.tombstones.iter().cloned());
+    }
+
+    pub fn adds(&self) -> &BTreeSet<(T, K)> {
+        &self.adds
+    }
+
+    pub fn tombstones(&self) -> &BTreeSet<K> {
+        &self.tombstones
+    }
+}
+
+impl<T: Ord + Clone, K: Ord + Clone> OrSet<T, K> {
+    pub fn observed_tokens(&self, element: &T) -> BTreeSet<K> {
+        self.adds
+            .iter()
+            .filter_map(|(candidate, token)| {
+                if candidate == element {
+                    Some(token.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn contains(&self, element: &T) -> bool {
+        self.adds
+            .iter()
+            .any(|(candidate, token)| candidate == element && !self.tombstones.contains(token))
+    }
+
+    pub fn elements(&self) -> BTreeSet<T> {
+        self.adds
+            .iter()
+            .filter_map(|(element, token)| {
+                if self.tombstones.contains(token) {
+                    None
+                } else {
+                    Some(element.clone())
+                }
+            })
+            .collect()
+    }
+}
+
+impl<T: Ord, K: Ord> Default for OrSet<T, K> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Ord + Clone, K: Ord + Clone> Mergeable for OrSet<T, K> {
+    fn merge(&mut self, other: &Self) {
+        OrSet::merge(self, other);
+    }
+}
+
+impl<T: Ord + Clone, K: Ord + Clone> Crdt for OrSet<T, K> {
+    type Delta = OrSetDelta<T, K>;
+
+    fn apply_delta(&mut self, delta: Self::Delta) {
+        match delta {
+            OrSetDelta::Add { element, token } => self.add(element, token),
+            OrSetDelta::Remove { tokens } => self.apply_remove(tokens),
+        }
+    }
+}
+
+/// Delta for an RGA-family ordered sequence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RgaDelta<P, V> {
+    Insert { position: P, value: V },
+    Delete { position: P },
+}
+
+/// RGA-family sequence state: positioned values plus tombstoned positions.
+///
+/// Lean model: `Crdt.RGA.State ι α = Finset (ι × α) × Finset ι`. The Lean
+/// read is the sorted list of live position identifiers; values are carried
+/// by lookup through the live positioned set.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rga<P: Ord, V: Ord> {
+    placed: BTreeSet<(P, V)>,
+    tombstones: BTreeSet<P>,
+}
+
+impl<P: Ord, V: Ord> Rga<P, V> {
+    pub fn new() -> Self {
+        Rga {
+            placed: BTreeSet::new(),
+            tombstones: BTreeSet::new(),
+        }
+    }
+
+    pub fn insert(&mut self, position: P, value: V) {
+        self.placed.insert((position, value));
+    }
+
+    pub fn delete(&mut self, position: P) {
+        self.tombstones.insert(position);
+    }
+
+    pub fn merge(&mut self, other: &Self)
+    where
+        P: Clone,
+        V: Clone,
+    {
+        self.placed.extend(other.placed.iter().cloned());
+        self.tombstones.extend(other.tombstones.iter().cloned());
+    }
+
+    pub fn placed(&self) -> &BTreeSet<(P, V)> {
+        &self.placed
+    }
+
+    pub fn tombstones(&self) -> &BTreeSet<P> {
+        &self.tombstones
+    }
+}
+
+impl<P: Ord + Clone, V: Ord + Clone> Rga<P, V> {
+    pub fn live_entries(&self) -> Vec<(P, V)> {
+        self.placed
+            .iter()
+            .filter_map(|(position, value)| {
+                if self.tombstones.contains(position) {
+                    None
+                } else {
+                    Some((position.clone(), value.clone()))
+                }
+            })
+            .collect()
+    }
+
+    pub fn read_positions(&self) -> Vec<P> {
+        self.live_entries()
+            .into_iter()
+            .map(|(position, _)| position)
+            .collect::<BTreeSet<P>>()
+            .into_iter()
+            .collect()
+    }
+}
+
+impl<P: Ord, V: Ord> Default for Rga<P, V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<P: Ord + Clone, V: Ord + Clone> Mergeable for Rga<P, V> {
+    fn merge(&mut self, other: &Self) {
+        Rga::merge(self, other);
+    }
+}
+
+impl<P: Ord + Clone, V: Ord + Clone> Crdt for Rga<P, V> {
+    type Delta = RgaDelta<P, V>;
+
+    fn apply_delta(&mut self, delta: Self::Delta) {
+        match delta {
+            RgaDelta::Insert { position, value } => self.insert(position, value),
+            RgaDelta::Delete { position } => self.delete(position),
+        }
+    }
+}
+
+/// Stable identity for an event-log record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RecordId {
+    pub replica: u64,
+    pub sequence: u64,
+}
+
+/// An event-log record carrying a CRDT delta.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Record<D> {
+    pub id: RecordId,
+    pub delta: D,
+}
+
+/// Per-replica high-water marks for anti-entropy pulls.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct VersionVector {
+    entries: BTreeMap<u64, u64>,
+}
+
+impl VersionVector {
+    pub fn new() -> Self {
+        VersionVector {
+            entries: BTreeMap::new(),
+        }
+    }
+
+    pub fn get(&self, replica: u64) -> u64 {
+        self.entries.get(&replica).copied().unwrap_or(0)
+    }
+
+    pub fn observe(&mut self, id: RecordId) {
+        let current = self.entries.entry(id.replica).or_insert(0);
+        if id.sequence > *current {
+            *current = id.sequence;
+        }
+    }
+
+    pub fn includes(&self, id: RecordId) -> bool {
+        self.get(id.replica) >= id.sequence
+    }
+
+    pub fn entries(&self) -> &BTreeMap<u64, u64> {
+        &self.entries
+    }
+}
+
+/// Append-only, deduplicating event log for CRDT deltas.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EventLog<D> {
+    records: Vec<Record<D>>,
+    seen: BTreeSet<RecordId>,
+    version: VersionVector,
+}
+
+impl<D> EventLog<D> {
+    pub fn new() -> Self {
+        EventLog {
+            records: Vec::new(),
+            seen: BTreeSet::new(),
+            version: VersionVector::new(),
+        }
+    }
+
+    pub fn append(&mut self, replica: u64, delta: D) -> RecordId {
+        let id = RecordId {
+            replica,
+            sequence: self.version.get(replica) + 1,
+        };
+        self.insert_record(Record { id, delta });
+        id
+    }
+
+    pub fn merge_records<I>(&mut self, records: I)
+    where
+        I: IntoIterator<Item = Record<D>>,
+    {
+        for record in records {
+            self.insert_record(record);
+        }
+    }
+
+    pub fn version(&self) -> &VersionVector {
+        &self.version
+    }
+
+    pub fn records(&self) -> &[Record<D>] {
+        &self.records
+    }
+
+    fn insert_record(&mut self, record: Record<D>) {
+        if self.seen.insert(record.id) {
+            self.version.observe(record.id);
+            self.records.push(record);
+        }
+    }
+}
+
+impl<D: Clone> EventLog<D> {
+    pub fn since(&self, version: &VersionVector) -> Vec<Record<D>> {
+        self.records
+            .iter()
+            .filter(|record| !version.includes(record.id))
+            .cloned()
+            .collect()
+    }
+}
+
+impl<D> Default for EventLog<D> {
+    fn default() -> Self {
+        Self::new()
     }
 }

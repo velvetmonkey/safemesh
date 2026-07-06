@@ -9,14 +9,17 @@
 //! — every expected output below was computed by the proven model, not
 //! hand-written. Each case's bump sequence is replayed through the Rust
 //! implementation in delivery order and the final state + value must match
-//! the oracle exactly. The corpus includes permutations and redeliveries of
-//! identical bump-sets, so the proven order/duplicate-insensitivity
+//! the oracle exactly. The corpus includes G-Counter, PN-Counter, G-Set,
+//! OR-Set, and RGA cases, including permutations and redeliveries of
+//! identical delta-sets, so the proven order/duplicate-insensitivity
 //! (`SafeMesh.delta_dissemination_sec`) is exercised, not assumed.
 //!
 //! The library is `no_std`; this harness is std + serde_json (dev-dependency
 //! only) — that split is deliberate.
 
-use safemesh_crdt::{GCounter, PnCounter};
+use std::collections::BTreeSet;
+
+use safemesh_crdt::{GCounter, GSet, OrSet, PnCounter, Rga};
 use serde_json::Value;
 
 const CORPUS: &str = include_str!("corpus.json");
@@ -25,12 +28,38 @@ fn as_usize(v: &Value) -> usize {
     v.as_u64().expect("expected unsigned integer") as usize
 }
 
+fn as_u64_vec(v: &Value) -> Vec<u64> {
+    v.as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap())
+        .collect()
+}
+
+fn as_u64_set(v: &Value) -> BTreeSet<u64> {
+    as_u64_vec(v).into_iter().collect()
+}
+
+fn as_pair_set(v: &Value) -> BTreeSet<(u64, u64)> {
+    v.as_array()
+        .unwrap()
+        .iter()
+        .map(|pair| {
+            let pair = pair.as_array().unwrap();
+            (pair[0].as_u64().unwrap(), pair[1].as_u64().unwrap())
+        })
+        .collect()
+}
+
 #[test]
 fn corpus_is_the_expected_schema() {
     let corpus: Value = serde_json::from_str(CORPUS).expect("corpus.json parses");
     assert_eq!(corpus["schema"], "safemesh-conformance-v1");
     assert!(corpus["gcounter"].as_array().unwrap().len() >= 9);
     assert!(corpus["pncounter"].as_array().unwrap().len() >= 9);
+    assert!(corpus["gset"].as_array().unwrap().len() >= 6);
+    assert!(corpus["orset"].as_array().unwrap().len() >= 6);
+    assert!(corpus["rga"].as_array().unwrap().len() >= 6);
 }
 
 #[test]
@@ -45,9 +74,38 @@ fn gcounter_matches_lean_oracle() {
             g.apply_bump(as_usize(&b[0]), b[1].as_u64().unwrap());
         }
         let expected_state: Vec<u64> = case["expected_state"]
-            .as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
-        assert_eq!(g.state(), expected_state.as_slice(), "state mismatch in {name}");
-        assert_eq!(g.value(), case["expected_value"].as_u64().unwrap(), "value mismatch in {name}");
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .collect();
+        assert_eq!(
+            g.state(),
+            expected_state.as_slice(),
+            "state mismatch in {name}"
+        );
+        assert_eq!(
+            g.value(),
+            case["expected_value"].as_u64().unwrap(),
+            "value mismatch in {name}"
+        );
+    }
+}
+
+#[test]
+fn gset_matches_lean_oracle() {
+    let corpus: Value = serde_json::from_str(CORPUS).expect("corpus.json parses");
+    for case in corpus["gset"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let mut set = GSet::new();
+        for element in case["elements"].as_array().unwrap() {
+            set.insert(element.as_u64().unwrap());
+        }
+        assert_eq!(
+            set.elements(),
+            &as_u64_set(&case["expected_elements"]),
+            "G-Set elements mismatch in {name}",
+        );
     }
 }
 
@@ -60,7 +118,11 @@ fn pncounter_matches_lean_oracle() {
         let mut pn = PnCounter::new(n);
         for op in case["ops"].as_array().unwrap() {
             let o = op.as_array().unwrap();
-            let (kind, replica, tally) = (o[0].as_str().unwrap(), as_usize(&o[1]), o[2].as_u64().unwrap());
+            let (kind, replica, tally) = (
+                o[0].as_str().unwrap(),
+                as_usize(&o[1]),
+                o[2].as_u64().unwrap(),
+            );
             match kind {
                 "inc" => pn.apply_inc(replica, tally),
                 "dec" => pn.apply_dec(replica, tally),
@@ -68,12 +130,88 @@ fn pncounter_matches_lean_oracle() {
             }
         }
         let expected_p: Vec<u64> = case["expected_p"]
-            .as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .collect();
         let expected_n: Vec<u64> = case["expected_n"]
-            .as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .collect();
         assert_eq!(pn.p_state(), expected_p.as_slice(), "P mismatch in {name}");
         assert_eq!(pn.n_state(), expected_n.as_slice(), "N mismatch in {name}");
-        assert_eq!(pn.value(), case["expected_value"].as_i64().unwrap(), "value mismatch in {name}");
+        assert_eq!(
+            pn.value(),
+            case["expected_value"].as_i64().unwrap(),
+            "value mismatch in {name}"
+        );
+    }
+}
+
+#[test]
+fn orset_matches_lean_oracle() {
+    let corpus: Value = serde_json::from_str(CORPUS).expect("corpus.json parses");
+    for case in corpus["orset"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let mut set = OrSet::new();
+        for op in case["ops"].as_array().unwrap() {
+            let op = op.as_array().unwrap();
+            match op[0].as_str().unwrap() {
+                "add" => set.add(op[1].as_u64().unwrap(), op[2].as_u64().unwrap()),
+                "remove" => set.apply_remove(as_u64_vec(&op[1])),
+                other => panic!("unknown OR-Set op {other:?} in {name}"),
+            }
+        }
+        assert_eq!(
+            set.adds(),
+            &as_pair_set(&case["expected_adds"]),
+            "OR-Set adds mismatch in {name}"
+        );
+        assert_eq!(
+            set.tombstones(),
+            &as_u64_set(&case["expected_tombstones"]),
+            "OR-Set tombstones mismatch in {name}",
+        );
+        assert_eq!(
+            set.elements(),
+            as_u64_set(&case["expected_elements"]),
+            "OR-Set elements mismatch in {name}",
+        );
+    }
+}
+
+#[test]
+fn rga_matches_lean_oracle() {
+    let corpus: Value = serde_json::from_str(CORPUS).expect("corpus.json parses");
+    for case in corpus["rga"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let mut rga = Rga::new();
+        for op in case["ops"].as_array().unwrap() {
+            let op = op.as_array().unwrap();
+            match op[0].as_str().unwrap() {
+                "insert" => rga.insert(op[1].as_u64().unwrap(), op[2].as_u64().unwrap()),
+                "delete" => rga.delete(op[1].as_u64().unwrap()),
+                other => panic!("unknown RGA op {other:?} in {name}"),
+            }
+        }
+        assert_eq!(
+            rga.placed(),
+            &as_pair_set(&case["expected_placed"]),
+            "RGA placed mismatch in {name}"
+        );
+        assert_eq!(
+            rga.tombstones(),
+            &as_u64_set(&case["expected_tombstones"]),
+            "RGA tombstones mismatch in {name}",
+        );
+        assert_eq!(
+            rga.read_positions(),
+            as_u64_vec(&case["expected_read"]),
+            "RGA read mismatch in {name}",
+        );
     }
 }
 
@@ -95,7 +233,15 @@ fn split_delivery_merge_agrees_with_oracle() {
         }
         left.merge(&right);
         let expected_state: Vec<u64> = case["expected_state"]
-            .as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
-        assert_eq!(left.state(), expected_state.as_slice(), "split-merge mismatch in {name}");
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .collect();
+        assert_eq!(
+            left.state(),
+            expected_state.as_slice(),
+            "split-merge mismatch in {name}"
+        );
     }
 }

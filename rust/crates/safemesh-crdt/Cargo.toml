@@ -6,7 +6,7 @@ name = "safemesh-crdt"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
-description = "no_std delta-state G-Counter / PN-Counter, held to the SafeMesh Lean proofs by differential conformance"
+description = "no_std delta-state CRDT core, held to the SafeMesh Lean proofs by differential conformance"
 
 [dependencies]
 

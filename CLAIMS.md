@@ -7,8 +7,8 @@ SafeMesh's verified claim is deliberately narrow:
 ## Proven
 
 - The Lean delta suite in `lean/SafeMesh/` proves Strong Eventual Consistency for delta dissemination over the supported CRDT carriers.
-- G-Counter and PN-Counter have Rust implementations that are differentially tested against `tests/corpus.json`, emitted from the Lean definitions by `lake exe corpus`.
-- OR-Set and RGA/Text have Lean proofs; they are not Rust-proven product surface until their Rust bodies and Lean-oracle corpus cases land.
+- G-Set, G-Counter, PN-Counter, OR-Set, and RGA/Text have Rust implementations that are differentially tested against `tests/corpus.json`, emitted from the Lean definitions by `lake exe corpus`.
+- The Rust `EventLog` is a deduplicating append/merge/since/version infrastructure layer. It supports the product surface, but the proven convergence claim lives in the CRDT carriers and their Lean-backed corpus bridge.
 
 ## Tested, not proven
 

@@ -26,10 +26,14 @@ The upstream `crdt-lean` corpus also proves the state-based CvRDT laws, conditio
 
 `rust/crates/safemesh-crdt` currently ships:
 
+- `GSet`
 - `GCounter`
 - `PnCounter`
+- `OrSet`
+- `Rga`
+- `EventLog`
 
-Both are `no_std + alloc`, forbid `unsafe`, and are checked by `tests/conformance.rs` against `tests/corpus.json`.
+The CRDT carriers are `no_std + alloc`, forbid `unsafe`, and are checked by `tests/conformance.rs` against `tests/corpus.json`. `EventLog` is engineered infrastructure and is tested by Rust unit tests; it is not by itself a Lean-proven application-state convergence theorem.
 
 ## The honesty boundary
 
