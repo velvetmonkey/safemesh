@@ -13,22 +13,44 @@ See the repository `CLAIMS.md` and `WHAT-IS-PROVEN.md` for the full wording rule
 The v0.1 distribution flow builds an npm package with `wasm-pack`; it does not publish to npm.
 
 ```sh
-wasm-pack build rust/crates/safemesh-wasm --target bundler --release
+cd rust/crates/safemesh-wasm
+wasm-pack build . --target bundler --release
+npm pack --dry-run pkg
 ```
 
 ## Quickstart
 
 ```js
-import init, { GCounterReplica } from "./pkg/safemesh_wasm.js";
+import init, { SafeMeshGCounterReplica } from "./pkg/safemesh_wasm.js";
 
 await init();
-const left = new GCounterReplica(1, 3);
-const right = new GCounterReplica(2, 3);
+const left = new SafeMeshGCounterReplica(1n, 3);
+const right = new SafeMeshGCounterReplica(2n, 3);
 
-right.merge_record_bytes(left.append_bump(1, 5));
-left.merge_log_bytes(right.log_bytes());
+right.mergeRecordBytes(left.appendBump(1, 5n));
+left.mergeLogBytes(right.logBytes());
 
 console.log(left.value(), right.value());
 ```
 
-Run `./scripts/package-smoke.sh` from the repository root to build the wasm package and run `npm pack --dry-run` without publishing.
+## Demos
+
+Run the Node convergence demo against a freshly generated Node-target package:
+
+```sh
+cd rust/crates/safemesh-wasm
+wasm-pack build . --target nodejs --out-dir pkg-node --release
+node examples/node-convergence.mjs pkg-node
+```
+
+Run the browser demo by building a web-target package and serving this crate directory with any static file server:
+
+```sh
+cd rust/crates/safemesh-wasm
+wasm-pack build . --target web --out-dir pkg --release
+python3 -m http.server 8000
+```
+
+Then open `http://127.0.0.1:8000/examples/browser-convergence.html`.
+
+Run `./scripts/package-smoke.sh` from the repository root to build the bundler package, run `npm pack --dry-run`, and execute the Node convergence demo without publishing.

@@ -85,3 +85,11 @@ wasm-pack build "$repo_root/rust/crates/safemesh-wasm" \
   --release
 
 npm pack --dry-run "$tmp_dir/wasm-pkg"
+
+wasm-pack build "$repo_root/rust/crates/safemesh-wasm" \
+  --target nodejs \
+  --out-dir "$tmp_dir/wasm-node-pkg" \
+  --release
+
+node "$repo_root/rust/crates/safemesh-wasm/examples/node-convergence.mjs" \
+  "$tmp_dir/wasm-node-pkg"
