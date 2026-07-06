@@ -12,6 +12,7 @@
 }
 
 .topbar,
+.scenario-strip,
 .demo-grid,
 .control-dock {
   width: min(1540px, 100%);
@@ -19,7 +20,7 @@
 }
 
 .topbar {
-  min-height: 76px;
+  min-height: 72px;
   display: flex;
   align-items: end;
   justify-content: space-between;
@@ -44,7 +45,7 @@ p {
 h1 {
   max-width: 760px;
   color: var(--ink);
-  font-size: clamp(32px, 4.2vw, 58px);
+  font-size: clamp(32px, 3.8vw, 52px);
   line-height: 0.97;
   letter-spacing: 0;
 }
@@ -87,13 +88,15 @@ h2 {
   color: var(--bad);
 }
 
-.demo-grid {
+.scenario-strip {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 350px) minmax(300px, 380px);
+  grid-template-columns: minmax(240px, 0.42fr) minmax(0, 1fr);
   gap: 14px;
   align-items: stretch;
 }
 
+.scenario-intro,
+.scenario-button,
 .stage,
 .narrative-panel,
 .log-panel,
@@ -103,10 +106,85 @@ h2 {
   background: color-mix(in srgb, var(--panel) 94%, transparent);
 }
 
+.scenario-intro {
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  padding: 14px;
+}
+
+.scenario-intro h2 {
+  max-width: 36ch;
+  font-size: clamp(18px, 1.6vw, 24px);
+  line-height: 1.1;
+}
+
+.scenario-buttons {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.scenario-button {
+  min-width: 0;
+  min-height: 74px;
+  justify-content: start;
+  align-items: start;
+  gap: 10px;
+  padding: 13px;
+  text-align: left;
+}
+
+.scenario-button svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.scenario-button span {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.scenario-button strong {
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.1;
+}
+
+.scenario-button small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.scenario-button.active,
+.advanced-toggle.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 72%, var(--field));
+}
+
+.demo-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 370px) minmax(310px, 390px);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.stage-shell {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto auto;
+  align-content: start;
+  gap: 10px;
+}
+
 .stage {
   min-width: 0;
-  height: 540px;
-  min-height: 540px;
+  height: 430px;
+  min-height: 430px;
   position: relative;
   overflow: hidden;
   background:
@@ -324,30 +402,58 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.stage-step-controls {
+  min-height: 50px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(112px, auto)) minmax(92px, 1fr);
+  gap: 8px;
+  align-items: stretch;
+}
+
+.step-progress,
+.lab-stage-note {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--field);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.lab-stage-note {
+  grid-column: 1 / -1;
+  justify-content: start;
+}
+
 .narrative-panel,
 .log-panel {
   min-width: 0;
-  min-height: 540px;
+  min-height: 490px;
   display: grid;
   align-content: start;
-  gap: 14px;
+  gap: 12px;
   padding: 16px;
 }
 
 .narrative-panel h2 {
-  font-size: clamp(22px, 2.2vw, 32px);
+  font-size: clamp(22px, 2.2vw, 31px);
   line-height: 1.04;
 }
 
 .narrative-panel p:not(.eyebrow) {
   color: var(--text);
-  line-height: 1.48;
+  line-height: 1.46;
 }
 
 .watch-card {
   display: grid;
-  gap: 8px;
-  padding: 13px;
+  gap: 7px;
+  padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--field);
@@ -360,12 +466,16 @@ h2 {
 }
 
 .watch-card span {
-  line-height: 1.45;
+  line-height: 1.42;
+}
+
+.watch-card.success {
+  border-color: color-mix(in srgb, var(--good) 44%, var(--line));
 }
 
 .claim-line {
   align-self: end;
-  padding-top: 13px;
+  padding-top: 12px;
   border-top: 1px solid var(--line);
   color: var(--muted) !important;
   font-size: 13px;
@@ -386,7 +496,7 @@ h2 {
   display: grid;
   gap: 8px;
   min-height: 0;
-  max-height: 468px;
+  max-height: 488px;
   margin: 0;
   padding: 0;
   overflow: auto;
@@ -436,10 +546,8 @@ h2 {
   padding: 14px;
 }
 
-.mode-tabs {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+.control-dock.open {
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--line));
 }
 
 label {
@@ -495,74 +603,12 @@ button:disabled {
   opacity: 0.58;
 }
 
-.mode-tabs button.active,
-.timeline-marker.active {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent-soft) 72%, var(--field));
-}
-
-.guided-controls {
-  display: grid;
-  grid-template-columns: minmax(420px, 1fr) auto;
-  gap: 14px;
-  align-items: end;
-}
-
-.timeline-wrap {
-  display: grid;
-  gap: 8px;
-}
-
-.timeline-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 850;
-  text-transform: uppercase;
-}
-
-.timeline-meta strong {
-  color: var(--ink);
-}
-
-.timeline-markers {
-  display: grid;
-  grid-template-columns: repeat(10, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.timeline-marker {
-  min-width: 0;
-  min-height: 30px;
-  padding: 0;
-  font-size: 12px;
-}
-
-.timeline-marker.ok {
-  border-color: color-mix(in srgb, var(--good) 48%, var(--line));
-}
-
-.timeline-marker.warn {
-  border-color: color-mix(in srgb, var(--warn) 56%, var(--line));
-}
-
-.timeline-marker.bad {
-  border-color: color-mix(in srgb, var(--bad) 42%, var(--line));
-}
-
-.guided-buttons {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(108px, 1fr));
-  gap: 8px;
-}
-
 .sandbox-controls {
   display: grid;
   grid-template-columns: minmax(260px, 0.8fr) minmax(360px, 1fr) minmax(380px, 1.2fr);
   gap: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
 }
 
 .control-bank,
@@ -592,11 +638,9 @@ button:disabled {
 
 .dock-footer {
   display: grid;
-  grid-template-columns: minmax(150px, auto) minmax(140px, auto) minmax(260px, 1fr);
+  grid-template-columns: minmax(160px, auto) minmax(150px, auto) minmax(140px, auto) minmax(260px, 1fr);
   gap: 10px;
   align-items: stretch;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
 }
 
 .check-row {
@@ -664,26 +708,29 @@ button:disabled {
 }
 
 @media (max-width: 1280px) {
+  .scenario-strip,
   .demo-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
+  }
+
+  .scenario-buttons {
+    grid-template-columns: repeat(5, minmax(120px, 1fr));
   }
 
   .stage {
-    grid-column: 1 / -1;
-    height: 560px;
-    min-height: 560px;
+    height: 500px;
+    min-height: 500px;
   }
 
   .narrative-panel,
   .log-panel {
-    min-height: 300px;
+    min-height: 0;
   }
 
   .log-panel ol {
-    max-height: 228px;
+    max-height: 260px;
   }
 
-  .guided-controls,
   .sandbox-controls,
   .dock-footer {
     grid-template-columns: 1fr;
@@ -691,6 +738,21 @@ button:disabled {
 
   .tuning-bank {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .scenario-buttons,
+  .tuning-bank {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stage-step-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .step-progress {
+    grid-column: 1 / -1;
   }
 }
 
@@ -710,30 +772,15 @@ button:disabled {
   }
 
   h1 {
-    font-size: clamp(32px, 10vw, 46px);
-  }
-
-  .demo-grid,
-  .tuning-bank {
-    grid-template-columns: 1fr;
+    font-size: clamp(31px, 10vw, 46px);
   }
 
   .stage {
-    height: 620px;
-    min-height: 620px;
-  }
-
-  .narrative-panel,
-  .log-panel {
-    min-height: 0;
-  }
-
-  .log-panel ol {
-    max-height: 260px;
+    height: 560px;
+    min-height: 560px;
   }
 
   .control-bank,
-  .guided-buttons,
   .supply-row {
     grid-template-columns: 1fr;
   }
@@ -745,9 +792,17 @@ button:disabled {
     padding: 14px;
   }
 
+  .scenario-buttons {
+    grid-template-columns: 1fr;
+  }
+
+  .scenario-button {
+    min-height: 68px;
+  }
+
   .stage {
-    height: 590px;
-    min-height: 590px;
+    height: 540px;
+    min-height: 540px;
   }
 
   .convergence-core {
@@ -792,12 +847,7 @@ button:disabled {
     padding: 6px;
   }
 
-  .timeline-markers {
-    gap: 4px;
-  }
-
-  .timeline-marker {
-    min-height: 28px;
-    font-size: 11px;
+  .stage-step-controls {
+    grid-template-columns: 1fr;
   }
 }

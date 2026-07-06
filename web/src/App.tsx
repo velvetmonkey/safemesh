@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import {
   BadgeCheck,
   ChevronLeft,
@@ -20,15 +20,16 @@ import {
 import './App.css'
 import { readGCounter, readORSet } from './crdt'
 import {
-  GUIDE_SCENES,
+  GUIDE_SCENARIOS,
   addElement,
-  advanceGuideSimulation,
-  buildGuidedSimulation,
+  advanceScenarioSimulation,
+  buildScenarioSimulation,
   bumpCounter,
-  clampGuideIndex,
+  clampScenarioStep,
   convergence,
   createSimulation,
-  currentScene,
+  currentScenario,
+  currentScenarioStep,
   dropNextPacket,
   duplicateNextPacket,
   removeElement,
@@ -41,30 +42,32 @@ import {
   setPeerCount,
   tick,
   wirePreview,
+  type GuideScenario,
   type LogEntry,
   type Packet,
   type Simulation,
 } from './sim'
 
-type DemoMode = 'guided' | 'sandbox'
-
+const DEFAULT_SCENARIO_ID = GUIDE_SCENARIOS[0].id
 const SUPPLIES = ['vaccine', 'freezer', 'medkit', 'insulin', 'water', 'rations', 'fuel', 'radio', 'generator', 'antibiotics']
 
 function App() {
-  const [mode, setMode] = useState<DemoMode>('guided')
+  const [activeScenarioId, setActiveScenarioId] = useState(DEFAULT_SCENARIO_ID)
+  const [scenarioSim, setScenarioSim] = useState<Simulation>(() => buildScenarioSimulation(DEFAULT_SCENARIO_ID, 0))
+  const [stepIndex, setStepIndex] = useState(0)
+  const [stepElapsed, setStepElapsed] = useState(() => currentScenarioStep(DEFAULT_SCENARIO_ID, 0).motionMs)
+  const [stepAnimating, setStepAnimating] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [sandboxSim, setSandboxSim] = useState<Simulation>(() => createSimulation(4))
-  const [guidedSim, setGuidedSim] = useState<Simulation>(() => buildGuidedSimulation(0))
-  const [guideIndex, setGuideIndex] = useState(0)
-  const [guideElapsed, setGuideElapsed] = useState(() => currentScene(0).motionMs)
-  const [guideAnimating, setGuideAnimating] = useState(false)
   const [selectedPeer, setSelectedPeer] = useState(0)
   const [element, setElement] = useState('vaccine')
   const [technical, setTechnical] = useState(false)
   const [calmMotion, setCalmMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches)
   const [compactStage, setCompactStage] = useState(() => window.matchMedia('(max-width: 760px)').matches)
 
-  const sim = mode === 'guided' ? guidedSim : sandboxSim
-  const guideScene = currentScene(guideIndex)
+  const activeScenario = currentScenario(activeScenarioId)
+  const activeStep = currentScenarioStep(activeScenarioId, stepIndex)
+  const sim = advancedOpen ? sandboxSim : scenarioSim
   const status = useMemo(() => convergence(sim), [sim])
   const positions = useMemo(
     () => Array.from({ length: sim.peers.length }, (_, index) => peerPosition(index, sim.peers.length, compactStage)),
@@ -74,9 +77,9 @@ function App() {
   const recentAntiEntropy = sim.lastAntiEntropyAt !== null && sim.now - sim.lastAntiEntropyAt < 1500
   const story = storyState(sim, status)
   const StoryIcon = story.Icon
-  const guideProgress = guideScene.motionMs === 0 ? 100 : Math.round((guideElapsed / guideScene.motionMs) * 100)
-  const guideStartTime = useMemo(() => buildGuidedSimulation(guideIndex, 0).now, [guideIndex])
-  const visibleLog = useMemo(() => eventLogForMode(sim.log, mode, guideStartTime), [guideStartTime, mode, sim.log])
+  const stepProgress = activeStep.motionMs === 0 ? 100 : Math.round((stepElapsed / activeStep.motionMs) * 100)
+  const stepStartTime = useMemo(() => buildScenarioSimulation(activeScenarioId, stepIndex, 0).now, [activeScenarioId, stepIndex])
+  const visibleLog = useMemo(() => eventLogForMode(sim.log, advancedOpen, stepStartTime), [advancedOpen, sim.log, stepStartTime])
 
   useEffect(() => {
     const media = window.matchMedia('(max-width: 760px)')
@@ -90,57 +93,63 @@ function App() {
     const frameMs = 33
     const simDtPerFrame = calmMotion ? 9 : 20
     const timer = window.setInterval(() => {
-      if (mode === 'sandbox') {
+      if (advancedOpen) {
         setSandboxSim((current) => tick(current, simDtPerFrame))
         return
       }
 
-      if (!guideAnimating) return
+      if (!stepAnimating) return
 
-      const remaining = guideScene.motionMs - guideElapsed
+      const remaining = activeStep.motionMs - stepElapsed
       if (remaining <= 0) {
-        setGuideAnimating(false)
+        setStepAnimating(false)
         return
       }
 
       const stepMs = Math.min(simDtPerFrame, remaining)
-      setGuidedSim((current) => advanceGuideSimulation(current, stepMs))
-      setGuideElapsed((current) => Math.min(guideScene.motionMs, current + stepMs))
-      if (stepMs >= remaining) setGuideAnimating(false)
+      setScenarioSim((current) => advanceScenarioSimulation(current, stepMs))
+      setStepElapsed((current) => Math.min(activeStep.motionMs, current + stepMs))
+      if (stepMs >= remaining) setStepAnimating(false)
     }, frameMs)
 
     return () => window.clearInterval(timer)
-  }, [calmMotion, guideAnimating, guideElapsed, guideScene.motionMs, mode])
+  }, [advancedOpen, activeStep.motionMs, calmMotion, stepAnimating, stepElapsed])
 
-  function loadGuideScene(sceneIndex: number, options: { play?: boolean; complete?: boolean } = {}) {
-    const nextIndex = clampGuideIndex(sceneIndex)
-    const nextScene = currentScene(nextIndex)
-    const elapsed = options.complete ? nextScene.motionMs : 0
-    setMode('guided')
+  function loadScenario(scenarioId: string, targetStep = 0, options: { play?: boolean; complete?: boolean } = {}) {
+    const scenario = currentScenario(scenarioId)
+    const nextStepIndex = clampScenarioStep(scenario.id, targetStep)
+    const nextStep = currentScenarioStep(scenario.id, nextStepIndex)
+    const elapsed = options.complete ? nextStep.motionMs : 0
+    setAdvancedOpen(false)
     setSelectedPeer(0)
-    setGuideIndex(nextIndex)
-    setGuideElapsed(elapsed)
-    setGuidedSim(buildGuidedSimulation(nextIndex, elapsed))
-    setGuideAnimating(Boolean(options.play) && nextScene.motionMs > elapsed)
+    setActiveScenarioId(scenario.id)
+    setStepIndex(nextStepIndex)
+    setStepElapsed(elapsed)
+    setScenarioSim(buildScenarioSimulation(scenario.id, nextStepIndex, elapsed))
+    setStepAnimating(Boolean(options.play) && nextStep.motionMs > elapsed)
   }
 
-  function toggleGuidePlayback() {
-    if (guideAnimating) {
-      setGuideAnimating(false)
+  function loadScenarioStep(targetStep: number, options: { play?: boolean; complete?: boolean } = {}) {
+    loadScenario(activeScenarioId, targetStep, options)
+  }
+
+  function toggleStepPlayback() {
+    if (stepAnimating) {
+      setStepAnimating(false)
       return
     }
 
-    if (guideElapsed > 0 && guideElapsed < guideScene.motionMs) {
-      setGuideAnimating(true)
+    if (stepElapsed > 0 && stepElapsed < activeStep.motionMs) {
+      setStepAnimating(true)
       return
     }
 
-    loadGuideScene(guideIndex, { play: true })
+    loadScenarioStep(stepIndex, { play: true })
   }
 
-  function switchMode(nextMode: DemoMode) {
-    setMode(nextMode)
-    setGuideAnimating(false)
+  function toggleAdvancedLab() {
+    setAdvancedOpen((open) => !open)
+    setStepAnimating(false)
     setSelectedPeer(0)
   }
 
@@ -153,7 +162,7 @@ function App() {
       <header className="topbar">
         <div>
           <p className="eyebrow">SafeMesh for builders</p>
-          <h1>Replica convergence, step by step.</h1>
+          <h1>Same message. Five failures. Same finish.</h1>
         </div>
         <div className={`state-pill ${story.tone}`} aria-live="polite">
           <StoryIcon aria-hidden="true" size={18} />
@@ -161,78 +170,160 @@ function App() {
         </div>
       </header>
 
-      <section className="demo-grid" aria-label="Interactive convergence demo">
-        <section className="stage" aria-label="Replica field">
-          <svg className="link-layer" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-            {linkPairs(sim.peers.length).map(([left, right]) => (
-              <line
-                key={`${left}-${right}`}
-                className={sim.partitioned && crossesPartition(left, right) ? 'link partitioned' : 'link'}
-                x1={positions[left].x}
-                y1={positions[left].y}
-                x2={positions[right].x}
-                y2={positions[right].y}
-              />
-            ))}
-            {sim.partitioned && <line className="partition-wall" x1="50" y1="10" x2="50" y2="90" />}
-          </svg>
-
-          {sim.queue.slice(0, compactStage ? 8 : 18).map((packet) => {
-            const point = packetPoint(packet, sim, positions)
-            return (
-              <div
-                key={packet.id}
-                className={`packet ${packet.delta.kind.replace('.', '-')} ${packet.duplicated ? 'duplicated' : ''}`}
-                style={{ left: `${point.x}%`, top: `${point.y}%` }}
-                title={`demo wire sketch ${wirePreview(packet.delta)}`}
-              >
-                <span>{packetLabel(packet)}</span>
-                <code>{wirePreview(packet.delta)}</code>
-              </div>
-            )
-          })}
-
-          <div className={`convergence-core ${status.converged ? 'ok' : sim.partitioned ? 'warn' : 'bad'} ${recentAntiEntropy ? 'pulse' : ''}`}>
-            <span>{status.converged ? 'CONVERGED' : sim.partitioned ? 'PARTITIONED' : 'DIVERGED'}</span>
-            <strong>{status.gcounterValue}</strong>
-            <small>{status.orsetElements.join(' / ') || 'empty set'}</small>
-          </div>
-
-          {sim.peers.map((peer) => {
-            const elements = readORSet(peer.orset)
-            const position = positions[peer.id]
+      <section className="scenario-strip" aria-label="Choose what can go wrong">
+        <div className="scenario-intro">
+          <p className="eyebrow">Choose what can go wrong</p>
+          <h2>Every case sends vaccine plus audit count 1, then proves the same modeled finish.</h2>
+        </div>
+        <div className="scenario-buttons">
+          {GUIDE_SCENARIOS.map((scenario) => {
+            const ScenarioIcon = scenarioIcon(scenario.id)
             return (
               <button
                 type="button"
-                key={peer.id}
-                className={`replica ${peer.id === selectedPeer ? 'selected' : ''} ${sameRead(peer, status) ? 'aligned' : 'split'}`}
-                style={{ left: `${position.x}%`, top: `${position.y}%` }}
-                onClick={() => setSelectedPeer(peer.id)}
+                key={scenario.id}
+                className={`scenario-button ${!advancedOpen && scenario.id === activeScenarioId ? 'active' : ''}`}
+                onClick={() => loadScenario(scenario.id)}
               >
-                <span className="replica-kicker">Replica {peer.id}</span>
-                <strong>{readGCounter(peer.gcounter)}</strong>
-                <span>{elements.length > 0 ? elements.join(', ') : 'no records yet'}</span>
-                <code>{digest(peer.gcounter, elements)}</code>
+                <ScenarioIcon size={17} />
+                <span>
+                  <strong>{scenario.label}</strong>
+                  <small>{scenario.headline}</small>
+                </span>
               </button>
             )
           })}
-        </section>
+        </div>
+      </section>
+
+      <section className="demo-grid" aria-label="Interactive convergence demo">
+        <div className="stage-shell">
+          <section className="stage" aria-label="Replica field">
+            <svg className="link-layer" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              {linkPairs(sim.peers.length).map(([left, right]) => (
+                <line
+                  key={`${left}-${right}`}
+                  className={sim.partitioned && crossesPartition(left, right) ? 'link partitioned' : 'link'}
+                  x1={positions[left].x}
+                  y1={positions[left].y}
+                  x2={positions[right].x}
+                  y2={positions[right].y}
+                />
+              ))}
+              {sim.partitioned && <line className="partition-wall" x1="50" y1="10" x2="50" y2="90" />}
+            </svg>
+
+            {sim.queue.slice(0, compactStage ? 8 : 18).map((packet) => {
+              const point = packetPoint(packet, sim, positions)
+              return (
+                <div
+                  key={packet.id}
+                  className={`packet ${packet.delta.kind.replace('.', '-')} ${packet.duplicated ? 'duplicated' : ''}`}
+                  style={{ left: `${point.x}%`, top: `${point.y}%` }}
+                  title={`demo wire sketch ${wirePreview(packet.delta)}`}
+                >
+                  <span>{packetLabel(packet)}</span>
+                  <code>{wirePreview(packet.delta)}</code>
+                </div>
+              )
+            })}
+
+            <div className={`convergence-core ${status.converged ? 'ok' : sim.partitioned ? 'warn' : 'bad'} ${recentAntiEntropy ? 'pulse' : ''}`}>
+              <span>{status.converged ? 'CONVERGED' : sim.partitioned ? 'PARTITIONED' : 'DIVERGED'}</span>
+              <strong>{status.gcounterValue}</strong>
+              <small>{status.orsetElements.join(' / ') || 'empty set'}</small>
+            </div>
+
+            {sim.peers.map((peer) => {
+              const elements = readORSet(peer.orset)
+              const position = positions[peer.id]
+              return (
+                <button
+                  type="button"
+                  key={peer.id}
+                  className={`replica ${peer.id === selectedPeer ? 'selected' : ''} ${sameRead(peer, status) ? 'aligned' : 'split'}`}
+                  style={{ left: `${position.x}%`, top: `${position.y}%` }}
+                  onClick={() => setSelectedPeer(peer.id)}
+                >
+                  <span className="replica-kicker">Replica {peer.id}</span>
+                  <strong>{readGCounter(peer.gcounter)}</strong>
+                  <span>{elements.length > 0 ? elements.join(', ') : 'no records yet'}</span>
+                  <code>{digest(peer.gcounter, elements)}</code>
+                </button>
+              )
+            })}
+          </section>
+
+          <div className="stage-step-controls" aria-label="Scenario step controls">
+            {advancedOpen ? (
+              <span className="lab-stage-note">Advanced lab is live. Use the controls below to fault the visible mesh.</span>
+            ) : (
+              <>
+                <button type="button" onClick={() => loadScenarioStep(stepIndex - 1, { complete: true })} disabled={stepIndex === 0}>
+                  <ChevronLeft size={17} />
+                  Previous
+                </button>
+                <button type="button" onClick={toggleStepPlayback}>
+                  {stepAnimating ? <Pause size={17} /> : <Play size={17} />}
+                  {stepAnimating ? 'Pause' : stepElapsed > 0 && stepElapsed < activeStep.motionMs ? 'Resume' : 'Replay step'}
+                </button>
+                <button type="button" onClick={() => loadScenarioStep(stepIndex + 1, { play: true })} disabled={stepIndex === activeScenario.steps.length - 1}>
+                  Next
+                  <ChevronRight size={17} />
+                </button>
+                <button type="button" onClick={() => loadScenario(activeScenarioId)}>
+                  <RotateCcw size={17} />
+                  Restart
+                </button>
+                <span className="step-progress">{stepProgress}% watched</span>
+              </>
+            )}
+          </div>
+        </div>
 
         <aside className="narrative-panel" aria-label="Narrative arc">
-          <p className="eyebrow">{mode === 'guided' ? `Step ${guideIndex + 1} of ${GUIDE_SCENES.length}` : 'Sandbox readout'}</p>
-          <h2>{mode === 'guided' ? guideScene.title : story.label}</h2>
-          <p>{mode === 'guided' ? guideScene.narrative : story.detail}</p>
-          <div className="watch-card">
-            <strong>{mode === 'guided' ? 'Watch' : 'Current state'}</strong>
-            <span>{mode === 'guided' ? guideScene.watchFor : sandboxReadout(sim, status)}</span>
-          </div>
-          <p className="claim-line">TypeScript is the demo mirror. The Lean-backed Rust core is the proof-carrying surface for the modeled CRDT semantics.</p>
+          {advancedOpen ? (
+            <>
+              <p className="eyebrow">Advanced lab</p>
+              <h2>{story.label}</h2>
+              <p>{story.detail}</p>
+              <div className="watch-card">
+                <strong>Current state</strong>
+                <span>{sandboxReadout(sim, status)}</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="eyebrow">
+                Scenario: {activeScenario.label} · Step {stepIndex + 1} of {activeScenario.steps.length}
+              </p>
+              <h2>{activeStep.title}</h2>
+              <p>{activeStep.plainExplanation}</p>
+              <div className="watch-card">
+                <strong>Setup</strong>
+                <span>{activeScenario.setup}</span>
+              </div>
+              <div className="watch-card">
+                <strong>Why it matters</strong>
+                <span>{activeScenario.whyItMatters}</span>
+              </div>
+              <div className="watch-card">
+                <strong>Watch</strong>
+                <span>{activeStep.watchFor}</span>
+              </div>
+              <div className="watch-card success">
+                <strong>Finish line</strong>
+                <span>{activeScenario.successState}</span>
+              </div>
+            </>
+          )}
+          <p className="claim-line">TypeScript is the demo mirror. The Lean-backed Rust core is the proof-carrying surface for modeled CRDT semantics.</p>
         </aside>
 
-        <aside className="log-panel" aria-label={mode === 'guided' ? 'Events in this step' : 'Story log'}>
+        <aside className="log-panel" aria-label={advancedOpen ? 'Story log' : 'Events in this step'}>
           <header>
             <BadgeCheck size={18} />
-            <h2>{mode === 'guided' ? 'Events in this step' : technical ? 'Raw transport log' : 'Story log'}</h2>
+            <h2>{advancedOpen ? (technical ? 'Raw transport log' : 'Story log') : 'Events in this step'}</h2>
           </header>
           <ol>
             {visibleLog.length === 0 ? (
@@ -252,70 +343,31 @@ function App() {
         </aside>
       </section>
 
-      <section className="control-dock" aria-label="Demo controls">
-        <div className="mode-tabs" role="tablist" aria-label="Demo mode">
-          <button type="button" className={mode === 'guided' ? 'active' : ''} onClick={() => switchMode('guided')}>
-            <Play size={17} />
-            Guided timeline
-          </button>
-          <button type="button" className={mode === 'sandbox' ? 'active' : ''} onClick={() => switchMode('sandbox')}>
+      <section className={`control-dock ${advancedOpen ? 'open' : ''}`} aria-label="Advanced controls">
+        <div className="dock-footer">
+          <button type="button" className={`advanced-toggle ${advancedOpen ? 'active' : ''}`} onClick={toggleAdvancedLab}>
             <Gauge size={17} />
-            Sandbox controls
+            {advancedOpen ? 'Close advanced lab' : 'Open advanced lab'}
           </button>
+          <label className="check-row">
+            <input type="checkbox" checked={technical} onChange={(event) => setTechnical(event.target.checked)} />
+            Technical labels
+          </label>
+          <label className="check-row">
+            <input type="checkbox" checked={calmMotion} onChange={(event) => setCalmMotion(event.target.checked)} />
+            Calm motion
+          </label>
+          <div className="proof-note">
+            <ShieldCheck size={18} />
+            <span>
+              {technical
+                ? 'Lean backs the CRDT semantics; this browser UI is engineered and tested as a demo mirror.'
+                : 'Shown: modeled convergence after records meet. Not shown as proof: real network delivery, sensor truth, storage durability, or arbitrary reducers.'}
+            </span>
+          </div>
         </div>
 
-        {mode === 'guided' ? (
-          <div className="guided-controls">
-            <div className="timeline-wrap">
-              <div className="timeline-meta">
-                <span>{guideScene.id}</span>
-                <strong>{guideProgress}% watched</strong>
-              </div>
-              <input
-                aria-label="Guided timeline"
-                type="range"
-                min="0"
-                max={GUIDE_SCENES.length - 1}
-                step="1"
-                value={guideIndex}
-                onChange={(event) => loadGuideScene(Number(event.target.value), { complete: true })}
-              />
-              <div className="timeline-markers">
-                {GUIDE_SCENES.map((scene, index) => (
-                  <button
-                    type="button"
-                    key={scene.id}
-                    className={`timeline-marker ${scene.expectedTone} ${index === guideIndex ? 'active' : ''}`}
-                    onClick={() => loadGuideScene(index, { complete: true })}
-                    title={scene.title}
-                    aria-label={`Jump to step ${index + 1}: ${scene.title}`}
-                  >
-                    {index + 1}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="guided-buttons">
-              <button type="button" onClick={() => loadGuideScene(guideIndex - 1, { complete: true })} disabled={guideIndex === 0}>
-                <ChevronLeft size={17} />
-                Previous
-              </button>
-              <button type="button" onClick={toggleGuidePlayback}>
-                {guideAnimating ? <Pause size={17} /> : <Play size={17} />}
-                {guideAnimating ? 'Pause' : guideElapsed > 0 && guideElapsed < guideScene.motionMs ? 'Resume' : 'Replay step'}
-              </button>
-              <button type="button" onClick={() => loadGuideScene(guideIndex + 1, { play: true })} disabled={guideIndex === GUIDE_SCENES.length - 1}>
-                Next
-                <ChevronRight size={17} />
-              </button>
-              <button type="button" onClick={() => loadGuideScene(0, { complete: true })}>
-                <RotateCcw size={17} />
-                Restart
-              </button>
-            </div>
-          </div>
-        ) : (
+        {advancedOpen && (
           <div className="sandbox-controls">
             <div className="control-bank" aria-label="Fault controls">
               <button type="button" onClick={() => setSandboxSim((current) => setPartitioned(current, !current.partitioned))} title="Cut or reconnect the simulated transport">
@@ -432,25 +484,6 @@ function App() {
             </div>
           </div>
         )}
-
-        <div className="dock-footer">
-          <label className="check-row">
-            <input type="checkbox" checked={technical} onChange={(event) => setTechnical(event.target.checked)} />
-            Technical labels
-          </label>
-          <label className="check-row">
-            <input type="checkbox" checked={calmMotion} onChange={(event) => setCalmMotion(event.target.checked)} />
-            Calm motion
-          </label>
-          <div className="proof-note">
-            <ShieldCheck size={18} />
-            <span>
-              {technical
-                ? 'Lean backs the CRDT semantics; this browser UI is engineered and tested as a demo mirror.'
-                : 'Shown: modeled convergence after records meet. Not shown as proof: real network delivery, sensor truth, storage durability, or arbitrary reducers.'}
-            </span>
-          </div>
-        </div>
       </section>
     </main>
   )
@@ -534,15 +567,26 @@ function packetLabel(packet: Packet): string {
   return 'REM'
 }
 
-function eventLogForMode(log: LogEntry[], mode: DemoMode, guideStartTime: number): LogEntry[] {
-  const entries = mode === 'guided' ? log.filter((entry) => entry.at >= guideStartTime) : log.slice(0, 14)
-  return [...entries].sort((left, right) => left.at - right.at).slice(-14)
+function eventLogForMode(log: LogEntry[], advancedOpen: boolean, stepStartTime: number): LogEntry[] {
+  if (advancedOpen) return log.slice(0, 14)
+  return log
+    .filter((entry) => entry.at >= stepStartTime)
+    .sort((left, right) => left.at - right.at)
+    .slice(-14)
 }
 
 function sandboxReadout(sim: Simulation, status: ReturnType<typeof convergence>): string {
   if (status.converged) return `All ${sim.peers.length} replicas hold the same modeled state.`
   if (sim.partitioned) return 'The mesh is partitioned; local writes can diverge until the link heals.'
   return `${sim.queue.length} packets are still moving or missing from at least one replica.`
+}
+
+function scenarioIcon(scenarioId: GuideScenario['id']): ComponentType<{ size?: number }> {
+  if (scenarioId === 'duplicate') return Copy
+  if (scenarioId === 'reorder') return Shuffle
+  if (scenarioId === 'drop') return Radio
+  if (scenarioId === 'partition') return Scissors
+  return BadgeCheck
 }
 
 function clamp(value: number, min: number, max: number): number {

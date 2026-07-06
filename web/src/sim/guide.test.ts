@@ -1,51 +1,69 @@
 import { describe, expect, it } from 'vitest'
 import { readORSet } from '../crdt'
-import { GUIDE_SCENES, buildGuidedSimulation, createGuidedBaseline } from './guide'
+import { GUIDE_SCENARIOS, buildScenarioSimulation, createScenarioBaseline } from './guide'
 import { convergence } from './simulation'
 
-describe('guided timeline replay', () => {
-  it('builds every authored scene without random packet loss', () => {
-    for (let index = 0; index < GUIDE_SCENES.length; index += 1) {
-      const sim = buildGuidedSimulation(index)
-      expect(sim.dropRate).toBe(0)
-      expect(sim.peers).toHaveLength(4)
-      expect(sim.now).toBeGreaterThanOrEqual(0)
+describe('guided scenario replay', () => {
+  it('builds every authored step without random packet loss', () => {
+    for (const scenario of GUIDE_SCENARIOS) {
+      for (let index = 0; index < scenario.steps.length; index += 1) {
+        const sim = buildScenarioSimulation(scenario.id, index)
+        expect(sim.dropRate).toBe(0)
+        expect(sim.peers).toHaveLength(4)
+        expect(sim.now).toBeGreaterThanOrEqual(0)
+      }
     }
   })
 
-  it('keeps the scripted duplicate, reorder, and drop visible in the log', () => {
-    const duplicateScene = buildGuidedSimulation(2)
-    expect(duplicateScene.log.some((entry) => entry.technical.includes('duplicated'))).toBe(true)
+  it('is deterministic for timeline jumps inside every scenario', () => {
+    for (const scenario of GUIDE_SCENARIOS) {
+      const lastStep = scenario.steps.length - 1
+      const first = buildScenarioSimulation(scenario.id, lastStep, 180)
+      const second = buildScenarioSimulation(scenario.id, lastStep, 180)
 
-    const reorderScene = buildGuidedSimulation(3)
-    expect(reorderScene.log.some((entry) => entry.technical.includes('reordered'))).toBe(true)
-
-    const dropScene = buildGuidedSimulation(4)
-    expect(dropScene.log.some((entry) => entry.technical.includes('operator dropped'))).toBe(true)
+      expect(second).toEqual(first)
+    }
   })
 
-  it('is deterministic for timeline jumps', () => {
-    const first = buildGuidedSimulation(8, 300)
-    const second = buildGuidedSimulation(8, 300)
+  it('ends every scenario with the same visible modeled state', () => {
+    for (const scenario of GUIDE_SCENARIOS) {
+      const sim = buildScenarioSimulation(scenario.id, scenario.steps.length - 1)
+      const status = convergence(sim)
 
-    expect(second).toEqual(first)
+      expect(status.converged, scenario.id).toBe(true)
+      expect(status.gcounterValue, scenario.id).toBe(1)
+      expect(status.orsetElements, scenario.id).toEqual(['vaccine'])
+      expect(sim.peers.every((peer) => readORSet(peer.orset).join('|') === 'vaccine'), scenario.id).toBe(true)
+    }
   })
 
-  it('ends with the authored modeled state converged', () => {
-    const sim = buildGuidedSimulation(GUIDE_SCENES.length - 1)
-    const status = convergence(sim)
+  it('keeps duplicate, reorder, drop, and partition evidence visible in the log', () => {
+    const duplicate = finalScenarioLog('duplicate')
+    expect(duplicate.some((entry) => entry.technical.includes('duplicated'))).toBe(true)
 
-    expect(status.converged).toBe(true)
-    expect(status.gcounterValue).toBe(1)
-    expect(status.orsetElements).toEqual(['freezer', 'vaccine'])
-    expect(sim.peers.every((peer) => readORSet(peer.orset).join('|') === 'freezer|vaccine')).toBe(true)
+    const reorder = finalScenarioLog('reorder')
+    expect(reorder.some((entry) => entry.technical.includes('reordered'))).toBe(true)
+
+    const drop = finalScenarioLog('drop')
+    expect(drop.some((entry) => entry.technical.includes('operator dropped'))).toBe(true)
+    expect(drop.some((entry) => entry.technical.includes('anti-entropy'))).toBe(true)
+
+    const partition = finalScenarioLog('partition')
+    expect(partition.some((entry) => entry.technical.includes('partition enabled'))).toBe(true)
+    expect(partition.some((entry) => entry.technical.includes('partition healed'))).toBe(true)
   })
 
   it('starts from a quiet four-replica baseline', () => {
-    const sim = createGuidedBaseline()
+    const sim = createScenarioBaseline()
 
     expect(convergence(sim).converged).toBe(true)
     expect(sim.log).toHaveLength(0)
     expect(sim.queue).toHaveLength(0)
   })
 })
+
+function finalScenarioLog(scenarioId: string) {
+  const scenario = GUIDE_SCENARIOS.find((candidate) => candidate.id === scenarioId)
+  if (!scenario) throw new Error(`missing scenario ${scenarioId}`)
+  return buildScenarioSimulation(scenario.id, scenario.steps.length - 1).log
+}

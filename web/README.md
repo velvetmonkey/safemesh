@@ -19,14 +19,15 @@ The app is static and has no backend. After a first load, the service worker cac
 ## What It Demonstrates
 
 - Simulated replicas with local CRDT state.
-- A guided timeline that steps through add, duplicate, reorder, drop, partition, heal, and final inspection scenes.
-- A separate sandbox mode with partition/heal, latency, drop, duplicate, and reorder controls.
+- Five use-case buttons: normal delivery, duplicate replay, out-of-order delivery, dropped-message recovery, and partition heal.
+- Scenario steps that all start from the same message and end at the same visible state: `vaccine` plus audit count `1`.
+- A collapsed Advanced lab with partition/heal, latency, drop, duplicate, and reorder controls.
 - Periodic anti-entropy between connected peers so dropped one-shot messages can be recovered.
 - G-Counter and OR-Set divergence under partition and convergence after reconnect.
 - A live convergence indicator that compares raw states and reads.
 - A technical/plain-language claim toggle and reduced-motion mode.
 
-The guided timeline is intentionally manual: use the step markers or Previous/Next buttons to inspect one transport event at a time. The sandbox keeps the older free-form controls, but it no longer competes with the narrative path.
+The scenario flow is intentionally manual: choose what can go wrong, then use the Previous / Replay / Next buttons directly under the replica picture. The Advanced lab keeps the free-form controls available without making them the first thing a new viewer has to understand.
 
 ## Honesty Boundary
 

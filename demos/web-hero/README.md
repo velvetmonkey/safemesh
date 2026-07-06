@@ -16,15 +16,16 @@ npm install
 npm run dev
 ```
 
-Open the local Vite URL. The first screen defaults to **Guided timeline**.
+Open the local Vite URL. The first screen asks you to choose what can go wrong.
 
 ## What It Shows
 
 - Live replica state for G-Counter and OR-Set demo data.
 - Visible packet chips carrying a compact wire sketch.
-- A manual timeline scrubber with authored steps for add, duplicate, reorder, drop, partition, heal, and final inspection.
-- A separate sandbox mode with controls for partition, heal, drop, duplicate, reorder, and reset.
-- Narrative and event log panels next to each other, with controls kept in the bottom dock.
+- Use-case buttons for normal delivery, duplicate replay, out-of-order delivery, dropped-message recovery, and partition heal.
+- Previous / Replay / Next controls placed directly under the replica picture.
+- Narrative and event log panels that explain the chosen scenario before each step.
+- A collapsed Advanced lab with controls for partition, heal, drop, duplicate, reorder, and reset.
 - A technical/plain-language toggle so the honest claim boundary stays visible without making the first screen feel like docs.
 - A calm-motion toggle for reduced-motion users.
 
