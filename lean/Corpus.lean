@@ -28,6 +28,9 @@ abbrev N : Nat := 4
 
 abbrev GC := Crdt.GCounter (Fin N)
 abbrev PNC := Crdt.PNCounter (Fin N)
+abbrev GSetNat := Finset Nat
+abbrev ORSNat := Crdt.ORSet.State Nat Nat
+abbrev RGANat := Crdt.RGA.State Nat Nat
 
 /-! ## G-Counter cases -/
 
@@ -83,10 +86,101 @@ def pnDelta : PNOp → PNC
 def runPN (c : PNCase) : PNC :=
   deltaApply (c.ops.map pnDelta)
 
+/-! ## G-Set cases -/
+
+structure GSetCase where
+  name : String
+  elements : List Nat
+
+def gsetCases : List GSetCase := [
+  ⟨"gs_empty", []⟩,
+  ⟨"gs_single", [3]⟩,
+  ⟨"gs_dupes", [1, 1, 1]⟩,
+  ⟨"gs_perm_a", [4, 2, 7]⟩,
+  ⟨"gs_perm_b", [7, 4, 2]⟩,
+  ⟨"gs_mixed", [0, 5, 0, 9, 5]⟩
+]
+
+def runGSet (c : GSetCase) : GSetNat :=
+  deltaApply (c.elements.map fun e => ({e} : Finset Nat))
+
+/-! ## OR-Set cases -/
+
+inductive OROp where
+  | add (element : Nat) (token : Nat)
+  | remove (tokens : List Nat)
+
+structure ORCase where
+  name : String
+  ops : List OROp
+
+def orCases : List ORCase := [
+  ⟨"or_empty", []⟩,
+  ⟨"or_single_add", [.add 1 10]⟩,
+  ⟨"or_remove_observed", [.add 1 10, .remove [10]]⟩,
+  ⟨"or_add_wins", [.add 1 10, .remove [], .add 1 11]⟩,
+  ⟨"or_two_elements", [.add 1 10, .add 2 20, .remove [10]]⟩,
+  ⟨"or_dupe_delivery", [.add 3 30, .add 3 30, .remove [30], .remove [30]]⟩
+]
+
+def orDelta : OROp → ORSNat
+  | .add element token => orAddDelta element token
+  | .remove tokens => orRemoveDelta tokens.toFinset
+
+def runOR (c : ORCase) : ORSNat :=
+  deltaApply (c.ops.map orDelta)
+
+/-! ## RGA cases -/
+
+inductive RGAOp where
+  | insert (position : Nat) (value : Nat)
+  | delete (position : Nat)
+
+structure RGACase where
+  name : String
+  ops : List RGAOp
+
+def rgaCases : List RGACase := [
+  ⟨"rga_empty", []⟩,
+  ⟨"rga_single", [.insert 10 100]⟩,
+  ⟨"rga_sorted_read", [.insert 30 3, .insert 10 1, .insert 20 2]⟩,
+  ⟨"rga_delete", [.insert 10 1, .insert 20 2, .delete 10]⟩,
+  ⟨"rga_dupe_delivery", [.insert 5 50, .insert 5 50, .delete 5, .delete 5]⟩,
+  ⟨"rga_perm", [.insert 40 4, .insert 20 2, .insert 30 3, .delete 20]⟩
+]
+
+def rgaDelta : RGAOp → RGANat
+  | .insert position value => rgaInsertDelta position value
+  | .delete position => rgaDeleteDelta position
+
+def runRGA (c : RGACase) : RGANat :=
+  deltaApply (c.ops.map rgaDelta)
+
 /-! ## JSON emission (hand-rolled: deterministic, zero deps, ASCII-only) -/
 
 def natList (l : List Nat) : String :=
   "[" ++ String.intercalate "," (l.map toString) ++ "]"
+
+def sortedNatSet (s : Finset Nat) : List Nat :=
+  (List.range 64).filter fun n => n ∈ s
+
+def natSetJson (s : Finset Nat) : String :=
+  natList (sortedNatSet s)
+
+def sortedNatPairsFrom (s : Finset (Nat × Nat)) : List Nat → List (Nat × Nat)
+  | [] => []
+  | a :: rest =>
+      ((List.range 128).filterMap fun b =>
+        if (a, b) ∈ s then some (a, b) else none) ++ sortedNatPairsFrom s rest
+
+def sortedNatPairs (s : Finset (Nat × Nat)) : List (Nat × Nat) :=
+  sortedNatPairsFrom s (List.range 64)
+
+def natPairJson (p : Nat × Nat) : String :=
+  s!"[{p.1},{p.2}]"
+
+def natPairSetJson (s : Finset (Nat × Nat)) : String :=
+  "[" ++ String.intercalate "," ((sortedNatPairs s).map natPairJson) ++ "]"
 
 def coords (f : Fin N → Nat) : List Nat :=
   (List.finRange N).map f
@@ -113,12 +207,48 @@ def pnCaseJson (c : PNCase) : String :=
   s!"\"expected_n\":{natList (coords s.2)}," ++
   s!"\"expected_value\":{Crdt.pncounterValue s}}"
 
+def gsetCaseJson (c : GSetCase) : String :=
+  let s := runGSet c
+  s!"\{\"name\":\"{c.name}\"," ++
+  s!"\"elements\":{natList c.elements}," ++
+  s!"\"expected_elements\":{natSetJson s}}"
+
+def orOpJson : OROp → String
+  | .add element token => s!"[\"add\",{element},{token}]"
+  | .remove tokens => s!"[\"remove\",{natList tokens}]"
+
+def orCaseJson (c : ORCase) : String :=
+  let s := runOR c
+  s!"\{\"name\":\"{c.name}\"," ++
+  s!"\"ops\":[{String.intercalate "," (c.ops.map orOpJson)}]," ++
+  s!"\"expected_adds\":{natPairSetJson s.1}," ++
+  s!"\"expected_tombstones\":{natSetJson s.2}," ++
+  s!"\"expected_elements\":{natSetJson (Crdt.ORSet.elements s)}}"
+
+def rgaOpJson : RGAOp → String
+  | .insert position value => s!"[\"insert\",{position},{value}]"
+  | .delete position => s!"[\"delete\",{position}]"
+
+def rgaCaseJson (c : RGACase) : String :=
+  let s := runRGA c
+  s!"\{\"name\":\"{c.name}\"," ++
+  s!"\"ops\":[{String.intercalate "," (c.ops.map rgaOpJson)}]," ++
+  s!"\"expected_placed\":{natPairSetJson s.1}," ++
+  s!"\"expected_tombstones\":{natSetJson s.2}," ++
+  s!"\"expected_read\":{natList (Crdt.RGA.read s)}}"
+
 def corpusJson : String :=
   "{\"schema\":\"safemesh-conformance-v1\",\"replicas\":" ++ toString N ++
   ",\"gcounter\":[\n  " ++
   String.intercalate ",\n  " (gCases.map gCaseJson) ++
   "\n],\"pncounter\":[\n  " ++
   String.intercalate ",\n  " (pnCases.map pnCaseJson) ++
+  "\n],\"gset\":[\n  " ++
+  String.intercalate ",\n  " (gsetCases.map gsetCaseJson) ++
+  "\n],\"orset\":[\n  " ++
+  String.intercalate ",\n  " (orCases.map orCaseJson) ++
+  "\n],\"rga\":[\n  " ++
+  String.intercalate ",\n  " (rgaCases.map rgaCaseJson) ++
   "\n]}"
 
 def main : IO Unit := IO.println corpusJson

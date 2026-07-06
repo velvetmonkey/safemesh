@@ -1,0 +1,5 @@
+language = "C"
+include_guard = "SAFEMESH_H"
+autogen_warning = "/* Generated with cbindgen; do not edit by hand. */"
+include_version = true
+usize_is_size_t = true

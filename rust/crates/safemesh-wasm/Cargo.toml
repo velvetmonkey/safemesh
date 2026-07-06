@@ -1,0 +1,15 @@
+[package]
+name = "safemesh-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "WASM/TypeScript binding for the SafeMesh Rust core"
+repository = "https://github.com/velvetmonkey/safemesh"
+readme = "../../../README.md"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+safemesh-crdt = { path = "../safemesh-crdt", version = "0.1.0" }
+wasm-bindgen = "0.2"

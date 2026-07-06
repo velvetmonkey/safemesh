@@ -18,4 +18,25 @@
   {"name":"pn_perm_b","n":4,"ops":[["inc",2,5],["inc",0,7],["dec",1,3]],"expected_p":[7,0,5,0],"expected_n":[0,3,0,0],"expected_value":9},
   {"name":"pn_redelivery","n":4,"ops":[["inc",3,6],["dec",3,6],["inc",3,6]],"expected_p":[0,0,0,6],"expected_n":[0,0,0,6],"expected_value":0},
   {"name":"pn_all_coords","n":4,"ops":[["inc",0,1],["inc",1,2],["inc",2,3],["inc",3,4],["dec",0,1],["dec",3,2]],"expected_p":[1,2,3,4],"expected_n":[1,0,0,2],"expected_value":7}
+],"gset":[
+  {"name":"gs_empty","elements":[],"expected_elements":[]},
+  {"name":"gs_single","elements":[3],"expected_elements":[3]},
+  {"name":"gs_dupes","elements":[1,1,1],"expected_elements":[1]},
+  {"name":"gs_perm_a","elements":[4,2,7],"expected_elements":[2,4,7]},
+  {"name":"gs_perm_b","elements":[7,4,2],"expected_elements":[2,4,7]},
+  {"name":"gs_mixed","elements":[0,5,0,9,5],"expected_elements":[0,5,9]}
+],"orset":[
+  {"name":"or_empty","ops":[],"expected_adds":[],"expected_tombstones":[],"expected_elements":[]},
+  {"name":"or_single_add","ops":[["add",1,10]],"expected_adds":[[1,10]],"expected_tombstones":[],"expected_elements":[1]},
+  {"name":"or_remove_observed","ops":[["add",1,10],["remove",[10]]],"expected_adds":[[1,10]],"expected_tombstones":[10],"expected_elements":[]},
+  {"name":"or_add_wins","ops":[["add",1,10],["remove",[]],["add",1,11]],"expected_adds":[[1,10],[1,11]],"expected_tombstones":[],"expected_elements":[1]},
+  {"name":"or_two_elements","ops":[["add",1,10],["add",2,20],["remove",[10]]],"expected_adds":[[1,10],[2,20]],"expected_tombstones":[10],"expected_elements":[2]},
+  {"name":"or_dupe_delivery","ops":[["add",3,30],["add",3,30],["remove",[30]],["remove",[30]]],"expected_adds":[[3,30]],"expected_tombstones":[30],"expected_elements":[]}
+],"rga":[
+  {"name":"rga_empty","ops":[],"expected_placed":[],"expected_tombstones":[],"expected_read":[]},
+  {"name":"rga_single","ops":[["insert",10,100]],"expected_placed":[[10,100]],"expected_tombstones":[],"expected_read":[10]},
+  {"name":"rga_sorted_read","ops":[["insert",30,3],["insert",10,1],["insert",20,2]],"expected_placed":[[10,1],[20,2],[30,3]],"expected_tombstones":[],"expected_read":[10,20,30]},
+  {"name":"rga_delete","ops":[["insert",10,1],["insert",20,2],["delete",10]],"expected_placed":[[10,1],[20,2]],"expected_tombstones":[10],"expected_read":[20]},
+  {"name":"rga_dupe_delivery","ops":[["insert",5,50],["insert",5,50],["delete",5],["delete",5]],"expected_placed":[[5,50]],"expected_tombstones":[5],"expected_read":[]},
+  {"name":"rga_perm","ops":[["insert",40,4],["insert",20,2],["insert",30,3],["delete",20]],"expected_placed":[[20,2],[30,3],[40,4]],"expected_tombstones":[20],"expected_read":[30,40]}
 ]}

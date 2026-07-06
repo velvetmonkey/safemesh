@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "crates/safemesh-crdt",
+    "crates/safemesh-ffi",
+    "crates/safemesh-python",
+    "crates/safemesh-wasm",
+]
+resolver = "2"
