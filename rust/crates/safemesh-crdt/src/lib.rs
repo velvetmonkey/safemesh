@@ -584,6 +584,325 @@ impl<D> Default for EventLog<D> {
     }
 }
 
+const TAG_RECORD: u8 = 0x01;
+const TAG_EVENT_LOG: u8 = 0x02;
+const TAG_GCOUNTER_DELTA: u8 = 0x10;
+const TAG_PNCOUNTER_INC: u8 = 0x11;
+const TAG_PNCOUNTER_DEC: u8 = 0x12;
+const TAG_GSET_U64: u8 = 0x20;
+const TAG_ORSET_U64: u8 = 0x30;
+const TAG_RGA_U64: u8 = 0x40;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WireError {
+    UnexpectedEof,
+    InvalidTag,
+    TrailingBytes,
+    LengthOverflow,
+}
+
+pub trait WireEncode {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError>;
+
+    fn to_wire_bytes(&self) -> Result<Vec<u8>, WireError> {
+        let mut out = Vec::new();
+        self.encode_wire(&mut out)?;
+        Ok(out)
+    }
+}
+
+pub trait WireDecode: Sized {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError>;
+
+    fn from_wire_bytes(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut cursor = WireCursor::new(bytes);
+        let value = Self::decode_wire(&mut cursor)?;
+        if cursor.is_empty() {
+            Ok(value)
+        } else {
+            Err(WireError::TrailingBytes)
+        }
+    }
+}
+
+pub struct WireCursor<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> WireCursor<'a> {
+    pub fn new(bytes: &'a [u8]) -> Self {
+        WireCursor { bytes, offset: 0 }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.offset == self.bytes.len()
+    }
+
+    fn read_u8(&mut self) -> Result<u8, WireError> {
+        let byte = *self
+            .bytes
+            .get(self.offset)
+            .ok_or(WireError::UnexpectedEof)?;
+        self.offset += 1;
+        Ok(byte)
+    }
+
+    fn read_u32(&mut self) -> Result<u32, WireError> {
+        let bytes = self.read_exact(4)?;
+        Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    fn read_u64(&mut self) -> Result<u64, WireError> {
+        let bytes = self.read_exact(8)?;
+        Ok(u64::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ]))
+    }
+
+    fn read_len(&mut self) -> Result<usize, WireError> {
+        usize::try_from(self.read_u32()?).map_err(|_| WireError::LengthOverflow)
+    }
+
+    fn read_exact(&mut self, len: usize) -> Result<&'a [u8], WireError> {
+        let end = self
+            .offset
+            .checked_add(len)
+            .ok_or(WireError::LengthOverflow)?;
+        let bytes = self
+            .bytes
+            .get(self.offset..end)
+            .ok_or(WireError::UnexpectedEof)?;
+        self.offset = end;
+        Ok(bytes)
+    }
+}
+
+fn write_u8(out: &mut Vec<u8>, value: u8) {
+    out.push(value);
+}
+
+fn write_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn write_u64(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn write_len(out: &mut Vec<u8>, len: usize) -> Result<(), WireError> {
+    let len = u32::try_from(len).map_err(|_| WireError::LengthOverflow)?;
+    write_u32(out, len);
+    Ok(())
+}
+
+fn write_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), WireError> {
+    write_len(out, bytes.len())?;
+    out.extend_from_slice(bytes);
+    Ok(())
+}
+
+fn read_tag(cursor: &mut WireCursor<'_>, expected: u8) -> Result<(), WireError> {
+    match cursor.read_u8()? {
+        tag if tag == expected => Ok(()),
+        _ => Err(WireError::InvalidTag),
+    }
+}
+
+impl WireEncode for GCounterDelta {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        write_u8(out, TAG_GCOUNTER_DELTA);
+        write_u64(
+            out,
+            u64::try_from(self.replica).map_err(|_| WireError::LengthOverflow)?,
+        );
+        write_u64(out, self.tally);
+        Ok(())
+    }
+}
+
+impl WireDecode for GCounterDelta {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        read_tag(cursor, TAG_GCOUNTER_DELTA)?;
+        let replica = usize::try_from(cursor.read_u64()?).map_err(|_| WireError::LengthOverflow)?;
+        let tally = cursor.read_u64()?;
+        Ok(GCounterDelta { replica, tally })
+    }
+}
+
+impl WireEncode for PnCounterDelta {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        match self {
+            PnCounterDelta::Inc { replica, tally } => {
+                write_u8(out, TAG_PNCOUNTER_INC);
+                write_u64(
+                    out,
+                    u64::try_from(*replica).map_err(|_| WireError::LengthOverflow)?,
+                );
+                write_u64(out, *tally);
+            }
+            PnCounterDelta::Dec { replica, tally } => {
+                write_u8(out, TAG_PNCOUNTER_DEC);
+                write_u64(
+                    out,
+                    u64::try_from(*replica).map_err(|_| WireError::LengthOverflow)?,
+                );
+                write_u64(out, *tally);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl WireDecode for PnCounterDelta {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        let tag = cursor.read_u8()?;
+        let replica = usize::try_from(cursor.read_u64()?).map_err(|_| WireError::LengthOverflow)?;
+        let tally = cursor.read_u64()?;
+        match tag {
+            TAG_PNCOUNTER_INC => Ok(PnCounterDelta::Inc { replica, tally }),
+            TAG_PNCOUNTER_DEC => Ok(PnCounterDelta::Dec { replica, tally }),
+            _ => Err(WireError::InvalidTag),
+        }
+    }
+}
+
+impl WireEncode for GSet<u64> {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        write_u8(out, TAG_GSET_U64);
+        write_len(out, self.elements.len())?;
+        for element in &self.elements {
+            write_u64(out, *element);
+        }
+        Ok(())
+    }
+}
+
+impl WireDecode for GSet<u64> {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        read_tag(cursor, TAG_GSET_U64)?;
+        let mut set = GSet::new();
+        for _ in 0..cursor.read_len()? {
+            set.insert(cursor.read_u64()?);
+        }
+        Ok(set)
+    }
+}
+
+impl WireEncode for OrSet<u64, u64> {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        write_u8(out, TAG_ORSET_U64);
+        write_len(out, self.adds.len())?;
+        for (element, token) in &self.adds {
+            write_u64(out, *element);
+            write_u64(out, *token);
+        }
+        write_len(out, self.tombstones.len())?;
+        for token in &self.tombstones {
+            write_u64(out, *token);
+        }
+        Ok(())
+    }
+}
+
+impl WireDecode for OrSet<u64, u64> {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        read_tag(cursor, TAG_ORSET_U64)?;
+        let mut set = OrSet::new();
+        for _ in 0..cursor.read_len()? {
+            let element = cursor.read_u64()?;
+            let token = cursor.read_u64()?;
+            set.add(element, token);
+        }
+        let mut tombstones = Vec::new();
+        for _ in 0..cursor.read_len()? {
+            tombstones.push(cursor.read_u64()?);
+        }
+        set.apply_remove(tombstones);
+        Ok(set)
+    }
+}
+
+impl WireEncode for Rga<u64, u64> {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        write_u8(out, TAG_RGA_U64);
+        write_len(out, self.placed.len())?;
+        for (position, value) in &self.placed {
+            write_u64(out, *position);
+            write_u64(out, *value);
+        }
+        write_len(out, self.tombstones.len())?;
+        for position in &self.tombstones {
+            write_u64(out, *position);
+        }
+        Ok(())
+    }
+}
+
+impl WireDecode for Rga<u64, u64> {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        read_tag(cursor, TAG_RGA_U64)?;
+        let mut rga = Rga::new();
+        for _ in 0..cursor.read_len()? {
+            let position = cursor.read_u64()?;
+            let value = cursor.read_u64()?;
+            rga.insert(position, value);
+        }
+        for _ in 0..cursor.read_len()? {
+            rga.delete(cursor.read_u64()?);
+        }
+        Ok(rga)
+    }
+}
+
+impl<D: WireEncode> WireEncode for Record<D> {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        write_u8(out, TAG_RECORD);
+        write_u64(out, self.id.replica);
+        write_u64(out, self.id.sequence);
+        write_bytes(out, &self.delta.to_wire_bytes()?)?;
+        Ok(())
+    }
+}
+
+impl<D: WireDecode> WireDecode for Record<D> {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        read_tag(cursor, TAG_RECORD)?;
+        let id = RecordId {
+            replica: cursor.read_u64()?,
+            sequence: cursor.read_u64()?,
+        };
+        let delta_len = cursor.read_len()?;
+        let delta_bytes = cursor.read_exact(delta_len)?;
+        let delta = D::from_wire_bytes(delta_bytes)?;
+        Ok(Record { id, delta })
+    }
+}
+
+impl<D: WireEncode> WireEncode for EventLog<D> {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        write_u8(out, TAG_EVENT_LOG);
+        write_len(out, self.records.len())?;
+        for record in &self.records {
+            write_bytes(out, &record.to_wire_bytes()?)?;
+        }
+        Ok(())
+    }
+}
+
+impl<D: WireDecode> WireDecode for EventLog<D> {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        read_tag(cursor, TAG_EVENT_LOG)?;
+        let mut log = EventLog::new();
+        for _ in 0..cursor.read_len()? {
+            let record_len = cursor.read_len()?;
+            let record_bytes = cursor.read_exact(record_len)?;
+            log.merge_records([Record::<D>::from_wire_bytes(record_bytes)?]);
+        }
+        Ok(log)
+    }
+}
+
 #[cfg(feature = "laws")]
 pub mod laws {
     use super::{Crdt, Mergeable};

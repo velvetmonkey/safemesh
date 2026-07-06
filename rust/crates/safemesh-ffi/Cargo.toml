@@ -1,0 +1,12 @@
+[package]
+name = "safemesh-ffi"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Thin C ABI spine for the SafeMesh Rust core"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+safemesh-crdt = { path = "../safemesh-crdt" }

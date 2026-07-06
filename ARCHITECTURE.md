@@ -14,13 +14,19 @@ SafeMesh follows verification-guided development (VGD): the Lean proof comes fir
    `safemesh-crdt`: `no_std + alloc` G-Set, delta G-Counter, delta PN-Counter, delta OR-Set, and RGA/Text state (builds for `thumbv7em-none-eabihf`), mirroring the Lean models. G-Counter merge is pointwise max, PN value is ΣP − ΣN, OR-Set is observed-token add-wins, and RGA read is sorted live positions. The EventLog API is engineered append/merge/since/version infrastructure around those deltas.
 
 4. **Bindings, demos, and adapters — engineered.**
-   C ABI, WASM, Python, web demos, storage adapters, and transport adapters call or mirror the core, but they are not theorem-proven. They must be tested and labelled as engineered glue. The verified claim stays with the Lean-backed in-house CRDT types and the Rust bodies that pass the Lean-generated oracle corpus.
+   Canonical wire encoding, C ABI, WASM, Python, web demos, storage adapters, and transport adapters call or mirror the core, but they are not theorem-proven. They must be tested and labelled as engineered glue. The verified claim stays with the Lean-backed in-house CRDT types and the Rust bodies that pass the Lean-generated oracle corpus.
 
 ## Differential testing (the VGD bridge)
 
 `lean/Corpus.lean` (`lake exe corpus`) instantiates the proven definitions and emits a deterministic JSON corpus: delivered deltas plus the expected converged state/read, computed by the machine-checked model. `rust/crates/safemesh-crdt/tests/conformance.rs` replays every case through the Rust implementation and asserts byte-for-byte agreement for G-Set, G-Counter, PN-Counter, OR-Set, and RGA, including permutation and redelivery cases (the proven order-insensitivity is exercised) and a split-delivery merge case (the gossip step). A disagreement is a bug in the Rust layer, caught against a proven reference rather than against hope. Regenerate with `cd lean && lake exe corpus > ../rust/crates/safemesh-crdt/tests/corpus.json`.
 
 This differential test is the honesty artifact. Property tests and fuzzers can find more bugs, but they only prove the code agrees with itself unless the Lean-generated oracle remains in the loop.
+
+## Wire and ABI
+
+The canonical Rust wire format uses fixed one-byte tags, little-endian integer fields, u32 length prefixes, and sorted BTree-backed encodings for set-like state. This is the cross-language byte contract; content-addressed dedup depends on these bytes staying stable.
+
+`rust/crates/safemesh-ffi` is the first C ABI spine. It exposes opaque G-Counter handles and a delta-to-wire helper through `include/safemesh.h`. The crate carries `cbindgen.toml`; the committed header is protected by a drift test so ABI changes are explicit.
 
 ## Honesty
 

@@ -14,7 +14,7 @@ SafeMesh's verified claim is deliberately narrow:
 
 - Rust code is checked against a finite Lean-generated corpus. Passing the corpus is strong conformance evidence, not a universal theorem about the Rust compiler or hardware.
 - Property tests and the `laws` feature harness test algebraic behavior over generated scenarios. They supplement the Lean-oracle differential test; they do not replace it.
-- Binding glue, FFI, WASM, Python, demos, and storage or transport adapters are engineered and tested.
+- Canonical wire encoding, binding glue, FFI, WASM, Python, demos, and storage or transport adapters are engineered and tested.
 - User-defined types are tested by their authors against the merge laws. SafeMesh does not prove arbitrary user reducers.
 
 ## Not covered in v0
