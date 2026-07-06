@@ -8,7 +8,15 @@ const DTS: &str = include_str!("../bindings/safemesh_wasm.d.ts");
 fn typescript_surface_lists_the_public_binding() {
     assert!(DTS.contains("export class SafeMeshGCounter"));
     assert!(DTS.contains("export class SafeMeshGCounterReplica"));
+    assert!(DTS.contains("export class SafeMeshLwwRegister"));
+    assert!(DTS.contains("export class SafeMeshLwwRegisterReplica"));
     assert!(DTS.contains("applyBump(replica: number, tally: bigint): void"));
+    assert!(DTS.contains(
+        "appendSet(timestamp: bigint, writerReplica: bigint, value: bigint): Uint8Array"
+    ));
     assert!(DTS.contains("mergeRecordBytes(bytes: Uint8Array): void"));
     assert!(DTS.contains("gcounterDeltaToWire(replica: number, tally: bigint): Uint8Array"));
+    assert!(DTS.contains(
+        "lwwRegisterDeltaToWire(timestamp: bigint, replica: bigint, value: bigint): Uint8Array"
+    ));
 }

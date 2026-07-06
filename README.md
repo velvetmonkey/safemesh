@@ -55,10 +55,10 @@ The FFI spine lives in `rust/crates/safemesh-ffi`. It exposes opaque G-Counter h
 
 The first bindings are thin wrappers over the same Rust core:
 
-- `rust/crates/safemesh-wasm` exposes G-Counter, `GCounterReplica`, canonical record/log bytes, and merge-from-bytes through wasm-bindgen, with a committed TypeScript declaration file.
-- `rust/crates/safemesh-python` exposes the same G-Counter replica/event-log surface through PyO3, with `pyproject.toml` configured for maturin.
+- `rust/crates/safemesh-wasm` exposes G-Counter, `GCounterReplica`, LWW Register, `LwwRegisterReplica`, canonical record/log bytes, and merge-from-bytes through wasm-bindgen, with a committed TypeScript declaration file.
+- `rust/crates/safemesh-python` exposes the same G-Counter and LWW Register replica/event-log surface through PyO3, with `pyproject.toml` configured for maturin.
 
-Neither binding reimplements merge logic. Both are engineered/tested glue around the verified core, and both have tests that exchange canonical record/log bytes and converge through the Rust core.
+Neither binding reimplements merge logic. Both are engineered/tested glue around the Rust core, and both have tests that exchange canonical record/log bytes and converge through that core. The G-Counter binding rides the Lean-backed surface; the LWW Register binding remains tested-not-proven.
 
 ## Break-it demo
 
