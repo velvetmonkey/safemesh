@@ -40,3 +40,9 @@ The CRDT carriers are `no_std + alloc`, forbid `unsafe`, and are checked by `tes
 The Lean theorems are universal over their mathematical models. The Rust implementation is not itself proven in Lean. It is differentially tested against the Lean-generated corpus. This corpus bridge is the honesty artifact that keeps "verified" tied to the proof.
 
 Property tests, fuzzers, and demos are useful, but they cannot by themselves justify a proven claim.
+
+## Laws harness
+
+The optional Rust `laws` module checks merge commutativity, associativity, idempotence, identity, redelivery, shuffled delivery, and split/drop-then-merge convergence over user-supplied examples. It is designed so third-party CRDT types can run the same behavioral bar in their own CI.
+
+The harness is not a theorem prover. Passing it labels a type as laws-tested, not Lean-proven.
