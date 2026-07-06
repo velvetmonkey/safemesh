@@ -1,8 +1,10 @@
-# SafeMesh
+# SafeMesh for builders
 
-Formally verified coordination primitives for ad-hoc mesh networks (LoRa, Wi-Fi mesh, BLE, off-grid / disaster / community).
+A verified convergent-state layer you build on. Append events anywhere, sync over anything, and every replica provably converges. No duplicates, no lost events, no conflict bugs. The merge is machine-checked, and re-runnable in your CI.
 
 SafeMesh ships small, embeddable building blocks whose correctness is machine-checked in Lean 4, not just tested. Each primitive is a dual artifact: a Lean proof of its key property, and a thin `no_std`-friendly Rust crate that is differential-tested against that proof.
+
+SafeMesh is the builder's mesh: a convergent state fabric for infrastructure where silent divergence is expensive. You bring the transport and the application schema; SafeMesh gives you verified merge behavior for the in-house CRDT types and honest test harnesses for your own types.
 
 ## Status
 
@@ -12,7 +14,8 @@ SafeMesh ships small, embeddable building blocks whose correctness is machine-ch
 |---|---|
 | Lean delta suite (`lean/`): SEC-for-deltas + delta G-Counter, PN-Counter, OR-Set, RGA | **Proven** — zero `sorry`, axioms ⊆ {propext, Classical.choice, Quot.sound}, machine-gated (`Test/Axioms.lean`, a `lake build` default target) |
 | Rust `safemesh-crdt` (`rust/`): delta G-Counter + PN-Counter, `no_std + alloc` (builds for `thumbv7em-none-eabihf`) | **Differentially tested** against the Lean oracle over corpus C (`tests/corpus.json`, emitted by the proven definitions via `lake exe corpus`) |
-| Rust OR-Set + RGA | **Deferred** — the Lean side is proven; the crates are the named next step |
+| Rust OR-Set + RGA/Text | **Deferred** — the Lean side is proven; the Rust body and corpus bridge are the named next step |
+| User-defined types | **Tested, not proven** — users can implement the same merge contract and run the laws harness, but SafeMesh does not prove arbitrary application code |
 
 One proof, two bodies: the Lean development IS the semantics; the Rust crate is a second body of the same object, held to the first by differential conformance rather than by trust.
 
@@ -27,7 +30,11 @@ SafeMesh adds:
 
 **TCB (honest).** The theorems are kernel-checked and universal. The Rust crate is checked against them over a **finite corpus** — evidence, not a universal theorem. The trusted bridge is: Lean's compiler evaluating the proven definitions (`lake exe corpus`, kept OFF the proof path and out of the axiom gate) → the JSON corpus → serde parsing in the std test harness. A disagreement anywhere in that loop fails the build; agreement is conformance evidence over C, no more, no less.
 
-See `ARCHITECTURE.md`.
+See `ARCHITECTURE.md`, `CLAIMS.md`, and `WHAT-IS-PROVEN.md`.
+
+## Non-goals
+
+SafeMesh v0 is flat-first. It does not cover references between objects, trees, ordered move operations, leader election, hardware pucks, radio-delivery proofs, or a claim to be a faster Yjs. Binding glue, demos, and user-defined reducers are engineered and tested; they are not proof-carrying artifacts.
 
 ## License
 
