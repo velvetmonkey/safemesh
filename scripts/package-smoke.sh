@@ -7,12 +7,22 @@ trap 'rm -rf "$tmp_dir"' EXIT
 
 (
   cd "$repo_root/rust"
-  cargo package -p safemesh-crdt --allow-dirty --no-verify
+  cargo publish --dry-run -p safemesh-crdt --allow-dirty
 )
 
-python3 -m pip wheel "$repo_root/rust/crates/safemesh-python" \
-  --wheel-dir "$tmp_dir/wheels" \
-  --no-deps
+if ! command -v maturin >/dev/null 2>&1; then
+  if command -v pipx >/dev/null 2>&1; then
+    pipx install "maturin>=1.7,<2"
+  else
+    python3 -m pip install --user "maturin>=1.7,<2"
+  fi
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+
+(
+  cd "$repo_root/rust/crates/safemesh-python"
+  maturin build --release --features extension-module --out "$tmp_dir/wheels"
+)
 
 python3 -m venv "$tmp_dir/venv"
 "$tmp_dir/venv/bin/pip" install \
@@ -65,6 +75,9 @@ assert map_left.value_or(7, 0) == map_right.value_or(7, 0) == 300
 print("PYTHON_INSTALL_SMOKE=true")
 PY
 
+"$tmp_dir/venv/bin/python" \
+  "$repo_root/rust/crates/safemesh-python/examples/data_mule_demo.py"
+
 if ! command -v wasm-pack >/dev/null 2>&1; then
   cargo install wasm-pack --version 0.15.0 --locked
 fi
@@ -75,3 +88,11 @@ wasm-pack build "$repo_root/rust/crates/safemesh-wasm" \
   --release
 
 npm pack --dry-run "$tmp_dir/wasm-pkg"
+
+wasm-pack build "$repo_root/rust/crates/safemesh-wasm" \
+  --target nodejs \
+  --out-dir "$tmp_dir/wasm-node-pkg" \
+  --release
+
+node "$repo_root/rust/crates/safemesh-wasm/examples/node-convergence.mjs" \
+  "$tmp_dir/wasm-node-pkg"

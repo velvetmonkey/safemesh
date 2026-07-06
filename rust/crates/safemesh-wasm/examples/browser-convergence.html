@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>SafeMesh WASM convergence demo</title>
+    <style>
+      body {
+        margin: 2rem;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        background: #f6f7f9;
+        color: #1f2933;
+      }
+
+      pre {
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <pre id="output">RUNNING</pre>
+    <script type="module">
+      import init, { SafeMeshGCounterReplica } from "../pkg/safemesh_wasm.js";
+
+      const output = document.querySelector("#output");
+
+      try {
+        await init();
+
+        const left = new SafeMeshGCounterReplica(1n, 3);
+        const right = new SafeMeshGCounterReplica(2n, 3);
+
+        const leftRecord = left.appendBump(0, 5n);
+        const rightRecord = right.appendBump(1, 7n);
+
+        left.mergeRecordBytes(rightRecord);
+        right.mergeRecordBytes(leftRecord);
+        left.mergeLogBytes(right.logBytes());
+        right.mergeLogBytes(left.logBytes());
+
+        const converged = left.value() === 12n && right.value() === 12n;
+        output.textContent = `CONVERGED=${converged} browser_wasm_counter=${left.value()} versions=${left.versionFor(1n)}/${right.versionFor(2n)}`;
+
+        if (!converged) {
+          throw new Error(output.textContent);
+        }
+      } catch (error) {
+        output.textContent = `CONVERGED=false error=${error instanceof Error ? error.message : String(error)}`;
+        throw error;
+      }
+    </script>
+  </body>
+</html>

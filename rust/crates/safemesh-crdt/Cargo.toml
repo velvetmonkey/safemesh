@@ -8,7 +8,9 @@ edition = "2021"
 license = "AGPL-3.0-or-later"
 description = "no_std delta-state CRDT core, held to the SafeMesh Lean proofs by differential conformance"
 repository = "https://github.com/velvetmonkey/safemesh"
-readme = "../../../README.md"
+readme = "README.md"
+keywords = ["crdt", "event-log", "no-std", "lean", "mesh"]
+categories = ["data-structures", "embedded", "no-std"]
 
 [features]
 default = []

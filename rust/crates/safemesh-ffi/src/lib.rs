@@ -4,7 +4,9 @@
 
 use safemesh_crdt::{GCounter, GCounterDelta, WireEncode};
 
-pub type SafeMeshGCounter = GCounter;
+pub struct SafeMeshGCounter {
+    inner: GCounter,
+}
 
 #[repr(C)]
 pub struct SafeMeshBytes {
@@ -35,7 +37,9 @@ impl SafeMeshBytes {
 
 #[no_mangle]
 pub extern "C" fn safemesh_gcounter_new(replicas: usize) -> *mut SafeMeshGCounter {
-    Box::into_raw(Box::new(GCounter::new(replicas)))
+    Box::into_raw(Box::new(SafeMeshGCounter {
+        inner: GCounter::new(replicas),
+    }))
 }
 
 #[no_mangle]
@@ -55,7 +59,7 @@ pub extern "C" fn safemesh_gcounter_apply_bump(
 ) -> bool {
     match unsafe { counter.as_mut() } {
         Some(counter) => {
-            counter.apply_bump(replica, tally);
+            counter.inner.apply_bump(replica, tally);
             true
         }
         None => false,
@@ -65,7 +69,7 @@ pub extern "C" fn safemesh_gcounter_apply_bump(
 #[no_mangle]
 pub extern "C" fn safemesh_gcounter_value(counter: *const SafeMeshGCounter) -> u64 {
     match unsafe { counter.as_ref() } {
-        Some(counter) => counter.value(),
+        Some(counter) => counter.inner.value(),
         None => 0,
     }
 }

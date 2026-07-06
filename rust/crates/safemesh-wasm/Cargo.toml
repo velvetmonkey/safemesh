@@ -5,7 +5,9 @@ edition = "2021"
 license = "AGPL-3.0-or-later"
 description = "WASM/TypeScript binding for the SafeMesh Rust core"
 repository = "https://github.com/velvetmonkey/safemesh"
-readme = "../../../README.md"
+readme = "README.md"
+keywords = ["crdt", "wasm", "event-log", "mesh"]
+categories = ["wasm", "data-structures"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
