@@ -40,6 +40,28 @@ reg_right.append_set(10, 2, 200)
 reg_left.merge_log_bytes(reg_right.log_bytes())
 assert reg_left.value_or(0) == reg_right.value_or(0) == 200
 
+flag_left = sm.EnableWinsFlagReplica(1)
+flag_right = sm.EnableWinsFlagReplica(2)
+flag_record = flag_left.append_enable(10)
+assert isinstance(flag_record, bytes)
+flag_right.merge_record_bytes(flag_record)
+flag_remove = flag_right.append_disable_observed()
+flag_left.append_enable(11)
+flag_left.merge_record_bytes(flag_remove)
+flag_right.merge_log_bytes(flag_left.log_bytes())
+assert flag_left.value() == flag_right.value() is True
+
+map_left = sm.LwwMapReplica(1)
+map_right = sm.LwwMapReplica(2)
+map_record = map_left.append_set(7, 10, 1, 100)
+assert isinstance(map_record, bytes)
+map_right.merge_record_bytes(map_record)
+map_remove = map_right.append_remove(7, 11, 2)
+map_left.append_set(7, 12, 1, 300)
+map_left.merge_record_bytes(map_remove)
+map_right.merge_log_bytes(map_left.log_bytes())
+assert map_left.value_or(7, 0) == map_right.value_or(7, 0) == 300
+
 print("PYTHON_INSTALL_SMOKE=true")
 PY
 

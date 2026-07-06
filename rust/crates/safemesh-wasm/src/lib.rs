@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use safemesh_crdt::{
-    Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta, LwwRegister,
-    LwwRegisterDelta, Record, WireDecode, WireEncode,
+    Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta, LwwMap,
+    LwwMapDelta, LwwRegister, LwwRegisterDelta, Record, WireDecode, WireEncode,
 };
 use wasm_bindgen::prelude::*;
 
@@ -102,6 +102,86 @@ pub fn lww_register_delta_to_wire(
     }
     .to_wire_bytes()
     .map_err(|_| JsValue::from_str("failed to encode LWW register delta"))
+}
+
+#[wasm_bindgen]
+pub struct SafeMeshLwwMap {
+    inner: LwwMap<u64, u64>,
+}
+
+#[wasm_bindgen]
+impl SafeMeshLwwMap {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        SafeMeshLwwMap {
+            inner: LwwMap::new(),
+        }
+    }
+
+    pub fn set(&mut self, key: u64, timestamp: u64, replica: u64, value: u64) {
+        self.inner.set(key, timestamp, replica, value);
+    }
+
+    pub fn remove(&mut self, key: u64, timestamp: u64, replica: u64) {
+        self.inner.remove(key, timestamp, replica);
+    }
+
+    #[wasm_bindgen(js_name = hasKey)]
+    pub fn has_key(&self, key: u64) -> bool {
+        self.inner.get(&key).is_some()
+    }
+
+    #[wasm_bindgen(js_name = valueOr)]
+    pub fn value_or(&self, key: u64, default_value: u64) -> u64 {
+        self.inner.get(&key).copied().unwrap_or(default_value)
+    }
+
+    #[wasm_bindgen(js_name = visibleKeys)]
+    pub fn visible_keys(&self) -> Vec<u64> {
+        self.inner.value().keys().copied().collect()
+    }
+
+    #[wasm_bindgen(js_name = entryKeys)]
+    pub fn entry_keys(&self) -> Vec<u64> {
+        self.inner.entries().keys().copied().collect()
+    }
+
+    #[wasm_bindgen(js_name = removalKeys)]
+    pub fn removal_keys(&self) -> Vec<u64> {
+        self.inner.removals().keys().copied().collect()
+    }
+}
+
+#[wasm_bindgen(js_name = lwwMapSetDeltaToWire)]
+pub fn lww_map_set_delta_to_wire(
+    key: u64,
+    timestamp: u64,
+    replica: u64,
+    value: u64,
+) -> Result<Vec<u8>, JsValue> {
+    LwwMapDelta::Set {
+        key,
+        timestamp,
+        replica,
+        value,
+    }
+    .to_wire_bytes()
+    .map_err(|_| JsValue::from_str("failed to encode LWW map set delta"))
+}
+
+#[wasm_bindgen(js_name = lwwMapRemoveDeltaToWire)]
+pub fn lww_map_remove_delta_to_wire(
+    key: u64,
+    timestamp: u64,
+    replica: u64,
+) -> Result<Vec<u8>, JsValue> {
+    LwwMapDelta::<u64, u64>::Remove {
+        key,
+        timestamp,
+        replica,
+    }
+    .to_wire_bytes()
+    .map_err(|_| JsValue::from_str("failed to encode LWW map remove delta"))
 }
 
 #[wasm_bindgen]
@@ -320,6 +400,122 @@ impl SafeMeshEnableWinsFlagReplica {
 }
 
 #[wasm_bindgen]
+pub struct SafeMeshLwwMapReplica {
+    replica_id: u64,
+    state: LwwMap<u64, u64>,
+    log: EventLog<LwwMapDelta<u64, u64>>,
+}
+
+#[wasm_bindgen]
+impl SafeMeshLwwMapReplica {
+    #[wasm_bindgen(constructor)]
+    pub fn new(replica_id: u64) -> Self {
+        SafeMeshLwwMapReplica {
+            replica_id,
+            state: LwwMap::new(),
+            log: EventLog::new(),
+        }
+    }
+
+    #[wasm_bindgen(js_name = appendSet)]
+    pub fn append_set(
+        &mut self,
+        key: u64,
+        timestamp: u64,
+        writer_replica: u64,
+        value: u64,
+    ) -> Result<Vec<u8>, JsValue> {
+        let delta = LwwMapDelta::Set {
+            key,
+            timestamp,
+            replica: writer_replica,
+            value,
+        };
+        self.state.apply_delta(delta.clone());
+        let id = self.log.append(self.replica_id, delta.clone());
+        Record { id, delta }
+            .to_wire_bytes()
+            .map_err(|_| JsValue::from_str("failed to encode record"))
+    }
+
+    #[wasm_bindgen(js_name = appendRemove)]
+    pub fn append_remove(
+        &mut self,
+        key: u64,
+        timestamp: u64,
+        writer_replica: u64,
+    ) -> Result<Vec<u8>, JsValue> {
+        let delta = LwwMapDelta::Remove {
+            key,
+            timestamp,
+            replica: writer_replica,
+        };
+        self.state.apply_delta(delta.clone());
+        let id = self.log.append(self.replica_id, delta.clone());
+        Record { id, delta }
+            .to_wire_bytes()
+            .map_err(|_| JsValue::from_str("failed to encode record"))
+    }
+
+    #[wasm_bindgen(js_name = mergeRecordBytes)]
+    pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
+        let record = Record::<LwwMapDelta<u64, u64>>::from_wire_bytes(bytes)
+            .map_err(|_| JsValue::from_str("failed to decode record"))?;
+        self.state.apply_delta(record.delta.clone());
+        self.log.merge_records([record]);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = mergeLogBytes)]
+    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
+        let log = EventLog::<LwwMapDelta<u64, u64>>::from_wire_bytes(bytes)
+            .map_err(|_| JsValue::from_str("failed to decode event log"))?;
+        for record in log.records().iter().cloned() {
+            self.state.apply_delta(record.delta.clone());
+            self.log.merge_records([record]);
+        }
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = logBytes)]
+    pub fn log_bytes(&self) -> Result<Vec<u8>, JsValue> {
+        self.log
+            .to_wire_bytes()
+            .map_err(|_| JsValue::from_str("failed to encode event log"))
+    }
+
+    #[wasm_bindgen(js_name = versionFor)]
+    pub fn version_for(&self, replica: u64) -> u64 {
+        self.log.version().get(replica)
+    }
+
+    #[wasm_bindgen(js_name = hasKey)]
+    pub fn has_key(&self, key: u64) -> bool {
+        self.state.get(&key).is_some()
+    }
+
+    #[wasm_bindgen(js_name = valueOr)]
+    pub fn value_or(&self, key: u64, default_value: u64) -> u64 {
+        self.state.get(&key).copied().unwrap_or(default_value)
+    }
+
+    #[wasm_bindgen(js_name = visibleKeys)]
+    pub fn visible_keys(&self) -> Vec<u64> {
+        self.state.value().keys().copied().collect()
+    }
+
+    #[wasm_bindgen(js_name = entryKeys)]
+    pub fn entry_keys(&self) -> Vec<u64> {
+        self.state.entries().keys().copied().collect()
+    }
+
+    #[wasm_bindgen(js_name = removalKeys)]
+    pub fn removal_keys(&self) -> Vec<u64> {
+        self.state.removals().keys().copied().collect()
+    }
+}
+
+#[wasm_bindgen]
 pub struct SafeMeshLwwRegisterReplica {
     replica_id: u64,
     state: LwwRegister<u64>,
@@ -522,6 +718,36 @@ mod tests {
     }
 
     #[test]
+    fn wasm_lww_map_calls_rust_core() {
+        let mut map = SafeMeshLwwMap::new();
+        assert!(!map.has_key(7));
+        map.set(7, 10, 1, 100);
+        map.set(2, 1, 1, 20);
+        assert_eq!(map.value_or(7, 0), 100);
+        assert_eq!(map.visible_keys(), vec![2, 7]);
+
+        map.remove(7, 11, 1);
+        assert!(!map.has_key(7));
+        assert_eq!(map.value_or(7, 0), 0);
+        assert_eq!(map.entry_keys(), vec![2, 7]);
+        assert_eq!(map.removal_keys(), vec![7]);
+
+        map.set(7, 12, 1, 300);
+        assert_eq!(map.value_or(7, 0), 300);
+    }
+
+    #[test]
+    fn wasm_lww_map_wire_helpers_use_canonical_bytes() {
+        let set = lww_map_set_delta_to_wire(7, 9, 2, 42).unwrap();
+        assert_eq!(set.len(), 33);
+        assert_eq!(set[0], 0x70);
+
+        let remove = lww_map_remove_delta_to_wire(7, 10, 2).unwrap();
+        assert_eq!(remove.len(), 25);
+        assert_eq!(remove[0], 0x71);
+    }
+
+    #[test]
     fn wasm_flag_replicas_exchange_canonical_record_bytes() {
         let mut left = SafeMeshEnableWinsFlagReplica::new(1);
         let mut right = SafeMeshEnableWinsFlagReplica::new(2);
@@ -556,6 +782,48 @@ mod tests {
         assert_eq!(left.value(), right.value());
         assert_eq!(left.enabled_tokens(), vec![10, 11]);
         assert_eq!(left.tombstone_tokens(), vec![10]);
+    }
+
+    #[test]
+    fn wasm_lww_map_replicas_exchange_canonical_record_bytes() {
+        let mut left = SafeMeshLwwMapReplica::new(1);
+        let mut right = SafeMeshLwwMapReplica::new(2);
+
+        let set_100 = left.append_set(7, 10, 1, 100).unwrap();
+        let expected = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 1,
+            },
+            delta: LwwMapDelta::Set {
+                key: 7,
+                timestamp: 10,
+                replica: 1,
+                value: 100,
+            },
+        }
+        .to_wire_bytes()
+        .unwrap();
+        assert_eq!(set_100, expected);
+
+        right.merge_record_bytes(&set_100).unwrap();
+        right.merge_record_bytes(&set_100).unwrap();
+        assert_eq!(right.value_or(7, 0), 100);
+        assert_eq!(right.version_for(1), 1);
+
+        let remove_100 = right.append_remove(7, 11, 2).unwrap();
+        assert!(!right.has_key(7));
+
+        let set_300 = left.append_set(7, 12, 1, 300).unwrap();
+        right.merge_record_bytes(&set_300).unwrap();
+        assert_eq!(right.value_or(7, 0), 300);
+
+        left.merge_record_bytes(&remove_100).unwrap();
+        assert_eq!(left.value_or(7, 0), 300);
+        left.merge_log_bytes(&right.log_bytes().unwrap()).unwrap();
+        assert_eq!(left.value_or(7, 0), right.value_or(7, 0));
+        assert_eq!(left.visible_keys(), vec![7]);
+        assert_eq!(left.removal_keys(), vec![7]);
     }
 
     #[test]
