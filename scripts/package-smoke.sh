@@ -75,6 +75,9 @@ assert map_left.value_or(7, 0) == map_right.value_or(7, 0) == 300
 print("PYTHON_INSTALL_SMOKE=true")
 PY
 
+"$tmp_dir/venv/bin/python" \
+  "$repo_root/rust/crates/safemesh-python/examples/data_mule_demo.py"
+
 if ! command -v wasm-pack >/dev/null 2>&1; then
   cargo install wasm-pack --version 0.15.0 --locked
 fi
