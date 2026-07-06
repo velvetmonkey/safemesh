@@ -6,7 +6,7 @@ The committed images in `demos/assets/` were captured from the current app or fr
 
 | Demo | Run in 30 seconds | Shows | Claim boundary |
 |---|---|---|---|
-| [Interactive web convergence hero](web-hero/README.md) | `cd web && npm install && npm run dev` | Replicas diverge under drops, duplicates, reordering, and partition, then heal into matching modeled state. | TypeScript is a demo mirror, not the verified artifact. |
+| [Interactive web convergence hero](web-hero/README.md) | `cd web && npm install && npm run dev` | A manual guided timeline plus a separate sandbox where replicas diverge under drops, duplicates, reordering, and partition, then heal into matching modeled state. | TypeScript is a demo mirror, not the verified artifact. |
 | [Rust break-it](rust-break-it/README.md) | `cd rust && NO_COLOR=1 cargo run -p safemesh-crdt --example break_it` | Lean-backed Rust carriers under reversed delivery, duplicate replay, partition, and anti-entropy heal. | In-process modeled transport, not real radio delivery or storage durability. |
 | [Python cold-chain data mule](python-cold-chain/README.md) | Build a local wheel with maturin, then run `examples/data_mule_demo.py`. | A vaccine custody story across clinic, offline courier, freezer blip, and lab sync. | Sensor truth, real transport, storage durability, and binding glue are not proven. |
 
