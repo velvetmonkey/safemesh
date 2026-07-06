@@ -4,7 +4,10 @@ import {
   bumpCounter,
   convergence,
   createSimulation,
+  dropNextPacket,
+  duplicateNextPacket,
   removeElement,
+  reorderQueue,
   runAntiEntropyNow,
   setAntiEntropyMs,
   setDropRate,
@@ -63,6 +66,47 @@ describe('mesh simulation', () => {
     expect(status.sameRawState).toBe(true)
     expect(status.converged).toBe(true)
     expect(status.orsetElements).toEqual(['medkit'])
+  })
+
+  it('can manually drop the next queued delta', () => {
+    let sim = setDropRate(createSimulation(3), 0)
+    sim = addElement(sim, 0, 'insulin')
+
+    expect(sim.queue).toHaveLength(2)
+    sim = dropNextPacket(sim)
+
+    expect(sim.queue).toHaveLength(1)
+    expect(sim.log[0].technical).toContain('operator dropped')
+  })
+
+  it('can duplicate a queued delta without changing convergence', () => {
+    let sim = setDropRate(createSimulation(3), 0)
+    sim = addElement(sim, 0, 'insulin')
+    sim = duplicateNextPacket(sim)
+
+    expect(sim.queue.some((packet) => packet.duplicated)).toBe(true)
+    for (let i = 0; i < 12; i += 1) sim = tick(sim, 250, () => 1)
+
+    const status = convergence(sim)
+    expect(status.converged).toBe(true)
+    expect(status.orsetElements).toEqual(['insulin'])
+  })
+
+  it('can reorder queued deltas and still converge', () => {
+    let sim = setDropRate(createSimulation(4), 0)
+    sim = addElement(sim, 0, 'medkit')
+    sim = addElement(sim, 1, 'water')
+    const before = sim.queue.map((packet) => packet.id)
+
+    sim = reorderQueue(sim)
+    const after = sim.queue.map((packet) => packet.id)
+
+    expect(after).not.toEqual(before)
+    for (let i = 0; i < 20; i += 1) sim = tick(sim, 250, () => 1)
+
+    const status = convergence(sim)
+    expect(status.converged).toBe(true)
+    expect(status.orsetElements).toEqual(['medkit', 'water'])
   })
 
   it('does not run anti-entropy while partitioned, then reconciles after reconnect', () => {

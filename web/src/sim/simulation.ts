@@ -32,7 +32,9 @@ export type Packet = {
   from: number
   to: number
   delta: MeshDelta
+  sentAt: number
   deliverAt: number
+  duplicated?: boolean
 }
 
 export type LogEntry = {
@@ -51,6 +53,7 @@ export type Simulation = {
   dropRate: number
   antiEntropyMs: number
   nextAntiEntropyAt: number
+  lastAntiEntropyAt: number | null
   now: number
   nextId: number
   log: LogEntry[]
@@ -70,6 +73,7 @@ export function createSimulation(peerCount = 4): Simulation {
     dropRate: 0.08,
     antiEntropyMs: 5000,
     nextAntiEntropyAt: 5000,
+    lastAntiEntropyAt: null,
     now: 0,
     nextId: 1,
     log: [],
@@ -84,6 +88,7 @@ export function setPeerCount(sim: Simulation, peerCount: number): Simulation {
     dropRate: sim.dropRate,
     antiEntropyMs: sim.antiEntropyMs,
     nextAntiEntropyAt: sim.antiEntropyMs,
+    lastAntiEntropyAt: null,
     log: appendLog(next, `reset mesh to ${peerCount} peers`, 'partition').log,
   }
 }
@@ -171,7 +176,7 @@ export function tick(sim: Simulation, elapsedMs: number, random = Math.random): 
     if (sim.partitioned) {
       next = {
         ...next,
-        queue: [...next.queue, { ...packet, deliverAt: now + sim.latencyMs }],
+        queue: [...next.queue, { ...packet, sentAt: now, deliverAt: now + sim.latencyMs }],
       }
       continue
     }
@@ -226,6 +231,75 @@ export function runAntiEntropyNow(sim: Simulation): Simulation {
   return runAntiEntropy({ ...sim, nextAntiEntropyAt: sim.now })
 }
 
+export function dropNextPacket(sim: Simulation): Simulation {
+  const index = nextPacketIndex(sim.queue)
+  if (index < 0) {
+    return appendLog(sim, 'No queued delta to drop', 'drop', 'drop requested: queue empty')
+  }
+  const packet = sim.queue[index]
+  return appendLog(
+    { ...sim, queue: sim.queue.filter((_, packetIndex) => packetIndex !== index) },
+    plainDrop(packet),
+    'drop',
+    `operator dropped ${describeDelta(packet.delta)} ${packet.from}->${packet.to}`,
+  )
+}
+
+export function duplicateNextPacket(sim: Simulation): Simulation {
+  const index = nextPacketIndex(sim.queue)
+  if (index < 0) {
+    return appendLog(sim, 'No queued delta to duplicate', 'drop', 'duplicate requested: queue empty')
+  }
+  const packet = sim.queue[index]
+  const duplicate = {
+    ...packet,
+    id: `${packet.id}-dup-${sim.nextId}`,
+    sentAt: sim.now,
+    deliverAt: packet.deliverAt + 220,
+    duplicated: true,
+  }
+  return appendLog(
+    {
+      ...sim,
+      queue: [...sim.queue, duplicate],
+      nextId: sim.nextId + 1,
+    },
+    `Duplicated a delta from Camp ${packet.from} to Camp ${packet.to}`,
+    'send',
+    `duplicated ${describeDelta(packet.delta)} ${packet.from}->${packet.to}`,
+  )
+}
+
+export function reorderQueue(sim: Simulation): Simulation {
+  if (sim.queue.length < 2) {
+    return appendLog(sim, 'Need at least two queued deltas to reorder', 'drop', 'reorder requested: queue too small')
+  }
+  const reordered = [...sim.queue]
+    .sort((left, right) => left.deliverAt - right.deliverAt)
+    .reverse()
+    .map((packet, index) => ({
+      ...packet,
+      sentAt: sim.now,
+      deliverAt: sim.now + 220 + index * 120,
+    }))
+  return appendLog(
+    { ...sim, queue: reordered },
+    'Reordered queued radio deltas',
+    'partition',
+    `operator reordered ${reordered.length} queued deltas`,
+  )
+}
+
+export function wirePreview(delta: MeshDelta): string {
+  if (delta.kind === 'gcounter.bump') {
+    return `10 ${hex(delta.replica)} ${hex(delta.tally)}`
+  }
+  if (delta.kind === 'orset.add') {
+    return `20 ${asciiHex(delta.element)} ${asciiHex(delta.token)}`
+  }
+  return `21 ${delta.tokens.map(asciiHex).join(' ')}`
+}
+
 function emitDelta(
   sim: Simulation,
   peerId: number,
@@ -243,6 +317,7 @@ function emitDelta(
       from: peerId,
       to: peer.id,
       delta,
+      sentAt: sim.now,
       deliverAt: sim.now + sim.latencyMs + index * 90,
     }))
 
@@ -294,6 +369,7 @@ function runAntiEntropy(sim: Simulation): Simulation {
 
   let peers = sim.peers
   let next: Simulation = { ...sim, nextAntiEntropyAt: sim.now + sim.antiEntropyMs }
+  let mergedAny = false
 
   for (let i = 0; i < peers.length; i += 1) {
     for (let j = i + 1; j < peers.length; j += 1) {
@@ -303,6 +379,7 @@ function runAntiEntropy(sim: Simulation): Simulation {
       const leftToRight = backfillDescriptions(right, left)
 
       if (rightToLeft.length === 0 && leftToRight.length === 0) continue
+      mergedAny = true
 
       const merged = {
         gcounter: mergeGCounter(left.gcounter, right.gcounter),
@@ -333,7 +410,31 @@ function runAntiEntropy(sim: Simulation): Simulation {
     }
   }
 
-  return { ...next, peers }
+  return {
+    ...next,
+    peers,
+    lastAntiEntropyAt: mergedAny ? sim.now : sim.lastAntiEntropyAt,
+  }
+}
+
+function nextPacketIndex(queue: Packet[]): number {
+  if (queue.length === 0) return -1
+  let best = 0
+  for (let index = 1; index < queue.length; index += 1) {
+    if (queue[index].deliverAt < queue[best].deliverAt) best = index
+  }
+  return best
+}
+
+function hex(value: number): string {
+  return value.toString(16).padStart(2, '0').slice(-4).toUpperCase()
+}
+
+function asciiHex(value: string): string {
+  return [...value]
+    .slice(0, 10)
+    .map((char) => char.charCodeAt(0).toString(16).padStart(2, '0').toUpperCase())
+    .join('')
 }
 
 function backfillDescriptions(
