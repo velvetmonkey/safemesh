@@ -22,6 +22,8 @@ SafeMesh v0.1 is publish-ready only. These commands are dry-run or local wheel/p
 
 ## Run the break-it demos
 
+Polished walkthroughs and captured assets live in [`demos/README.md`](demos/README.md).
+
 Each one-liner exits nonzero unless the modeled replicas converge and prints `CONVERGED=true` on success.
 
 | Surface | One-liner from the repo root |

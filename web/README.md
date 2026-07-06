@@ -1,6 +1,8 @@
-# SafeMesh PWA MVP
+# SafeMesh web convergence hero
 
-Installable, offline-first browser demo for SafeMesh delta-state CRDT convergence under simulated mesh partition and reconnect.
+Interactive browser demo for the SafeMesh "watch it converge" story.
+
+![Captured web hero showing four replicas and convergence controls](../demos/assets/web-hero-desktop.png)
 
 ## Run
 
@@ -16,12 +18,12 @@ The app is static and has no backend. After a first load, the service worker cac
 
 ## What It Demonstrates
 
-- N simulated peers with local CRDT state.
-- Delta delivery with configurable partition/heal, latency, and drop rate.
-- Periodic anti-entropy between connected peers, so dropped one-shot messages can be recovered.
-- G-Counter divergence under partition and convergence after reconnect.
-- OR-Set add-wins behavior using observed-token remove tombstones.
+- Simulated replicas with local CRDT state.
+- Delta delivery with partition/heal, latency, drop, duplicate, and reorder controls.
+- Periodic anti-entropy between connected peers so dropped one-shot messages can be recovered.
+- G-Counter and OR-Set divergence under partition and convergence after reconnect.
 - A live convergence indicator that compares raw states and reads.
+- A technical/plain-language claim toggle and reduced-motion mode.
 
 ## Honesty Boundary
 
@@ -29,9 +31,9 @@ Lean is the SafeMesh semantic oracle. The TypeScript in this PWA is not proof-ca
 
 - G-Counter: mirrors `SafeMesh.deltaBump`, `SafeMesh.deltaGCounter_correct`, `SafeMesh.delta_dissemination_sec`, and `SafeMesh.merge_deltaState`. This CRDT also has a shipped Rust body that is differentially tested over corpus C.
 - PN-Counter: included only as a small TypeScript reference mirror of `SafeMesh.deltaBumpP`, `SafeMesh.deltaBumpN`, and `SafeMesh.deltaPNCounter_correct_P/_N`; the current UI does not center it.
-- OR-Set: mirrors Lean-proven `SafeMesh.orAddDelta`, `SafeMesh.orRemoveDelta`, and `SafeMesh.deltaORSet_lookup` directly. Rust OR-Set now ships in `safemesh-crdt` and is differentially tested over corpus C.
+- OR-Set: mirrors Lean-proven `SafeMesh.orAddDelta`, `SafeMesh.orRemoveDelta`, and `SafeMesh.deltaORSet_lookup` directly. Rust OR-Set ships in `safemesh-crdt` and is differentially tested over corpus C.
 
-Do not present this PWA as the verified artifact. It is the demo skin that a future Rust/WASM verified product body can replace.
+Do not present this PWA as the verified artifact. It is the demo skin around the proof-backed product body.
 
 ## Anti-Entropy
 

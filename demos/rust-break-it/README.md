@@ -4,6 +4,8 @@ This is the terminal proof sketch: four Rust replicas append local CRDT deltas, 
 
 It is intentionally small enough to audit and dramatic enough to run in front of someone.
 
+![Captured Rust break-it terminal run](../assets/rust-break-it-terminal.png)
+
 ## 30-second run
 
 From the repository root:

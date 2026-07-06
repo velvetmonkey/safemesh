@@ -2,6 +2,8 @@
 
 This is the field-science story demo: a vaccine shipment leaves a clinic, a courier collects while offline, a freezer power blip is recorded, and a lab receives the shipment after a data-mule sync. The point is not the hardware. The point is that the same Rust core can sit under a Python workflow and make the modeled custody state converge after ugly delivery.
 
+![Captured Python cold-chain terminal run](../assets/python-cold-chain-terminal.png)
+
 ## 30-second run
 
 Build and install the local wheel into a temporary virtualenv:
