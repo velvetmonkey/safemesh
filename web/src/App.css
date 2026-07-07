@@ -225,8 +225,40 @@ h2 {
   stroke-dasharray: 2.2 1.4;
 }
 
+.stage-cue {
+  max-width: min(420px, calc(100% - 48px));
+  min-height: 38px;
+  position: absolute;
+  z-index: 8;
+  left: 24px;
+  top: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 820;
+  line-height: 1.25;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
+}
+
+.stage-cue.ok {
+  border-color: color-mix(in srgb, var(--good) 46%, var(--line));
+}
+
+.stage-cue.warn {
+  border-color: color-mix(in srgb, var(--warn) 60%, var(--line));
+}
+
+.stage-cue.bad {
+  border-color: color-mix(in srgb, var(--bad) 58%, var(--line));
+}
+
 .packet {
-  width: 108px;
+  width: 128px;
   min-height: 38px;
   position: absolute;
   z-index: 4;
@@ -264,6 +296,16 @@ h2 {
 
 .packet.orset-remove {
   border-color: color-mix(in srgb, var(--bad) 72%, var(--line));
+}
+
+.packet.reordered {
+  border-color: color-mix(in srgb, var(--warn) 80%, var(--line));
+  background: color-mix(in srgb, var(--warn) 12%, var(--field));
+}
+
+.packet.repair {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--good));
+  background: color-mix(in srgb, var(--good) 13%, var(--field));
 }
 
 .packet.duplicated {
@@ -854,9 +896,16 @@ button:disabled {
   }
 
   .packet {
-    width: 66px;
+    width: 86px;
     min-height: 30px;
     padding: 6px;
+  }
+
+  .stage-cue {
+    max-width: calc(100% - 28px);
+    left: 14px;
+    top: 14px;
+    font-size: 11px;
   }
 
   .stage-step-controls {

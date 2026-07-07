@@ -37,6 +37,36 @@ describe('guided scenario replay', () => {
     }
   })
 
+  it('starts guided recovery steps with visible work still to do', () => {
+    const dropRecover = stepIndex('drop', 'recover')
+    const dropStart = buildScenarioSimulation('drop', dropRecover, 0)
+
+    expect(convergence(dropStart).converged).toBe(false)
+    expect(dropStart.peers[3].gcounter[0]).toBe(0)
+    expect(dropStart.queue.some((packet) => packet.phase === 'repair' && packet.to === 3)).toBe(true)
+
+    const partitionHeal = stepIndex('partition', 'heal')
+    const partitionStart = buildScenarioSimulation('partition', partitionHeal, 0)
+
+    expect(partitionStart.partitioned).toBe(false)
+    expect(convergence(partitionStart).converged).toBe(false)
+    expect(partitionStart.queue.length).toBeGreaterThan(0)
+
+    const partitionMid = buildScenarioSimulation('partition', partitionHeal, 500)
+    expect(convergence(partitionMid).converged).toBe(false)
+    expect(partitionMid.queue.length).toBeGreaterThan(0)
+  })
+
+  it('marks reordered and repair packets for the UI', () => {
+    const reorderStep = buildScenarioSimulation('reorder', stepIndex('reorder', 'reorder'), 0)
+
+    expect(reorderStep.queue.length).toBeGreaterThan(0)
+    expect(reorderStep.queue.every((packet) => packet.phase === 'reordered')).toBe(true)
+
+    const dropRecover = buildScenarioSimulation('drop', stepIndex('drop', 'recover'), 0)
+    expect(dropRecover.queue.some((packet) => packet.phase === 'repair')).toBe(true)
+  })
+
   it('keeps duplicate, reorder, drop, and partition evidence visible in the log', () => {
     const duplicate = finalScenarioLog('duplicate')
     expect(duplicate.some((entry) => entry.technical.includes('duplicated'))).toBe(true)
@@ -66,4 +96,12 @@ function finalScenarioLog(scenarioId: string) {
   const scenario = GUIDE_SCENARIOS.find((candidate) => candidate.id === scenarioId)
   if (!scenario) throw new Error(`missing scenario ${scenarioId}`)
   return buildScenarioSimulation(scenario.id, scenario.steps.length - 1).log
+}
+
+function stepIndex(scenarioId: string, stepId: string): number {
+  const scenario = GUIDE_SCENARIOS.find((candidate) => candidate.id === scenarioId)
+  if (!scenario) throw new Error(`missing scenario ${scenarioId}`)
+  const index = scenario.steps.findIndex((step) => step.id === stepId)
+  if (index < 0) throw new Error(`missing step ${scenarioId}/${stepId}`)
+  return index
 }
