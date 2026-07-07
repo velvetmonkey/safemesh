@@ -213,16 +213,18 @@ function App() {
               {sim.partitioned && <line className="partition-wall" x1="50" y1="10" x2="50" y2="90" />}
             </svg>
 
+            {!advancedOpen && <div className={`stage-cue ${activeStep.tone}`}>{activeStep.stageCue ?? activeStep.watchFor}</div>}
+
             {sim.queue.slice(0, compactStage ? 8 : 18).map((packet) => {
               const point = packetPoint(packet, sim, positions)
               return (
                 <div
                   key={packet.id}
-                  className={`packet ${packet.delta.kind.replace('.', '-')} ${packet.duplicated ? 'duplicated' : ''}`}
+                  className={`packet ${packet.delta.kind.replace('.', '-')} ${packet.phase ?? 'normal'} ${packet.duplicated ? 'duplicated' : ''}`}
                   style={{ left: `${point.x}%`, top: `${point.y}%` }}
                   title={`demo wire sketch ${wirePreview(packet.delta)}`}
                 >
-                  <span>{packetLabel(packet)}</span>
+                  <span>{packetLabel(packet, sim.queue)}</span>
                   <code>{wirePreview(packet.delta)}</code>
                 </div>
               )
@@ -574,20 +576,32 @@ function packetLane(packet: Packet): number {
   const kindLane = packet.delta.kind === 'gcounter.bump' ? -2.4 : packet.delta.kind === 'orset.add' ? 2.4 : 0
   const destinationLane = ((packet.to + packet.from) % 3) - 1
   const duplicateLane = packet.duplicated ? 2.2 : 0
-  return (kindLane + destinationLane * 1.4 + duplicateLane) * 1.9
+  const reorderLane = packet.phase === 'reordered' ? ((packet.order ?? 1) - 3.5) * 3.2 : 0
+  return (kindLane + destinationLane * 1.4 + duplicateLane + reorderLane) * 1.9
 }
 
 function packetProgressStagger(packet: Packet): number {
+  if (packet.phase === 'reordered') return (3.5 - (packet.order ?? 1)) * 0.13
   const kindShift = packet.delta.kind === 'gcounter.bump' ? -0.07 : packet.delta.kind === 'orset.add' ? 0.07 : 0
   const destinationShift = (((packet.to + packet.from) % 3) - 1) * 0.025
   const duplicateShift = packet.duplicated ? 0.09 : 0
   return kindShift + destinationShift + duplicateShift
 }
 
-function packetLabel(packet: Packet): string {
-  if (packet.delta.kind === 'gcounter.bump') return `G${packet.delta.replica}`
-  if (packet.delta.kind === 'orset.add') return 'ADD'
-  return 'REM'
+function packetLabel(packet: Packet, queue: Packet[]): string {
+  const deltaLabel = packet.delta.kind === 'gcounter.bump' ? `G${packet.delta.replica}` : packet.delta.kind === 'orset.add' ? 'ADD' : 'REM'
+  if (packet.phase === 'repair') return `SYNC ${deltaLabel}`
+  const rank = packet.order ?? deliveryRank(packet, queue)
+  if (packet.phase === 'reordered') return `REV ${rank} ${deltaLabel}`
+  return `#${rank} ${deltaLabel}`
+}
+
+function deliveryRank(packet: Packet, queue: Packet[]): number {
+  return (
+    [...queue]
+      .sort((left, right) => left.deliverAt - right.deliverAt || left.id.localeCompare(right.id))
+      .findIndex((candidate) => candidate.id === packet.id) + 1
+  )
 }
 
 function eventLogForMode(log: LogEntry[], advancedOpen: boolean, stepStartTime: number): LogEntry[] {

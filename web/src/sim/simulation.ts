@@ -35,6 +35,8 @@ export type Packet = {
   sentAt: number
   deliverAt: number
   duplicated?: boolean
+  phase?: 'normal' | 'reordered' | 'repair'
+  order?: number
 }
 
 export type LogEntry = {
@@ -231,11 +233,54 @@ export function runAntiEntropyNow(sim: Simulation): Simulation {
   return runAntiEntropy({ ...sim, nextAntiEntropyAt: sim.now })
 }
 
+export function queueAntiEntropyPackets(sim: Simulation): Simulation {
+  if (sim.partitioned) {
+    return appendLog(
+      sim,
+      'Anti-entropy cannot cross the partition yet',
+      'partition',
+      'anti-entropy skipped: partition still enabled',
+    )
+  }
+
+  const { packets, nextId } = buildAntiEntropyPackets(sim)
+  const nextBase = {
+    ...sim,
+    nextId,
+    nextAntiEntropyAt: sim.antiEntropyMs > 0 ? sim.now + sim.antiEntropyMs : Number.POSITIVE_INFINITY,
+    lastAntiEntropyAt: packets.length > 0 ? sim.now : sim.lastAntiEntropyAt,
+  }
+
+  if (packets.length === 0) {
+    return appendLog(nextBase, 'Anti-entropy checked: no missing modeled records', 'anti-entropy')
+  }
+
+  return appendLog(
+    {
+      ...nextBase,
+      queue: [...sim.queue, ...packets],
+    },
+    `Anti-entropy queued ${packets.length} visible repair ${packets.length === 1 ? 'message' : 'messages'}`,
+    'anti-entropy',
+    `anti-entropy queued ${packets.length} repair deltas`,
+  )
+}
+
 export function dropNextPacket(sim: Simulation): Simulation {
   const index = nextPacketIndex(sim.queue)
   if (index < 0) {
     return appendLog(sim, 'No queued delta to drop', 'drop', 'drop requested: queue empty')
   }
+  return dropPacketAtIndex(sim, index)
+}
+
+export function dropCounterPacketToPeer(sim: Simulation, peerId: number): Simulation {
+  const index = sim.queue.findIndex((packet) => packet.to === peerId && packet.delta.kind === 'gcounter.bump')
+  if (index < 0) return dropNextPacket(sim)
+  return dropPacketAtIndex(sim, index)
+}
+
+function dropPacketAtIndex(sim: Simulation, index: number): Simulation {
   const packet = sim.queue[index]
   return appendLog(
     { ...sim, queue: sim.queue.filter((_, packetIndex) => packetIndex !== index) },
@@ -280,7 +325,9 @@ export function reorderQueue(sim: Simulation): Simulation {
     .map((packet, index) => ({
       ...packet,
       sentAt: sim.now,
-      deliverAt: sim.now + 220 + index * 120,
+      deliverAt: sim.now + 380 + index * 230,
+      phase: 'reordered' as const,
+      order: index + 1,
     }))
   return appendLog(
     { ...sim, queue: reordered },
@@ -319,6 +366,7 @@ function emitDelta(
       delta,
       sentAt: sim.now,
       deliverAt: sim.now + sim.latencyMs + index * 90,
+      phase: 'normal' as const,
     }))
 
   return appendLog(
@@ -338,11 +386,14 @@ function emitDelta(
 
 function deliverPacket(sim: Simulation, packet: Packet): Simulation {
   const peers = sim.peers.map((peer) => (peer.id === packet.to ? applyDeltaToPeer(peer, packet.delta) : peer))
+  const tone = packet.phase === 'repair' ? 'anti-entropy' : 'deliver'
   return appendLog(
     { ...sim, peers },
-    plainDeliver(packet),
-    'deliver',
-    `delivered ${describeDelta(packet.delta)} ${packet.from}->${packet.to}`,
+    packet.phase === 'repair' ? plainRepair(packet) : plainDeliver(packet),
+    tone,
+    packet.phase === 'repair'
+      ? `anti-entropy delivered ${describeDelta(packet.delta)} ${packet.from}->${packet.to}`
+      : `delivered ${describeDelta(packet.delta)} ${packet.from}->${packet.to}`,
   )
 }
 
@@ -426,6 +477,74 @@ function nextPacketIndex(queue: Packet[]): number {
   return best
 }
 
+function buildAntiEntropyPackets(sim: Simulation): { packets: Packet[]; nextId: number } {
+  let nextId = sim.nextId
+  let repairIndex = 0
+  const packets: Packet[] = []
+  const union = sim.peers.reduce(
+    (merged, peer) => ({
+      gcounter: mergeGCounter(merged.gcounter, peer.gcounter),
+      orset: mergeORSet(merged.orset, peer.orset),
+    }),
+    { gcounter: bottomGCounter(sim.peers.length), orset: bottomORSet() },
+  )
+
+  for (const target of sim.peers) {
+    union.gcounter.forEach((value, replica) => {
+      if (value <= (target.gcounter[replica] ?? 0)) return
+      const source = sim.peers.find((peer) => peer.id !== target.id && (peer.gcounter[replica] ?? 0) >= value)
+      if (!source) return
+      packets.push({
+        id: `r${nextId}-${repairIndex}`,
+        from: source.id,
+        to: target.id,
+        delta: bumpDelta(replica, value),
+        sentAt: sim.now,
+        deliverAt: sim.now + sim.latencyMs + 160 + repairIndex * 210,
+        phase: 'repair',
+      })
+      nextId += 1
+      repairIndex += 1
+    })
+
+    for (const [token, element] of Object.entries(union.orset.adds)) {
+      if (target.orset.adds[token]) continue
+      const source = sim.peers.find((peer) => peer.id !== target.id && peer.orset.adds[token] === element)
+      if (!source) continue
+      packets.push({
+        id: `r${nextId}-${repairIndex}`,
+        from: source.id,
+        to: target.id,
+        delta: addDelta(element, token),
+        sentAt: sim.now,
+        deliverAt: sim.now + sim.latencyMs + 160 + repairIndex * 210,
+        phase: 'repair',
+      })
+      nextId += 1
+      repairIndex += 1
+    }
+
+    for (const token of Object.keys(union.orset.tombstones)) {
+      if (target.orset.tombstones[token]) continue
+      const source = sim.peers.find((peer) => peer.id !== target.id && peer.orset.tombstones[token])
+      if (!source) continue
+      packets.push({
+        id: `r${nextId}-${repairIndex}`,
+        from: source.id,
+        to: target.id,
+        delta: { kind: 'orset.remove', tokens: [token] },
+        sentAt: sim.now,
+        deliverAt: sim.now + sim.latencyMs + 160 + repairIndex * 210,
+        phase: 'repair',
+      })
+      nextId += 1
+      repairIndex += 1
+    }
+  }
+
+  return { packets, nextId }
+}
+
 function hex(value: number): string {
   return value.toString(16).padStart(2, '0').slice(-4).toUpperCase()
 }
@@ -492,6 +611,16 @@ function plainDeliver(packet: Packet): string {
     return `Camp ${packet.to} received '${packet.delta.element}' from Camp ${packet.from}`
   }
   return `Camp ${packet.to} received removal notes from Camp ${packet.from}`
+}
+
+function plainRepair(packet: Packet): string {
+  if (packet.delta.kind === 'gcounter.bump') {
+    return `Camp ${packet.to} recovered Camp ${packet.delta.replica}'s headcount from Camp ${packet.from}`
+  }
+  if (packet.delta.kind === 'orset.add') {
+    return `Camp ${packet.to} recovered '${packet.delta.element}' from Camp ${packet.from}`
+  }
+  return `Camp ${packet.to} recovered removal notes from Camp ${packet.from}`
 }
 
 function plainDrop(packet: Packet): string {

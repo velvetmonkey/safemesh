@@ -4,8 +4,10 @@ import {
   bumpCounter,
   convergence,
   createSimulation,
+  dropCounterPacketToPeer,
   dropNextPacket,
   duplicateNextPacket,
+  queueAntiEntropyPackets,
   removeElement,
   reorderQueue,
   runAntiEntropyNow,
@@ -77,6 +79,29 @@ describe('mesh simulation', () => {
 
     expect(sim.queue).toHaveLength(1)
     expect(sim.log[0].technical).toContain('operator dropped')
+  })
+
+  it('can queue visible anti-entropy repair packets before state changes', () => {
+    let sim = setDropRate(createSimulation(4), 0)
+    sim = addElement(sim, 0, 'insulin')
+    sim = bumpCounter(sim, 0)
+    sim = dropCounterPacketToPeer(sim, 3)
+    sim = tick(sim, 2000, () => 1)
+
+    expect(convergence(sim).sameRawState).toBe(false)
+    expect(sim.peers[3].gcounter[0]).toBe(0)
+
+    sim = queueAntiEntropyPackets(sim)
+
+    expect(sim.queue.some((packet) => packet.phase === 'repair' && packet.to === 3)).toBe(true)
+    expect(sim.peers[3].gcounter[0]).toBe(0)
+
+    sim = tick(sim, 3000, () => 1)
+
+    const status = convergence(sim)
+    expect(status.converged).toBe(true)
+    expect(status.gcounterValue).toBe(1)
+    expect(status.orsetElements).toEqual(['insulin'])
   })
 
   it('can duplicate a queued delta without changing convergence', () => {
