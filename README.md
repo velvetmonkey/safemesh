@@ -127,6 +127,6 @@ SafeMesh v0 is flat-first. It does not cover references between objects, trees, 
 
 ## License
 
-AGPL-3.0-or-later. Copyright (c) 2026 Ben Cassie. See `LICENSE` and `NOTICE`.
+Business Source License 1.1 (BUSL-1.1). Copyright (c) 2026 Ben Cassie. See `LICENSE`, `LICENSE-rationale.md`, and `NOTICE`.
 
-Commercial licenses, to use SafeMesh without the AGPL network-copyleft obligations, are available. Contact the copyright holder.
+Free for non-commercial use (personal, academic, research, evaluation and development). Commercial production use requires a commercial license from the copyright holder. On the Change Date (2030-07-08) each version converts to the Apache License 2.0.

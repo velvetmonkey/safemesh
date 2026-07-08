@@ -1,7 +1,7 @@
 /-
 SafeMesh — delta-state CRDT convergence, built on crdt-lean.
 Copyright (C) 2026 Ben Cassie
-SPDX-License-Identifier: AGPL-3.0-or-later
+SPDX-License-Identifier: BUSL-1.1
 
 Axiom gate: every public theorem is pinned to the clean baseline
 {propext, Classical.choice, Quot.sound} (or fewer) via #guard_msgs, which

@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Python binding for the SafeMesh Rust core"
 readme = "README.md"
 requires-python = ">=3.8"
-license = { text = "AGPL-3.0-or-later" }
+license = { text = "BUSL-1.1" }
 keywords = ["crdt", "distributed-systems", "event-log", "safemesh"]
 classifiers = [
   "Programming Language :: Python :: 3",

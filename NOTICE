@@ -1,15 +1,13 @@
 SafeMesh
 Copyright (c) 2026 Ben Cassie. All rights reserved.
 
-This program is free software: you can redistribute it and/or modify it under
-the terms of the GNU Affero General Public License as published by the Free
-Software Foundation, either version 3 of the License, or (at your option) any
-later version. See LICENSE.
+This is source-available software licensed under the Business Source License 1.1
+(BUSL-1.1). See LICENSE. Non-commercial use (personal, academic, research,
+evaluation and development) is free; commercial production use requires a
+commercial license from the copyright holder. On the Change Date (2030-07-08)
+each version converts to the Apache License 2.0. See LICENSE-rationale.md.
 
-The copyright holder retains sole ownership of this work and offers it under a
-dual-licensing model: the open-source AGPL-3.0 terms above, and separate
-commercial licenses for use without the AGPL's source-disclosure and
-network-copyleft obligations. Contact the copyright holder for commercial terms.
+Commercial licenses are available. Contact the copyright holder.
 
 SafeMesh depends on crdt-lean (https://github.com/velvetmonkey/crdt-lean),
 which is licensed separately under the MIT License.

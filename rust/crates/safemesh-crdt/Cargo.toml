@@ -1,11 +1,11 @@
 # SafeMesh — delta-state CRDT convergence, built on crdt-lean.
 # Copyright (C) 2026 Ben Cassie
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: BUSL-1.1
 [package]
 name = "safemesh-crdt"
 version = "0.1.0"
 edition = "2021"
-license = "AGPL-3.0-or-later"
+license = "BUSL-1.1"
 description = "no_std delta-state CRDT core, held to the SafeMesh Lean proofs by differential conformance"
 repository = "https://github.com/velvetmonkey/safemesh"
 readme = "README.md"

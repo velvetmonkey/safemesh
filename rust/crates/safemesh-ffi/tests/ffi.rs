@@ -1,6 +1,6 @@
 // SafeMesh — delta-state CRDT convergence, built on crdt-lean.
 // Copyright (C) 2026 Ben Cassie
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: BUSL-1.1
 
 use safemesh_ffi::{
     safemesh_bytes_free, safemesh_gcounter_apply_bump, safemesh_gcounter_delta_to_wire,
