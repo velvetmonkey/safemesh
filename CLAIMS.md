@@ -2,7 +2,7 @@
 
 SafeMesh's verified claim is deliberately narrow:
 
-> In-house CRDT types backed by the Lean suite provably converge under drop, duplication, reordering, and repeated merge. The Rust product body earns that claim only when it continues to pass the Lean-generated differential oracle corpus.
+> In-house CRDT types backed by the Lean suite are provably insensitive to duplicate and reordered delivery, and convergent after missing deltas are eventually recovered by merge/anti-entropy. The Rust product body earns that claim only when it continues to pass the Lean-generated differential oracle corpus.
 
 ## Proven
 
@@ -32,6 +32,6 @@ SafeMesh's verified claim is deliberately narrow:
 
 ## Wording rule
 
-Use: "provably converges", "no lost / duplicated events", "machine-checked", and "re-runnable in your CI".
+Use: "provably converges (once deltas are delivered)", "duplicate delivery does not duplicate modeled state", "machine-checked", and "re-runnable in your CI".
 
 Do not use: "can't corrupt", "unbreakable", "guaranteed delivery", or "a faster Yjs".
