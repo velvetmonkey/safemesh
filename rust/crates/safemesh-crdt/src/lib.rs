@@ -41,6 +41,32 @@ pub trait Crdt: Mergeable {
     fn apply_delta(&mut self, delta: Self::Delta);
 }
 
+/// Error raised by the checked full-state merge (`try_merge`).
+///
+/// The Lean model fixes the replica set (`Fin n`), so a length mismatch is
+/// unrepresentable there. At the Rust boundary an untrusted peer can hand us a
+/// state vector of a different width; merging it by `zip` would silently drop
+/// the trailing coordinates (WS1 silent state loss). The checked path surfaces
+/// the mismatch as an error instead of corrupting state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MergeError {
+    /// The two counters cover a different number of replicas.
+    ReplicaCountMismatch { own: usize, other: usize },
+}
+
+impl core::fmt::Display for MergeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            MergeError::ReplicaCountMismatch { own, other } => write!(
+                f,
+                "replica-count mismatch: own={own}, other={other} (fixed replica set violated)"
+            ),
+        }
+    }
+}
+
+impl core::error::Error for MergeError {}
+
 /// Delta for a grow-only counter: one replica coordinate and its asserted tally.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GCounterDelta {
@@ -117,15 +143,35 @@ impl GCounter {
         Ok(())
     }
 
-    /// Full-state merge: pointwise max — `Crdt.gcounter_merge_apply`. A
-    /// delta replica and a full-state replica fed the same bumps agree:
-    /// `SafeMesh.deltaGCounter_matches_full`.
-    pub fn merge(&mut self, other: &GCounter) {
+    /// Checked full-state merge: pointwise max, erroring on a replica-count
+    /// mismatch instead of silently truncating to the shorter vector (WS1).
+    /// This is the boundary-safe entry point for state received from an
+    /// untrusted peer.
+    pub fn try_merge(&mut self, other: &GCounter) -> Result<(), MergeError> {
+        if self.counts.len() != other.counts.len() {
+            return Err(MergeError::ReplicaCountMismatch {
+                own: self.counts.len(),
+                other: other.counts.len(),
+            });
+        }
         for (c, o) in self.counts.iter_mut().zip(other.counts.iter()) {
             if *o > *c {
                 *c = *o;
             }
         }
+        Ok(())
+    }
+
+    /// Full-state merge: pointwise max — `Crdt.gcounter_merge_apply`. A
+    /// delta replica and a full-state replica fed the same bumps agree:
+    /// `SafeMesh.deltaGCounter_matches_full`.
+    ///
+    /// Infallible variant for the proven equal-length invariant (fixed replica
+    /// set). Panics on a replica-count mismatch rather than dropping state; use
+    /// [`GCounter::try_merge`] for untrusted input.
+    pub fn merge(&mut self, other: &GCounter) {
+        self.try_merge(other)
+            .expect("GCounter::merge requires equal replica counts; use try_merge for untrusted input");
     }
 
     /// Per-coordinate state (the `ι → ℕ` vector).
@@ -268,11 +314,36 @@ impl PnCounter {
         self.n.try_apply_bump(replica, tally)
     }
 
+    /// Checked full-state merge: componentwise checked G-Counter merge,
+    /// erroring on a replica-count mismatch on either side instead of silently
+    /// truncating (WS1). Both sides are length-checked before any mutation, so
+    /// the operation is all-or-nothing: on error `self` is left unchanged.
+    pub fn try_merge(&mut self, other: &PnCounter) -> Result<(), MergeError> {
+        if self.p.state().len() != other.p.state().len() {
+            return Err(MergeError::ReplicaCountMismatch {
+                own: self.p.state().len(),
+                other: other.p.state().len(),
+            });
+        }
+        if self.n.state().len() != other.n.state().len() {
+            return Err(MergeError::ReplicaCountMismatch {
+                own: self.n.state().len(),
+                other: other.n.state().len(),
+            });
+        }
+        self.p.try_merge(&other.p)?;
+        self.n.try_merge(&other.n)?;
+        Ok(())
+    }
+
     /// Full-state merge: componentwise G-Counter merge —
     /// `Crdt.pncounter_merge_apply`.
+    ///
+    /// Infallible variant for the proven equal-length invariant; panics on a
+    /// replica-count mismatch. Use [`PnCounter::try_merge`] for untrusted input.
     pub fn merge(&mut self, other: &PnCounter) {
-        self.p.merge(&other.p);
-        self.n.merge(&other.n);
+        self.try_merge(other)
+            .expect("PnCounter::merge requires equal replica counts; use try_merge for untrusted input");
     }
 
     /// Increment-side state.
