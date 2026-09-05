@@ -127,7 +127,9 @@ theorem replayAgrees :
         simp [step, ha, replay, hcache, Finset.sup_insert, sup_comm]
       · simpa [step, ha] using ih
   refine ⟨invariant, ?_, ?_⟩
-  · decide
+  · -- Unfold the defect predicate and both legacy deliveries explicitly.
+    -- The witness is checked by the kernel, without native evaluation.
+    norm_num [RustDefect, legacyWitness, legacyStep, empty, replay]
   · intro s hs bug
     have eq := congrArg Prod.snd (invariant ℕ s hs)
     rw [bug.2.1, bug.2.2] at eq
