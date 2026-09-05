@@ -1,13 +1,7 @@
 SafeMesh
-Copyright (c) 2026 Ben Cassie. All rights reserved.
+Copyright (c) 2026 Ben Cassie.
 
-This is source-available software licensed under the Business Source License 1.1
-(BUSL-1.1). See LICENSE. Non-commercial use (personal, academic, research,
-evaluation and development) is free; commercial production use requires a
-commercial license from the copyright holder. On the Change Date (2030-07-08)
-each version converts to the Apache License 2.0. See LICENSE-rationale.md.
-
-Commercial licenses are available. Contact the copyright holder.
+SafeMesh is licensed under the Apache License, Version 2.0. See LICENSE.
 
 SafeMesh depends on crdt-lean (https://github.com/velvetmonkey/crdt-lean),
 which is licensed separately under the MIT License.
