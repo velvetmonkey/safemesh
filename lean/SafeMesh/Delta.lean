@@ -1,7 +1,7 @@
 /-
 SafeMesh — delta-state CRDT convergence, built on crdt-lean.
 Copyright (C) 2026 Ben Cassie
-SPDX-License-Identifier: BUSL-1.1
+SPDX-License-Identifier: Apache-2.0
 -/
 import Crdt
 
