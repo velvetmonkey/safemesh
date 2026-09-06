@@ -300,3 +300,85 @@ fn malformed_wire_inputs_fail_closed() {
         Err(WireError::TrailingBytes)
     );
 }
+
+fn orset_delta_cases() -> Vec<safemesh_crdt::OrSetDelta<u64, u64>> {
+    use safemesh_crdt::OrSetDelta::{Add, Remove};
+    vec![
+        Add {
+            element: 0,
+            token: u64::MAX,
+        },
+        Add {
+            element: u64::MAX,
+            token: 0,
+        },
+        Remove { tokens: vec![] },
+        Remove { tokens: vec![42] },
+        Remove {
+            tokens: vec![u64::MAX, 0, 7, 7],
+        },
+    ]
+}
+
+#[test]
+fn orset_delta_roundtrips() {
+    for delta in orset_delta_cases() {
+        roundtrip(delta);
+    }
+}
+
+#[test]
+fn orset_delta_rejects_every_truncation() {
+    for delta in orset_delta_cases() {
+        let bytes = delta.to_wire_bytes().unwrap();
+        for len in 0..bytes.len() {
+            let result = safemesh_crdt::OrSetDelta::<u64, u64>::from_wire_bytes(&bytes[..len]);
+            assert_eq!(
+                result,
+                Err(WireError::UnexpectedEof),
+                "delta {delta:?}, prefix {len}/{}",
+                bytes.len(),
+            );
+        }
+    }
+}
+
+#[test]
+fn orset_delta_rejects_unknown_tags() {
+    for tag in 0..=u8::MAX {
+        if tag == 0x31 || tag == 0x32 {
+            continue;
+        }
+        let result = safemesh_crdt::OrSetDelta::<u64, u64>::from_wire_bytes(&[tag]);
+        assert_eq!(result, Err(WireError::InvalidTag), "tag {tag:#04x}");
+    }
+}
+
+#[test]
+fn orset_delta_rejects_trailing_bytes_and_oversized_counts() {
+    for delta in orset_delta_cases() {
+        let mut bytes = delta.to_wire_bytes().unwrap();
+        bytes.push(0);
+        assert_eq!(
+            safemesh_crdt::OrSetDelta::<u64, u64>::from_wire_bytes(&bytes),
+            Err(WireError::TrailingBytes),
+        );
+    }
+    assert_eq!(
+        safemesh_crdt::OrSetDelta::<u64, u64>::from_wire_bytes(&[0x32, 0xff, 0xff, 0xff, 0xff]),
+        Err(WireError::UnexpectedEof),
+    );
+}
+
+#[test]
+fn orset_delta_roundtrips_in_record_and_event_log() {
+    let mut log = EventLog::new();
+    for delta in orset_delta_cases() {
+        let id = log.append(1, delta.clone());
+        roundtrip(Record { id, delta });
+    }
+    let bytes = log.to_wire_bytes().unwrap();
+    let decoded = EventLog::<safemesh_crdt::OrSetDelta<u64, u64>>::from_wire_bytes(&bytes).unwrap();
+    assert_eq!(decoded.records(), log.records());
+    assert_eq!(decoded.to_wire_bytes().unwrap(), bytes);
+}
