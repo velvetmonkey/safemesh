@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/safemesh-hero.png" alt="SafeMesh: replicate, tolerate, converge. Distributed state for a more resilient world."></p>
+
 # SafeMesh
 
 [![SafeMesh CI](https://github.com/velvetmonkey/safemesh/actions/workflows/ci.yml/badge.svg)](https://github.com/velvetmonkey/safemesh/actions/workflows/ci.yml)
