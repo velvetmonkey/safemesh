@@ -54,6 +54,14 @@ jobs:
         with:
           lake-package-directory: lean
 
+      - name: Check Lean corpus freshness
+        working-directory: lean
+        run: |
+          lake build corpus
+          .lake/build/bin/corpus > "$RUNNER_TEMP/safemesh-corpus.json"
+          diff -u --label committed/corpus.json --label regenerated/corpus.json \
+            ../rust/crates/safemesh-crdt/tests/corpus.json "$RUNNER_TEMP/safemesh-corpus.json"
+
       - name: Install distribution tools
         run: |
           if ! command -v wasm-pack >/dev/null 2>&1; then
