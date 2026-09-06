@@ -382,3 +382,151 @@ fn orset_delta_roundtrips_in_record_and_event_log() {
     assert_eq!(decoded.records(), log.records());
     assert_eq!(decoded.to_wire_bytes().unwrap(), bytes);
 }
+
+fn orset_utf8_cases() -> Vec<safemesh_crdt::OrSetDelta<String, u64>> {
+    use safemesh_crdt::OrSetDelta::{Add, Remove};
+    let mut cases: Vec<_> = ["", "ASCII", "é東京🦀", "a\0b", &"界".repeat(4096)]
+        .into_iter()
+        .enumerate()
+        .map(|(i, element)| Add {
+            element: element.to_owned(),
+            token: if i == 0 { u64::MAX } else { i as u64 },
+        })
+        .collect();
+    // Each Add has one token; many Adds and one Remove exercise a large token set.
+    cases.extend((0..128).map(|token| Add {
+        element: "shared 🦀".to_owned(),
+        token,
+    }));
+    cases.push(Remove { tokens: vec![] });
+    cases.push(Remove { tokens: vec![0] });
+    cases.push(Remove {
+        tokens: (0..128).rev().chain([7, 7, u64::MAX]).collect(),
+    });
+    cases
+}
+
+#[test]
+fn orset_utf8_roundtrips_and_rejects_every_truncation() {
+    use safemesh_crdt::OrSetDelta;
+    let cases = orset_utf8_cases();
+    let mut truncations = 0;
+    for delta in &cases {
+        let bytes = delta.to_wire_bytes().unwrap();
+        assert_eq!(
+            OrSetDelta::<String, u64>::from_wire_bytes(&bytes),
+            Ok(delta.clone())
+        );
+        for len in 0..bytes.len() {
+            let result = std::panic::catch_unwind(|| {
+                OrSetDelta::<String, u64>::from_wire_bytes(&bytes[..len])
+            });
+            assert!(result.is_ok(), "panic at prefix {len}");
+            assert_eq!(result.unwrap(), Err(WireError::UnexpectedEof));
+            truncations += 1;
+        }
+    }
+    println!("roundtrip-cases {}, roundtrip-failures 0, truncation-cases {truncations}, truncation-all-err yes, panics 0", cases.len());
+}
+
+#[test]
+fn orset_utf8_rejects_invalid_utf8_without_panicking() {
+    use safemesh_crdt::OrSetDelta;
+    // Isolated continuation, overlong, incomplete, surrogate, out-of-range, invalid lead.
+    let payloads: &[&[u8]] = &[
+        &[0x80],
+        &[0xc0, 0xaf],
+        &[0xe2, 0x82],
+        &[0xed, 0xa0, 0x80],
+        &[0xf4, 0x90, 0x80, 0x80],
+        &[0xff],
+    ];
+    for payload in payloads {
+        let mut bytes = vec![0x33];
+        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(payload);
+        bytes.extend_from_slice(&42u64.to_le_bytes());
+        let result =
+            std::panic::catch_unwind(|| OrSetDelta::<String, u64>::from_wire_bytes(&bytes));
+        assert!(result.is_ok(), "decoder panicked for {payload:02x?}");
+        let decoded = result.unwrap();
+        assert_eq!(decoded, Err(WireError::InvalidUtf8));
+        println!("payload {payload:02x?}: {decoded:?}, panicked false");
+    }
+    println!(
+        "invalid-utf8-cases {}, invalid-utf8-all-err yes, panics 0",
+        payloads.len()
+    );
+}
+
+#[test]
+fn orset_utf8_rejects_length_lies_tags_and_trailing_bytes() {
+    use safemesh_crdt::OrSetDelta;
+    for tag in [0x33, 0x34] {
+        for length in [16u32, u32::MAX] {
+            let mut bytes = vec![tag];
+            bytes.extend_from_slice(&length.to_le_bytes());
+            bytes.extend_from_slice(&[0; 8]);
+            let result =
+                std::panic::catch_unwind(|| OrSetDelta::<String, u64>::from_wire_bytes(&bytes));
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), Err(WireError::UnexpectedEof));
+        }
+    }
+    for tag in 0..=u8::MAX {
+        if tag != 0x33 && tag != 0x34 {
+            assert_eq!(
+                OrSetDelta::<String, u64>::from_wire_bytes(&[tag]),
+                Err(WireError::InvalidTag)
+            );
+        }
+    }
+    for delta in orset_utf8_cases() {
+        let mut bytes = delta.to_wire_bytes().unwrap();
+        assert_eq!(
+            OrSetDelta::<u64, u64>::from_wire_bytes(&bytes),
+            Err(WireError::InvalidTag)
+        );
+        bytes.push(0);
+        assert_eq!(
+            OrSetDelta::<String, u64>::from_wire_bytes(&bytes),
+            Err(WireError::TrailingBytes)
+        );
+    }
+    for delta in orset_delta_cases() {
+        assert_eq!(
+            OrSetDelta::<String, u64>::from_wire_bytes(&delta.to_wire_bytes().unwrap()),
+            Err(WireError::InvalidTag)
+        );
+    }
+    println!("length-lie-cases 4, length-lie-all-err yes");
+}
+
+#[test]
+fn orset_utf8_wire_shape_and_record_roundtrips() {
+    use safemesh_crdt::OrSetDelta;
+    let add = OrSetDelta::Add {
+        element: "é".to_owned(),
+        token: 42u64,
+    };
+    assert_eq!(
+        add.to_wire_bytes().unwrap(),
+        vec![0x33, 2, 0, 0, 0, 0xc3, 0xa9, 42, 0, 0, 0, 0, 0, 0, 0]
+    );
+    let remove: OrSetDelta<String, u64> = OrSetDelta::Remove {
+        tokens: vec![42, 42],
+    };
+    assert_eq!(
+        remove.to_wire_bytes().unwrap(),
+        vec![0x34, 2, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0]
+    );
+    let mut log = EventLog::new();
+    for delta in orset_utf8_cases() {
+        let id = log.append(1, delta.clone());
+        roundtrip(Record { id, delta });
+    }
+    let bytes = log.to_wire_bytes().unwrap();
+    let decoded = EventLog::<OrSetDelta<String, u64>>::from_wire_bytes(&bytes).unwrap();
+    assert_eq!(decoded.records(), log.records());
+    assert_eq!(decoded.to_wire_bytes().unwrap(), bytes);
+}

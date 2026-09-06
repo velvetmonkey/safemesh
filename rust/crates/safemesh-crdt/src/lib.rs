@@ -21,6 +21,7 @@
 
 extern crate alloc;
 use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -1194,6 +1195,8 @@ const TAG_GSET_U64: u8 = 0x20;
 const TAG_ORSET_U64: u8 = 0x30;
 const TAG_ORSET_ADD_U64: u8 = 0x31;
 const TAG_ORSET_REMOVE_U64: u8 = 0x32;
+const TAG_ORSET_ADD_STRING: u8 = 0x33;
+const TAG_ORSET_REMOVE_STRING: u8 = 0x34;
 const TAG_RGA_U64: u8 = 0x40;
 const TAG_LWW_REGISTER_DELTA_U64: u8 = 0x50;
 const TAG_LWW_REGISTER_U64: u8 = 0x51;
@@ -1211,6 +1214,7 @@ pub enum WireError {
     TrailingBytes,
     LengthOverflow,
     RecordCollision,
+    InvalidUtf8,
 }
 
 pub trait WireEncode {
@@ -1430,6 +1434,54 @@ impl WireDecode for OrSetDelta<u64, u64> {
                 token: cursor.read_u64()?,
             }),
             TAG_ORSET_REMOVE_U64 => {
+                let mut tokens = Vec::new();
+                for _ in 0..cursor.read_len()? {
+                    tokens.push(cursor.read_u64()?);
+                }
+                Ok(OrSetDelta::Remove { tokens })
+            }
+            _ => Err(WireError::InvalidTag),
+        }
+    }
+}
+
+// UTF-8 delta tags are distinct from the u64 delta tags, including Remove.
+// Add carries a byte-length-prefixed UTF-8 element followed by a u64 token;
+// Remove carries a token count followed by u64 tokens in their original order.
+impl WireEncode for OrSetDelta<String, u64> {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        match self {
+            OrSetDelta::Add { element, token } => {
+                write_u8(out, TAG_ORSET_ADD_STRING);
+                write_bytes(out, element.as_bytes())?;
+                write_u64(out, *token);
+            }
+            OrSetDelta::Remove { tokens } => {
+                write_u8(out, TAG_ORSET_REMOVE_STRING);
+                write_len(out, tokens.len())?;
+                for token in tokens {
+                    write_u64(out, *token);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl WireDecode for OrSetDelta<String, u64> {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        match cursor.read_u8()? {
+            TAG_ORSET_ADD_STRING => {
+                let len = cursor.read_len()?;
+                let element = core::str::from_utf8(cursor.read_exact(len)?)
+                    .map_err(|_| WireError::InvalidUtf8)?;
+                let token = cursor.read_u64()?;
+                Ok(OrSetDelta::Add {
+                    element: String::from(element),
+                    token,
+                })
+            }
+            TAG_ORSET_REMOVE_STRING => {
                 let mut tokens = Vec::new();
                 for _ in 0..cursor.read_len()? {
                     tokens.push(cursor.read_u64()?);
