@@ -1192,6 +1192,8 @@ const TAG_PNCOUNTER_INC: u8 = 0x11;
 const TAG_PNCOUNTER_DEC: u8 = 0x12;
 const TAG_GSET_U64: u8 = 0x20;
 const TAG_ORSET_U64: u8 = 0x30;
+const TAG_ORSET_ADD_U64: u8 = 0x31;
+const TAG_ORSET_REMOVE_U64: u8 = 0x32;
 const TAG_RGA_U64: u8 = 0x40;
 const TAG_LWW_REGISTER_DELTA_U64: u8 = 0x50;
 const TAG_LWW_REGISTER_U64: u8 = 0x51;
@@ -1396,6 +1398,46 @@ impl WireDecode for GSet<u64> {
             set.insert(cursor.read_u64()?);
         }
         Ok(set)
+    }
+}
+
+impl WireEncode for OrSetDelta<u64, u64> {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        match self {
+            OrSetDelta::Add { element, token } => {
+                write_u8(out, TAG_ORSET_ADD_U64);
+                write_u64(out, *element);
+                write_u64(out, *token);
+            }
+            OrSetDelta::Remove { tokens } => {
+                write_u8(out, TAG_ORSET_REMOVE_U64);
+                write_len(out, tokens.len())?;
+                // Preserve order and duplicates for exact delta round trips.
+                for token in tokens {
+                    write_u64(out, *token);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl WireDecode for OrSetDelta<u64, u64> {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        match cursor.read_u8()? {
+            TAG_ORSET_ADD_U64 => Ok(OrSetDelta::Add {
+                element: cursor.read_u64()?,
+                token: cursor.read_u64()?,
+            }),
+            TAG_ORSET_REMOVE_U64 => {
+                let mut tokens = Vec::new();
+                for _ in 0..cursor.read_len()? {
+                    tokens.push(cursor.read_u64()?);
+                }
+                Ok(OrSetDelta::Remove { tokens })
+            }
+            _ => Err(WireError::InvalidTag),
+        }
     }
 }
 
