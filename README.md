@@ -1,8 +1,12 @@
+<p align="center"><img src="assets/safemesh-logo.png" width="150" alt="SafeMesh"></p>
+
 # SafeMesh
 
 [![SafeMesh CI](https://github.com/velvetmonkey/safemesh/actions/workflows/ci.yml/badge.svg)](https://github.com/velvetmonkey/safemesh/actions/workflows/ci.yml)
 
 Lean-backed CRDT convergence for small, embeddable state sync.
+
+<p align="center"><img src="assets/safemesh-hero.png" alt="Five replicas each holding a version vector. A network partition splits them, deltas keep flowing on both sides, and the replicas merge back to the same state."></p>
 
 SafeMesh v0.1 packages one Rust core behind Rust, C ABI, WASM/TypeScript, and Python surfaces. The verified claim is intentionally narrow: G-Set, G-Counter, PN-Counter, OR-Set, and RGA/Text are backed by Lean proofs and by Rust differential tests against a Lean-generated oracle corpus. `EventLog`, wire encoding, bindings, demos, LWW Register, Enable-wins Flag, and LWW Map are engineered and tested product surfaces, not separate Lean proofs.
 
