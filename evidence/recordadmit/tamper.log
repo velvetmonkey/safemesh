@@ -1,0 +1,22 @@
+   Compiling safemesh-crdt v0.1.0 (/home/monkey/src/safemesh-recordadmit/rust/crates/safemesh-crdt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
+     Running tests/record_admission.rs (rust/target/debug/deps/record_admission-0d59bc57fc778495)
+
+running 1 test
+id (1,1): tally 5 -> Accepted; tally 9 -> Collision; live 9; replay 5
+
+thread 'record_1_1_live_and_replay' (1961601) panicked at crates/safemesh-crdt/tests/record_admission.rs:32:5:
+assertion `left == right` failed
+  left: 9
+ right: 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test record_1_1_live_and_replay ... FAILED
+
+failures:
+
+failures:
+    record_1_1_live_and_replay
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p safemesh-crdt --test record_admission`

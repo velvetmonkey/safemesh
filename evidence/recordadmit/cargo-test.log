@@ -1,0 +1,184 @@
+   Compiling safemesh-crdt v0.1.0 (/home/monkey/src/safemesh-recordadmit/rust/crates/safemesh-crdt)
+   Compiling safemesh-ffi v0.1.0 (/home/monkey/src/safemesh-recordadmit/rust/crates/safemesh-ffi)
+   Compiling safemesh-wasm v0.1.0 (/home/monkey/src/safemesh-recordadmit/rust/crates/safemesh-wasm)
+   Compiling safemesh-python v0.1.0 (/home/monkey/src/safemesh-recordadmit/rust/crates/safemesh-python)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.12s
+     Running unittests src/lib.rs (rust/target/debug/deps/safemesh_crdt-0125fa0041b26769)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/conformance.rs (rust/target/debug/deps/conformance-1c14111a2f28691a)
+
+running 7 tests
+test corpus_is_the_expected_schema ... ok
+test gcounter_matches_lean_oracle ... ok
+test gset_matches_lean_oracle ... ok
+test orset_matches_lean_oracle ... ok
+test pncounter_matches_lean_oracle ... ok
+test rga_matches_lean_oracle ... ok
+test split_delivery_merge_agrees_with_oracle ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/core_api.rs (rust/target/debug/deps/core_api-474c78460a12b920)
+
+running 8 tests
+test counter_traits_preserve_existing_behavior ... ok
+test enable_wins_flag_keeps_concurrent_enable_live ... ok
+test event_log_deduplicates_and_serves_since_version ... ok
+test event_log_version_does_not_hide_out_of_order_gaps ... ok
+test lww_map_tracks_value_and_remove_dots_per_key ... ok
+test lww_register_uses_total_ordered_winner ... ok
+test orset_delta_is_add_wins ... ok
+test rga_read_is_sorted_by_position_not_delivery ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/laws.rs (rust/target/debug/deps/laws-4d9f5b696daa5f25)
+
+running 2 tests
+test convergence_harness_hammers_delta_delivery_shapes ... GCounter convergence scenarios: 8
+PnCounter convergence scenarios: 8
+OrSet convergence scenarios: 8
+Rga convergence scenarios: 8
+LwwRegister convergence scenarios: 8
+EnableWinsFlag convergence scenarios: 8
+LwwMap convergence scenarios: 8
+ok
+test merge_laws_hold_for_in_house_samples ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/record_admission.rs (rust/target/debug/deps/record_admission-8cafbac8228b78f8)
+
+running 4 tests
+test decoder_surfaces_conflicts_before_deduplication ... ok
+test duplicates_and_collisions_do_not_invoke_application ... ok
+test local_append_handles_gaps_and_exhaustion_without_unlogged_application ... ok
+test record_1_1_live_and_replay ... id (1,1): tally 5 -> Accepted; tally 9 -> Collision; live 5; replay 5
+ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/transport.rs (rust/target/debug/deps/transport-0d7465a6780c2415)
+
+running 3 tests
+test anti_entropy_recovers_after_drop_duplicate_and_reorder ... ok
+test partition_then_heal_uses_versions_to_cover_missing_records ... ok
+test transport_requires_subscription_and_connectivity ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/wire.rs (rust/target/debug/deps/wire-404302d7768a6375)
+
+running 8 tests
+test canonical_state_encodings_are_sorted ... ok
+test enable_wins_flag_wire_is_stable_and_roundtrips ... ok
+test event_log_roundtrips_and_preserves_deduped_records ... ok
+test gcounter_delta_has_stable_canonical_bytes ... ok
+test lww_map_wire_is_stable_and_roundtrips ... ok
+test lww_register_wire_is_stable_and_roundtrips ... ok
+test malformed_wire_inputs_fail_closed ... ok
+test record_frames_delta_with_length_prefix ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (rust/target/debug/deps/safemesh_ffi-73b7b45d9172fca3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/ffi.rs (rust/target/debug/deps/ffi-cebfebd74b8b371c)
+
+running 2 tests
+test c_abi_exports_wire_bytes ... ok
+test c_abi_gcounter_smoke_test ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/header.rs (rust/target/debug/deps/header-e371fbe99dc19539)
+
+running 1 test
+test committed_header_has_not_drifted ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (rust/target/debug/deps/safemesh_python-6d0a68a7032de7b3)
+
+running 14 tests
+test admission_tests::all_replica_bindings_reject_conflicting_records_and_logs ... ok
+test admission_tests::invalid_counter_coordinates_are_rejected_before_admission ... ok
+test tests::python_counter_calls_rust_core ... ok
+test tests::python_enable_wins_flag_calls_rust_core ... ok
+test tests::python_enable_wins_flag_wire_helpers_use_canonical_bytes ... ok
+test tests::python_flag_replicas_exchange_canonical_record_bytes ... ok
+test tests::python_lww_map_calls_rust_core ... ok
+test tests::python_lww_map_replicas_exchange_canonical_record_bytes ... ok
+test tests::python_lww_map_wire_helpers_use_canonical_bytes ... ok
+test tests::python_lww_register_calls_rust_core ... ok
+test tests::python_lww_replicas_exchange_canonical_record_bytes ... ok
+test tests::python_lww_wire_helper_uses_canonical_bytes ... ok
+test tests::python_replicas_exchange_canonical_record_bytes ... ok
+test tests::python_wire_helper_uses_canonical_bytes ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/pyproject.rs (rust/target/debug/deps/pyproject-41944df8db53e23d)
+
+running 1 test
+test pyproject_declares_maturin_pyo3_binding ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (rust/target/debug/deps/safemesh_wasm-75577b027e794441)
+
+running 12 tests
+test tests::wasm_counter_calls_rust_core ... ok
+test tests::wasm_enable_wins_flag_calls_rust_core ... ok
+test tests::wasm_enable_wins_flag_wire_helpers_use_canonical_bytes ... ok
+test tests::wasm_flag_replicas_exchange_canonical_record_bytes ... ok
+test tests::wasm_lww_map_calls_rust_core ... ok
+test tests::wasm_lww_map_replicas_exchange_canonical_record_bytes ... ok
+test tests::wasm_lww_map_wire_helpers_use_canonical_bytes ... ok
+test tests::wasm_lww_register_calls_rust_core ... ok
+test tests::wasm_lww_replicas_exchange_canonical_record_bytes ... ok
+test tests::wasm_lww_wire_helper_uses_canonical_bytes ... ok
+test tests::wasm_replicas_exchange_canonical_record_bytes ... ok
+test tests::wasm_wire_helper_uses_canonical_bytes ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/typescript.rs (rust/target/debug/deps/typescript-1f9b167412d2dc6a)
+
+running 1 test
+test typescript_surface_lists_the_public_binding ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests safemesh_crdt
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests safemesh_ffi
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests safemesh_python
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests safemesh_wasm
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

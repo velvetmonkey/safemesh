@@ -257,12 +257,19 @@ impl SafeMeshGCounterReplica {
 
     #[wasm_bindgen(js_name = appendBump)]
     pub fn append_bump(&mut self, counter_replica: usize, tally: u64) -> Result<Vec<u8>, JsValue> {
+        if counter_replica >= self.state.len() {
+            return Err(JsValue::from_str("counter replica out of range"));
+        }
         let delta = GCounterDelta {
             replica: counter_replica,
             tally,
         };
-        self.state.apply_bump(delta.replica, delta.tally);
-        let id = self.log.append(self.replica_id, delta.clone());
+        let id = self
+            .log
+            .append_with(self.replica_id, delta.clone(), |delta| {
+                self.state.apply_delta(delta.clone());
+            })
+            .map_err(|_| JsValue::from_str("event log sequence exhausted"))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| JsValue::from_str("failed to encode record"))
@@ -272,20 +279,40 @@ impl SafeMeshGCounterReplica {
     pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
         let record = Record::<GCounterDelta>::from_wire_bytes(bytes)
             .map_err(|_| JsValue::from_str("failed to decode record"))?;
-        self.state
-            .apply_bump(record.delta.replica, record.delta.tally);
-        self.log.merge_records([record]);
+        if record.delta.replica >= self.state.len() {
+            return Err(JsValue::from_str("counter replica out of range"));
+        }
+        if self.log.admit_with(record, |delta| {
+            self.state.apply_delta(delta.clone());
+        }) == safemesh_crdt::Admission::Collision
+        {
+            return Err(JsValue::from_str("record ID collision"));
+        }
         Ok(())
     }
 
     #[wasm_bindgen(js_name = mergeLogBytes)]
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
-        let log = EventLog::<GCounterDelta>::from_wire_bytes(bytes)
-            .map_err(|_| JsValue::from_str("failed to decode event log"))?;
+        let log = EventLog::<GCounterDelta>::from_wire_bytes(bytes).map_err(|error| {
+            JsValue::from_str(match error {
+                safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                _ => "failed to decode event log",
+            })
+        })?;
+        if log
+            .records()
+            .iter()
+            .any(|r| r.delta.replica >= self.state.len())
+        {
+            return Err(JsValue::from_str("counter replica out of range"));
+        }
         for record in log.records().iter().cloned() {
-            self.state
-                .apply_bump(record.delta.replica, record.delta.tally);
-            self.log.merge_records([record]);
+            if self.log.admit_with(record, |delta| {
+                self.state.apply_delta(delta.clone());
+            }) == safemesh_crdt::Admission::Collision
+            {
+                return Err(JsValue::from_str("record ID collision"));
+            }
         }
         Ok(())
     }
@@ -333,8 +360,12 @@ impl SafeMeshEnableWinsFlagReplica {
     #[wasm_bindgen(js_name = appendEnable)]
     pub fn append_enable(&mut self, token: u64) -> Result<Vec<u8>, JsValue> {
         let delta = EnableWinsFlagDelta::Enable { token };
-        self.state.apply_delta(delta.clone());
-        let id = self.log.append(self.replica_id, delta.clone());
+        let id = self
+            .log
+            .append_with(self.replica_id, delta.clone(), |delta| {
+                self.state.apply_delta(delta.clone());
+            })
+            .map_err(|_| JsValue::from_str("event log sequence exhausted"))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| JsValue::from_str("failed to encode record"))
@@ -345,8 +376,12 @@ impl SafeMeshEnableWinsFlagReplica {
         let delta = EnableWinsFlagDelta::Disable {
             tokens: self.state.observed_tokens().into_iter().collect(),
         };
-        self.state.apply_delta(delta.clone());
-        let id = self.log.append(self.replica_id, delta.clone());
+        let id = self
+            .log
+            .append_with(self.replica_id, delta.clone(), |delta| {
+                self.state.apply_delta(delta.clone());
+            })
+            .map_err(|_| JsValue::from_str("event log sequence exhausted"))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| JsValue::from_str("failed to encode record"))
@@ -356,18 +391,31 @@ impl SafeMeshEnableWinsFlagReplica {
     pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
         let record = Record::<EnableWinsFlagDelta<u64>>::from_wire_bytes(bytes)
             .map_err(|_| JsValue::from_str("failed to decode record"))?;
-        self.state.apply_delta(record.delta.clone());
-        self.log.merge_records([record]);
+        if self.log.admit_with(record, |delta| {
+            self.state.apply_delta(delta.clone());
+        }) == safemesh_crdt::Admission::Collision
+        {
+            return Err(JsValue::from_str("record ID collision"));
+        }
         Ok(())
     }
 
     #[wasm_bindgen(js_name = mergeLogBytes)]
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
-        let log = EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes(bytes)
-            .map_err(|_| JsValue::from_str("failed to decode event log"))?;
+        let log =
+            EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes(bytes).map_err(|error| {
+                JsValue::from_str(match error {
+                    safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                    _ => "failed to decode event log",
+                })
+            })?;
         for record in log.records().iter().cloned() {
-            self.state.apply_delta(record.delta.clone());
-            self.log.merge_records([record]);
+            if self.log.admit_with(record, |delta| {
+                self.state.apply_delta(delta.clone());
+            }) == safemesh_crdt::Admission::Collision
+            {
+                return Err(JsValue::from_str("record ID collision"));
+            }
         }
         Ok(())
     }
@@ -431,8 +479,12 @@ impl SafeMeshLwwMapReplica {
             replica: writer_replica,
             value,
         };
-        self.state.apply_delta(delta.clone());
-        let id = self.log.append(self.replica_id, delta.clone());
+        let id = self
+            .log
+            .append_with(self.replica_id, delta.clone(), |delta| {
+                self.state.apply_delta(delta.clone());
+            })
+            .map_err(|_| JsValue::from_str("event log sequence exhausted"))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| JsValue::from_str("failed to encode record"))
@@ -450,8 +502,12 @@ impl SafeMeshLwwMapReplica {
             timestamp,
             replica: writer_replica,
         };
-        self.state.apply_delta(delta.clone());
-        let id = self.log.append(self.replica_id, delta.clone());
+        let id = self
+            .log
+            .append_with(self.replica_id, delta.clone(), |delta| {
+                self.state.apply_delta(delta.clone());
+            })
+            .map_err(|_| JsValue::from_str("event log sequence exhausted"))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| JsValue::from_str("failed to encode record"))
@@ -461,18 +517,30 @@ impl SafeMeshLwwMapReplica {
     pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
         let record = Record::<LwwMapDelta<u64, u64>>::from_wire_bytes(bytes)
             .map_err(|_| JsValue::from_str("failed to decode record"))?;
-        self.state.apply_delta(record.delta.clone());
-        self.log.merge_records([record]);
+        if self.log.admit_with(record, |delta| {
+            self.state.apply_delta(delta.clone());
+        }) == safemesh_crdt::Admission::Collision
+        {
+            return Err(JsValue::from_str("record ID collision"));
+        }
         Ok(())
     }
 
     #[wasm_bindgen(js_name = mergeLogBytes)]
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
-        let log = EventLog::<LwwMapDelta<u64, u64>>::from_wire_bytes(bytes)
-            .map_err(|_| JsValue::from_str("failed to decode event log"))?;
+        let log = EventLog::<LwwMapDelta<u64, u64>>::from_wire_bytes(bytes).map_err(|error| {
+            JsValue::from_str(match error {
+                safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                _ => "failed to decode event log",
+            })
+        })?;
         for record in log.records().iter().cloned() {
-            self.state.apply_delta(record.delta.clone());
-            self.log.merge_records([record]);
+            if self.log.admit_with(record, |delta| {
+                self.state.apply_delta(delta.clone());
+            }) == safemesh_crdt::Admission::Collision
+            {
+                return Err(JsValue::from_str("record ID collision"));
+            }
         }
         Ok(())
     }
@@ -545,8 +613,12 @@ impl SafeMeshLwwRegisterReplica {
             replica: writer_replica,
             value,
         };
-        self.state.set(delta.timestamp, delta.replica, delta.value);
-        let id = self.log.append(self.replica_id, delta.clone());
+        let id = self
+            .log
+            .append_with(self.replica_id, delta.clone(), |delta| {
+                self.state.apply_delta(delta.clone());
+            })
+            .map_err(|_| JsValue::from_str("event log sequence exhausted"))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| JsValue::from_str("failed to encode record"))
@@ -556,26 +628,30 @@ impl SafeMeshLwwRegisterReplica {
     pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
         let record = Record::<LwwRegisterDelta<u64>>::from_wire_bytes(bytes)
             .map_err(|_| JsValue::from_str("failed to decode record"))?;
-        self.state.set(
-            record.delta.timestamp,
-            record.delta.replica,
-            record.delta.value,
-        );
-        self.log.merge_records([record]);
+        if self.log.admit_with(record, |delta| {
+            self.state.apply_delta(delta.clone());
+        }) == safemesh_crdt::Admission::Collision
+        {
+            return Err(JsValue::from_str("record ID collision"));
+        }
         Ok(())
     }
 
     #[wasm_bindgen(js_name = mergeLogBytes)]
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
-        let log = EventLog::<LwwRegisterDelta<u64>>::from_wire_bytes(bytes)
-            .map_err(|_| JsValue::from_str("failed to decode event log"))?;
+        let log = EventLog::<LwwRegisterDelta<u64>>::from_wire_bytes(bytes).map_err(|error| {
+            JsValue::from_str(match error {
+                safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                _ => "failed to decode event log",
+            })
+        })?;
         for record in log.records().iter().cloned() {
-            self.state.set(
-                record.delta.timestamp,
-                record.delta.replica,
-                record.delta.value,
-            );
-            self.log.merge_records([record]);
+            if self.log.admit_with(record, |delta| {
+                self.state.apply_delta(delta.clone());
+            }) == safemesh_crdt::Admission::Collision
+            {
+                return Err(JsValue::from_str("record ID collision"));
+            }
         }
         Ok(())
     }

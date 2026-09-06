@@ -853,11 +853,24 @@ impl VersionVector {
     }
 }
 
+/// Full decoded payload equality distinguishes redelivery from an ID collision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Admission {
+    Accepted,
+    Duplicate,
+    Collision,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AppendError {
+    SequenceExhausted,
+}
+
 /// Append-only, deduplicating event log for CRDT deltas.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EventLog<D> {
     records: Vec<Record<D>>,
-    seen: BTreeSet<RecordId>,
+    seen: BTreeMap<RecordId, usize>,
     version: VersionVector,
 }
 
@@ -865,27 +878,82 @@ impl<D> EventLog<D> {
     pub fn new() -> Self {
         EventLog {
             records: Vec::new(),
-            seen: BTreeSet::new(),
+            seen: BTreeMap::new(),
             version: VersionVector::new(),
         }
     }
 
-    pub fn append(&mut self, replica: u64, delta: D) -> RecordId {
-        let id = RecordId {
-            replica,
-            sequence: self.version.get(replica) + 1,
-        };
-        self.insert_record(Record { id, delta });
-        id
+    pub fn append(&mut self, replica: u64, delta: D) -> RecordId
+    where
+        D: PartialEq,
+    {
+        self.append_with(replica, delta, |_| {})
+            .expect("event log sequence exhausted")
     }
 
-    pub fn merge_records<I>(&mut self, records: I)
+    /// Allocate a fresh ID, then use the same gate as incoming records.
+    pub fn append_with<F>(
+        &mut self,
+        replica: u64,
+        delta: D,
+        apply: F,
+    ) -> Result<RecordId, AppendError>
     where
+        D: PartialEq,
+        F: FnOnce(&D),
+    {
+        let sequence = self
+            .seen
+            .range(
+                RecordId {
+                    replica,
+                    sequence: 0,
+                }..=RecordId {
+                    replica,
+                    sequence: u64::MAX,
+                },
+            )
+            .next_back()
+            .map(|(id, _)| id.sequence)
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or(AppendError::SequenceExhausted)?;
+        let id = RecordId { replica, sequence };
+        let outcome = self.admit_with(Record { id, delta }, apply);
+        debug_assert_eq!(outcome, Admission::Accepted);
+        Ok(id)
+    }
+
+    pub fn merge_records<I>(&mut self, records: I) -> Vec<Admission>
+    where
+        D: PartialEq,
         I: IntoIterator<Item = Record<D>>,
     {
-        for record in records {
-            self.insert_record(record);
+        records.into_iter().map(|r| self.insert_record(r)).collect()
+    }
+
+    /// The sole record admission decision. Only Accepted invokes `apply`.
+    /// The callback must be infallible and use the same delta interpretation as
+    /// replay. This is an in-memory transition, not a crash-durability guarantee.
+    #[must_use]
+    pub fn admit_with<F>(&mut self, record: Record<D>, apply: F) -> Admission
+    where
+        D: PartialEq,
+        F: FnOnce(&D),
+    {
+        if let Some(&index) = self.seen.get(&record.id) {
+            return if self.records[index].delta == record.delta {
+                Admission::Duplicate
+            } else {
+                Admission::Collision
+            };
         }
+        let id = record.id;
+        self.seen.insert(id, self.records.len());
+        self.records.push(record);
+        self.advance_contiguous_version(id.replica);
+        apply(&self.records.last().expect("accepted record").delta);
+        Admission::Accepted
     }
 
     pub fn version(&self) -> &VersionVector {
@@ -896,12 +964,11 @@ impl<D> EventLog<D> {
         &self.records
     }
 
-    fn insert_record(&mut self, record: Record<D>) {
-        let id = record.id;
-        if self.seen.insert(id) {
-            self.records.push(record);
-            self.advance_contiguous_version(id.replica);
-        }
+    pub fn insert_record(&mut self, record: Record<D>) -> Admission
+    where
+        D: PartialEq,
+    {
+        self.admit_with(record, |_| {})
     }
 
     fn advance_contiguous_version(&mut self, replica: u64) {
@@ -909,7 +976,7 @@ impl<D> EventLog<D> {
             let Some(next) = self.version.get(replica).checked_add(1) else {
                 break;
             };
-            if self.seen.contains(&RecordId {
+            if self.seen.contains_key(&RecordId {
                 replica,
                 sequence: next,
             }) {
@@ -1141,6 +1208,7 @@ pub enum WireError {
     InvalidTag,
     TrailingBytes,
     LengthOverflow,
+    RecordCollision,
 }
 
 pub trait WireEncode {
@@ -1432,14 +1500,18 @@ impl<D: WireEncode> WireEncode for EventLog<D> {
     }
 }
 
-impl<D: WireDecode> WireDecode for EventLog<D> {
+impl<D: WireDecode + PartialEq> WireDecode for EventLog<D> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
         read_tag(cursor, TAG_EVENT_LOG)?;
         let mut log = EventLog::new();
         for _ in 0..cursor.read_len()? {
             let record_len = cursor.read_len()?;
             let record_bytes = cursor.read_exact(record_len)?;
-            log.merge_records([Record::<D>::from_wire_bytes(record_bytes)?]);
+            if log.insert_record(Record::<D>::from_wire_bytes(record_bytes)?)
+                == Admission::Collision
+            {
+                return Err(WireError::RecordCollision);
+            }
         }
         Ok(log)
     }

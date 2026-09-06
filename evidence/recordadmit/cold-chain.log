@@ -1,0 +1,12 @@
+   Compiling safemesh-crdt v0.1.0 (/home/monkey/src/safemesh-recordadmit/rust/crates/safemesh-crdt)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running `rust/target/debug/examples/cold_chain_kill_test`
+SafeMesh cold-chain kill-test
+vertical=field-science-cold-chain software_only=true
+phase=drop+duplicate+reorder transport=InMemoryTransport
+phase=partition groups=[clinic,courier]|[lab]
+cross_partition_blocked=true
+converged_during_partition=false
+phase=heal anti_entropy=EventLog::since(version_vector)
+CONVERGED=true samples=[9001] active_holders=["lab"] active_alerts=["temperature_excursion"] audit=["sample_collected", "courier_pickup", "freezer_power_blip", "lab_receipt"] event_count=4
+KILL_TEST_PASS=true questions=10
