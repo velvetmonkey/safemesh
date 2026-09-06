@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/safemesh-logo.png" width="150" alt="SafeMesh"></p>
+<p align="center"><img src="assets/safemesh-logo.png" width="300" alt="SafeMesh"></p>
 
 # SafeMesh
 
