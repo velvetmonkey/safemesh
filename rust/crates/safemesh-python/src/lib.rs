@@ -286,12 +286,21 @@ impl PyGCounterReplica {
         counter_replica: usize,
         tally: u64,
     ) -> PyResult<Bound<'py, PyBytes>> {
+        if counter_replica >= self.state.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "counter replica out of range",
+            ));
+        }
         let delta = GCounterDelta {
             replica: counter_replica,
             tally,
         };
-        self.state.apply_bump(delta.replica, delta.tally);
-        let id = self.log.append(self.replica_id, delta.clone());
+        let id = self
+            .log
+            .append_with(self.replica_id, delta.clone(), |delta| {
+                self.state.apply_delta(delta.clone());
+            })
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("event log sequence exhausted"))?;
         encode_bytes(
             py,
             Record { id, delta }.to_wire_bytes(),
@@ -302,19 +311,47 @@ impl PyGCounterReplica {
     pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
         let record = Record::<GCounterDelta>::from_wire_bytes(bytes)
             .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode record"))?;
-        self.state
-            .apply_bump(record.delta.replica, record.delta.tally);
-        self.log.merge_records([record]);
+        if record.delta.replica >= self.state.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "counter replica out of range",
+            ));
+        }
+        if self.log.admit_with(record, |delta| {
+            self.state.apply_delta(delta.clone());
+        }) == safemesh_crdt::Admission::Collision
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "record ID collision",
+            ));
+        }
         Ok(())
     }
 
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
-        let log = EventLog::<GCounterDelta>::from_wire_bytes(bytes)
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode event log"))?;
+        let log = EventLog::<GCounterDelta>::from_wire_bytes(bytes).map_err(|error| {
+            pyo3::exceptions::PyValueError::new_err(match error {
+                safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                _ => "failed to decode event log",
+            })
+        })?;
+        if log
+            .records()
+            .iter()
+            .any(|r| r.delta.replica >= self.state.len())
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "counter replica out of range",
+            ));
+        }
         for record in log.records().iter().cloned() {
-            self.state
-                .apply_bump(record.delta.replica, record.delta.tally);
-            self.log.merge_records([record]);
+            if self.log.admit_with(record, |delta| {
+                self.state.apply_delta(delta.clone());
+            }) == safemesh_crdt::Admission::Collision
+            {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "record ID collision",
+                ));
+            }
         }
         Ok(())
     }
@@ -360,8 +397,12 @@ impl PyEnableWinsFlagReplica {
         token: u64,
     ) -> PyResult<Bound<'py, PyBytes>> {
         let delta = EnableWinsFlagDelta::Enable { token };
-        self.state.apply_delta(delta.clone());
-        let id = self.log.append(self.replica_id, delta.clone());
+        let id = self
+            .log
+            .append_with(self.replica_id, delta.clone(), |delta| {
+                self.state.apply_delta(delta.clone());
+            })
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("event log sequence exhausted"))?;
         encode_bytes(
             py,
             Record { id, delta }.to_wire_bytes(),
@@ -376,8 +417,12 @@ impl PyEnableWinsFlagReplica {
         let delta = EnableWinsFlagDelta::Disable {
             tokens: self.state.observed_tokens().into_iter().collect(),
         };
-        self.state.apply_delta(delta.clone());
-        let id = self.log.append(self.replica_id, delta.clone());
+        let id = self
+            .log
+            .append_with(self.replica_id, delta.clone(), |delta| {
+                self.state.apply_delta(delta.clone());
+            })
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("event log sequence exhausted"))?;
         encode_bytes(
             py,
             Record { id, delta }.to_wire_bytes(),
@@ -388,17 +433,34 @@ impl PyEnableWinsFlagReplica {
     pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
         let record = Record::<EnableWinsFlagDelta<u64>>::from_wire_bytes(bytes)
             .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode record"))?;
-        self.state.apply_delta(record.delta.clone());
-        self.log.merge_records([record]);
+        if self.log.admit_with(record, |delta| {
+            self.state.apply_delta(delta.clone());
+        }) == safemesh_crdt::Admission::Collision
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "record ID collision",
+            ));
+        }
         Ok(())
     }
 
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
-        let log = EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes(bytes)
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode event log"))?;
+        let log =
+            EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes(bytes).map_err(|error| {
+                pyo3::exceptions::PyValueError::new_err(match error {
+                    safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                    _ => "failed to decode event log",
+                })
+            })?;
         for record in log.records().iter().cloned() {
-            self.state.apply_delta(record.delta.clone());
-            self.log.merge_records([record]);
+            if self.log.admit_with(record, |delta| {
+                self.state.apply_delta(delta.clone());
+            }) == safemesh_crdt::Admission::Collision
+            {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "record ID collision",
+                ));
+            }
         }
         Ok(())
     }
@@ -456,8 +518,12 @@ impl PyLwwMapReplica {
             replica: writer_replica,
             value,
         };
-        self.state.apply_delta(delta.clone());
-        let id = self.log.append(self.replica_id, delta.clone());
+        let id = self
+            .log
+            .append_with(self.replica_id, delta.clone(), |delta| {
+                self.state.apply_delta(delta.clone());
+            })
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("event log sequence exhausted"))?;
         encode_bytes(
             py,
             Record { id, delta }.to_wire_bytes(),
@@ -477,8 +543,12 @@ impl PyLwwMapReplica {
             timestamp,
             replica: writer_replica,
         };
-        self.state.apply_delta(delta.clone());
-        let id = self.log.append(self.replica_id, delta.clone());
+        let id = self
+            .log
+            .append_with(self.replica_id, delta.clone(), |delta| {
+                self.state.apply_delta(delta.clone());
+            })
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("event log sequence exhausted"))?;
         encode_bytes(
             py,
             Record { id, delta }.to_wire_bytes(),
@@ -489,17 +559,33 @@ impl PyLwwMapReplica {
     pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
         let record = Record::<LwwMapDelta<u64, u64>>::from_wire_bytes(bytes)
             .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode record"))?;
-        self.state.apply_delta(record.delta.clone());
-        self.log.merge_records([record]);
+        if self.log.admit_with(record, |delta| {
+            self.state.apply_delta(delta.clone());
+        }) == safemesh_crdt::Admission::Collision
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "record ID collision",
+            ));
+        }
         Ok(())
     }
 
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
-        let log = EventLog::<LwwMapDelta<u64, u64>>::from_wire_bytes(bytes)
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode event log"))?;
+        let log = EventLog::<LwwMapDelta<u64, u64>>::from_wire_bytes(bytes).map_err(|error| {
+            pyo3::exceptions::PyValueError::new_err(match error {
+                safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                _ => "failed to decode event log",
+            })
+        })?;
         for record in log.records().iter().cloned() {
-            self.state.apply_delta(record.delta.clone());
-            self.log.merge_records([record]);
+            if self.log.admit_with(record, |delta| {
+                self.state.apply_delta(delta.clone());
+            }) == safemesh_crdt::Admission::Collision
+            {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "record ID collision",
+                ));
+            }
         }
         Ok(())
     }
@@ -563,8 +649,12 @@ impl PyLwwRegisterReplica {
             replica: writer_replica,
             value,
         };
-        self.state.set(delta.timestamp, delta.replica, delta.value);
-        let id = self.log.append(self.replica_id, delta.clone());
+        let id = self
+            .log
+            .append_with(self.replica_id, delta.clone(), |delta| {
+                self.state.apply_delta(delta.clone());
+            })
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("event log sequence exhausted"))?;
         encode_bytes(
             py,
             Record { id, delta }.to_wire_bytes(),
@@ -575,25 +665,33 @@ impl PyLwwRegisterReplica {
     pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
         let record = Record::<LwwRegisterDelta<u64>>::from_wire_bytes(bytes)
             .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode record"))?;
-        self.state.set(
-            record.delta.timestamp,
-            record.delta.replica,
-            record.delta.value,
-        );
-        self.log.merge_records([record]);
+        if self.log.admit_with(record, |delta| {
+            self.state.apply_delta(delta.clone());
+        }) == safemesh_crdt::Admission::Collision
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "record ID collision",
+            ));
+        }
         Ok(())
     }
 
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
-        let log = EventLog::<LwwRegisterDelta<u64>>::from_wire_bytes(bytes)
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode event log"))?;
+        let log = EventLog::<LwwRegisterDelta<u64>>::from_wire_bytes(bytes).map_err(|error| {
+            pyo3::exceptions::PyValueError::new_err(match error {
+                safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                _ => "failed to decode event log",
+            })
+        })?;
         for record in log.records().iter().cloned() {
-            self.state.set(
-                record.delta.timestamp,
-                record.delta.replica,
-                record.delta.value,
-            );
-            self.log.merge_records([record]);
+            if self.log.admit_with(record, |delta| {
+                self.state.apply_delta(delta.clone());
+            }) == safemesh_crdt::Admission::Collision
+            {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "record ID collision",
+                ));
+            }
         }
         Ok(())
     }
@@ -925,6 +1023,146 @@ mod tests {
             left.merge_log_bytes(&log_bytes).unwrap();
             assert_eq!(left.value_or(0), right.value_or(0));
             assert_eq!(left.writer_replica_or(0), 2);
+        });
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    use safemesh_crdt::RecordId;
+
+    #[test]
+    fn all_replica_bindings_reject_conflicting_records_and_logs() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|_| {
+            macro_rules! check {
+                ($replica:expr, $first:expr, $second:expr) => {{
+                    let first = Record {
+                        id: RecordId {
+                            replica: 1,
+                            sequence: 1,
+                        },
+                        delta: $first,
+                    };
+                    let second = Record {
+                        id: first.id,
+                        delta: $second,
+                    };
+                    let a = first.to_wire_bytes().unwrap();
+                    let b = second.to_wire_bytes().unwrap();
+                    let mut replica = $replica;
+                    replica.merge_record_bytes(&a).unwrap();
+                    let state = replica.state.clone();
+                    let log = replica.log.clone();
+                    replica.merge_record_bytes(&a).unwrap();
+                    assert!(replica
+                        .merge_record_bytes(&b)
+                        .unwrap_err()
+                        .to_string()
+                        .contains("record ID collision"));
+                    assert_eq!(replica.state, state);
+                    assert_eq!(replica.log, log);
+                    let mut incoming = EventLog::new();
+                    assert_eq!(
+                        incoming.insert_record(second),
+                        safemesh_crdt::Admission::Accepted
+                    );
+                    assert!(replica
+                        .merge_log_bytes(&incoming.to_wire_bytes().unwrap())
+                        .is_err());
+                    assert_eq!(replica.state, state);
+                    assert_eq!(replica.log, log);
+                    // Conflicting entries inside a single wire log must not be silently deduped.
+                    let mut bytes = vec![2];
+                    bytes.extend_from_slice(&2_u32.to_le_bytes());
+                    for r in [&a, &b] {
+                        bytes.extend_from_slice(&(r.len() as u32).to_le_bytes());
+                        bytes.extend_from_slice(r);
+                    }
+                    let mut empty = $replica;
+                    let state = empty.state.clone();
+                    assert!(empty
+                        .merge_log_bytes(&bytes)
+                        .unwrap_err()
+                        .to_string()
+                        .contains("record ID collision"));
+                    assert_eq!(empty.state, state);
+                    assert!(empty.log.records().is_empty());
+                }};
+            }
+            check!(
+                PyGCounterReplica::new(2, 2),
+                GCounterDelta {
+                    replica: 1,
+                    tally: 5
+                },
+                GCounterDelta {
+                    replica: 1,
+                    tally: 9
+                }
+            );
+            check!(
+                PyEnableWinsFlagReplica::new(2),
+                EnableWinsFlagDelta::Enable { token: 5 },
+                EnableWinsFlagDelta::Enable { token: 9 }
+            );
+            check!(
+                PyLwwRegisterReplica::new(2),
+                LwwRegisterDelta {
+                    timestamp: 1,
+                    replica: 1,
+                    value: 5
+                },
+                LwwRegisterDelta {
+                    timestamp: 2,
+                    replica: 1,
+                    value: 9
+                }
+            );
+            check!(
+                PyLwwMapReplica::new(2),
+                LwwMapDelta::Set {
+                    key: 1,
+                    timestamp: 1,
+                    replica: 1,
+                    value: 5
+                },
+                LwwMapDelta::Remove {
+                    key: 1,
+                    timestamp: 2,
+                    replica: 1
+                }
+            );
+        });
+    }
+
+    #[test]
+    fn invalid_counter_coordinates_are_rejected_before_admission() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let mut replica = PyGCounterReplica::new(1, 2);
+            assert!(replica.append_bump(py, 2, 5).is_err());
+            let record = Record {
+                id: RecordId {
+                    replica: 1,
+                    sequence: 1,
+                },
+                delta: GCounterDelta {
+                    replica: 2,
+                    tally: 5,
+                },
+            };
+            assert!(replica
+                .merge_record_bytes(&record.to_wire_bytes().unwrap())
+                .is_err());
+            let mut log = EventLog::new();
+            log.insert_record(record);
+            assert!(replica
+                .merge_log_bytes(&log.to_wire_bytes().unwrap())
+                .is_err());
+            assert_eq!(replica.value(), 0);
+            assert!(replica.log.records().is_empty());
         });
     }
 }

@@ -134,8 +134,9 @@ impl Replica {
     }
 
     fn emit(&mut self, delta: ColdChainDelta) {
-        self.log.append(self.id, delta.clone());
-        self.state.apply(delta);
+        self.log
+            .append_with(self.id, delta, |delta| self.state.apply(delta.clone()))
+            .expect("event log sequence exhausted");
     }
 
     fn note_domain_event(&mut self, audit_position: u64, audit_code: u64) {
@@ -151,15 +152,16 @@ impl Replica {
     }
 
     fn receive(&mut self, records: Vec<Record<ColdChainDelta>>) {
-        let fresh: Vec<_> = records
-            .into_iter()
-            .filter(|record| !self.log.version().includes(record.id))
-            .collect();
-
-        for record in &fresh {
-            self.state.apply(record.delta.clone());
+        for record in records {
+            let outcome = self
+                .log
+                .admit_with(record, |delta| self.state.apply(delta.clone()));
+            assert_ne!(
+                outcome,
+                safemesh_crdt::Admission::Collision,
+                "record ID collision"
+            );
         }
-        self.log.merge_records(fresh);
     }
 }
 
