@@ -170,8 +170,9 @@ impl GCounter {
     /// set). Panics on a replica-count mismatch rather than dropping state; use
     /// [`GCounter::try_merge`] for untrusted input.
     pub fn merge(&mut self, other: &GCounter) {
-        self.try_merge(other)
-            .expect("GCounter::merge requires equal replica counts; use try_merge for untrusted input");
+        self.try_merge(other).expect(
+            "GCounter::merge requires equal replica counts; use try_merge for untrusted input",
+        );
     }
 
     /// Per-coordinate state (the `ι → ℕ` vector).
@@ -342,8 +343,9 @@ impl PnCounter {
     /// Infallible variant for the proven equal-length invariant; panics on a
     /// replica-count mismatch. Use [`PnCounter::try_merge`] for untrusted input.
     pub fn merge(&mut self, other: &PnCounter) {
-        self.try_merge(other)
-            .expect("PnCounter::merge requires equal replica counts; use try_merge for untrusted input");
+        self.try_merge(other).expect(
+            "PnCounter::merge requires equal replica counts; use try_merge for untrusted input",
+        );
     }
 
     /// Increment-side state.

@@ -122,7 +122,10 @@ fn gcounter_merge_panics_on_mismatch_instead_of_losing_state() {
         let wide = GCounter::new(3);
         narrow.merge(&wide);
     });
-    assert!(result.is_err(), "infallible merge must not silently truncate");
+    assert!(
+        result.is_err(),
+        "infallible merge must not silently truncate"
+    );
 }
 
 #[test]
