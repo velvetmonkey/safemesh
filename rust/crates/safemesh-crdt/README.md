@@ -36,6 +36,78 @@ left.merge(&right);
 assert_eq!(left.value(), right.value());
 ```
 
+## Persist, restore, partition and reconcile
+
+This Rust-only walk needs Git, Cargo and a Rust toolchain; no Lean setup or
+registry publication is needed. Python, WASM and the C FFI do not expose OR-Set.
+Start in an empty directory where you can download and build the repository.
+Run these three commands in the same shell:
+
+```sh
+git clone --quiet https://github.com/velvetmonkey/safemesh.git safemesh
+cd safemesh
+cargo run --quiet --manifest-path rust/Cargo.toml -p safemesh-crdt --example m2slice -- ./walk-logs
+```
+
+The first two commands produce no output. The third runs
+[`examples/m2slice.rs`](examples/m2slice.rs), a small application built entirely
+from public Rust APIs. It runs both choices; use its `Replica<C>` wrapper and
+the corresponding `journey` call in `main` as the embedding example for your app:
+
+- **Choose and embed (steps 1–2):** `GCounter::new(2)` tracks two replica tallies;
+  `OrSet::<String, u64>::new()` tracks strings with unique add tokens. `Replica`
+  owns the state and an `EventLog`. Its `local` method records each delta with
+  `append_with` and applies it through `Crdt::apply_delta`, using replica IDs 0 and 1.
+- **Exchange, persist and restore (steps 3–5):** `exchange` takes missing records
+  with `EventLog::since`, encodes each with `Record::to_wire_bytes`, decodes it
+  with `Record::from_wire_bytes`, and applies accepted records via `admit_with`.
+  `persist` writes each whole log's bytes to a file and calls `sync_all`.
+  The app drops both replicas, then `restart` reads and decodes each log and
+  replays its deltas into an empty state. This restart happens within one process.
+  The persisted log carries no schema or counter arity: the caller must supply
+  the delta type and matching empty-state shape, here a two-slot counter or
+  a string/token OR-Set.
+- **Partition and reconcile (steps 6–8):** the app withholds exchange while each
+  replica makes a local update, asserts that their states differ, and writes
+  both logs. It then exchanges missing records, asserts equal states and version
+  vectors, writes the reconciled logs, and checks that replay matches state and log.
+
+The counter starts at tallies 10 and 20; independent updates produce 11 and 22,
+so the reconciled value is **33**. For the set, A removes the observed token 100
+for `café☕` while B adds `café☕` with fresh token 201. Token 100 remains tombstoned;
+token 201 survives, so both replicas contain **`café☕` and `東京`**. Each final log
+has four records. The files are under `walk-logs`: `counter-a.log`, `counter-b.log`,
+`utf8-orset-a.log` and `utf8-orset-b.log`.
+
+The example also writes separate `counter-corrupt.log` and
+`utf8-orset-corrupt.log` controls. Their output shows a rejected tag mutation
+and payload mutations that load changed states. Captured output:
+
+```text
+counter step=1 WORKS
+counter step=2 WORKS
+counter step=3 WORKS
+counter step=4 WORKS
+counter step=5 WORKS clean-bytes=true
+counter step=6 WORKS diverged=true
+counter step=7 WORKS
+counter step=8 WORKS records-per-replica=4 bytes-a=173 bytes-b=173 state=GCounter { counts: [11, 22] }
+utf8-orset step=1 WORKS
+utf8-orset step=2 WORKS
+utf8-orset step=3 WORKS
+utf8-orset step=4 WORKS
+utf8-orset step=5 WORKS clean-bytes=true
+utf8-orset step=6 WORKS diverged=true
+utf8-orset step=7 WORKS
+utf8-orset step=8 WORKS records-per-replica=4 bytes-a=179 bytes-b=179 state=OrSet { adds: {("café☕", 100), ("café☕", 201), ("東京", 200)}, tombstones: {100} }
+counter corrupt-tag-detected=true error=InvalidTag
+counter corrupt-payload-offset=123 restart=Ok wrong-state=GCounter { counts: [10, 22] }
+counter corrupt-byte-detected=false
+utf8-orset corrupt-tag-detected=true error=InvalidTag
+utf8-orset corrupt-payload-offset=163 restart=Ok wrong-state=OrSet { adds: {("bafé☕", 201), ("café☕", 100), ("東京", 200)}, tombstones: {100} }
+utf8-orset corrupt-byte-detected=false
+```
+
 ## Verify locally
 
 ```sh
