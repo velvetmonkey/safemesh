@@ -530,3 +530,109 @@ fn orset_utf8_wire_shape_and_record_roundtrips() {
     assert_eq!(decoded.records(), log.records());
     assert_eq!(decoded.to_wire_bytes().unwrap(), bytes);
 }
+
+#[test]
+fn event_log_refuses_every_single_byte_change() {
+    use safemesh_crdt::OrSetDelta;
+    let mut log = EventLog::new();
+    log.append(
+        1,
+        OrSetDelta::Add {
+            element: "café☕".to_owned(),
+            token: 42u64,
+        },
+    );
+    let bytes = log.to_wire_bytes().unwrap();
+    roundtrip(log.clone());
+    let mut refused = 0;
+    let mut different = 0;
+    let mut equal = 0;
+    for offset in 0..bytes.len() {
+        let mut bad = bytes.clone();
+        bad[offset] ^= 1;
+        match EventLog::<OrSetDelta<String, u64>>::from_wire_bytes(&bad) {
+            Err(_) => refused += 1,
+            Ok(decoded) if decoded == log => equal += 1,
+            Ok(_) => {
+                different += 1;
+                println!("surviving hole offset={offset}");
+            }
+        }
+        // Also exhaust all 255 possible nonzero byte XOR masks at each offset.
+        for mask in 1..=255u8 {
+            bad[offset] = bytes[offset] ^ mask;
+            let expected = if offset == 0 {
+                WireError::InvalidTag
+            } else {
+                WireError::IntegrityMismatch
+            };
+            assert_eq!(
+                EventLog::<OrSetDelta<String, u64>>::from_wire_bytes(&bad),
+                Err(expected),
+                "offset={offset} mask={mask}"
+            );
+        }
+    }
+    println!(
+        "sweep total={} refused={refused} decoded-different={different} decoded-equal={equal}",
+        bytes.len()
+    );
+    assert_eq!((refused, different, equal), (bytes.len(), 0, 0));
+}
+
+#[test]
+fn event_log_empty_and_embedded_frames_roundtrip_and_reject_truncation() {
+    use safemesh_crdt::WireCursor;
+    let empty = EventLog::<GCounterDelta>::new();
+    roundtrip(empty.clone());
+    let mut log = EventLog::new();
+    log.append(
+        1,
+        GCounterDelta {
+            replica: 1,
+            tally: 7,
+        },
+    );
+    log.append(
+        2,
+        GCounterDelta {
+            replica: 0,
+            tally: 9,
+        },
+    );
+    roundtrip(log.clone());
+    let mut outer = EventLog::new();
+    outer.append(1, log.clone());
+    roundtrip(outer);
+    let mut stream = vec![99];
+    empty.encode_wire(&mut stream).unwrap();
+    log.encode_wire(&mut stream).unwrap();
+    let mut cursor = WireCursor::new(&stream[1..]);
+    assert_eq!(
+        EventLog::<GCounterDelta>::decode_wire(&mut cursor).unwrap(),
+        empty
+    );
+    assert_eq!(
+        EventLog::<GCounterDelta>::decode_wire(&mut cursor).unwrap(),
+        log
+    );
+    assert!(cursor.is_empty());
+    for value in [empty, log] {
+        let bytes = value.to_wire_bytes().unwrap();
+        for end in 0..bytes.len() {
+            assert!(EventLog::<GCounterDelta>::from_wire_bytes(&bytes[..end]).is_err());
+        }
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert_eq!(
+            EventLog::<GCounterDelta>::from_wire_bytes(&trailing),
+            Err(WireError::TrailingBytes)
+        );
+        let mut legacy_tag = bytes;
+        legacy_tag[0] = 0x02;
+        assert_eq!(
+            EventLog::<GCounterDelta>::from_wire_bytes(&legacy_tag),
+            Err(WireError::InvalidTag)
+        );
+    }
+}

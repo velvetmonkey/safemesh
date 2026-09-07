@@ -1307,7 +1307,7 @@ where
 }
 
 const TAG_RECORD: u8 = 0x01;
-const TAG_EVENT_LOG: u8 = 0x02;
+const TAG_EVENT_LOG: u8 = 0x03;
 const TAG_GCOUNTER_DELTA: u8 = 0x10;
 const TAG_PNCOUNTER_INC: u8 = 0x11;
 const TAG_PNCOUNTER_DEC: u8 = 0x12;
@@ -1334,6 +1334,7 @@ pub enum WireError {
     TrailingBytes,
     LengthOverflow,
     RecordCollision,
+    IntegrityMismatch,
     InvalidUtf8,
 }
 
@@ -1703,13 +1704,38 @@ impl<D: WireDecode> WireDecode for Record<D> {
     }
 }
 
+// CRC-32/ISO-HDLC: reflected polynomial, all-ones initialization and final XOR.
+// Detects accidental corruption, including every single-byte change; not a MAC.
+fn frame_crc32(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for &byte in bytes {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
+        }
+    }
+    !crc
+}
+
+// Replacement frame (no legacy decoder): tag, body length, complemented length,
+// body (record count and length-prefixed records), CRC of length fields + body.
+// Frame lengths, count and CRC are little-endian u32. Check the length pair before trusting it,
+// then verify the CRC before decoding any record or invoking a payload decoder.
 impl<D: WireEncode> WireEncode for EventLog<D> {
     fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
-        write_u8(out, TAG_EVENT_LOG);
-        write_len(out, self.records.len())?;
+        let mut body = Vec::new();
+        write_len(&mut body, self.records.len())?;
         for record in &self.records {
-            write_bytes(out, &record.to_wire_bytes()?)?;
+            write_bytes(&mut body, &record.to_wire_bytes()?)?;
         }
+        let len = u32::try_from(body.len()).map_err(|_| WireError::LengthOverflow)?;
+        write_u8(out, TAG_EVENT_LOG);
+        let start = out.len();
+        write_u32(out, len);
+        write_u32(out, !len);
+        out.extend_from_slice(&body);
+        let checksum = frame_crc32(&out[start..]);
+        write_u32(out, checksum);
         Ok(())
     }
 }
@@ -1717,15 +1743,30 @@ impl<D: WireEncode> WireEncode for EventLog<D> {
 impl<D: WireDecode + PartialEq> WireDecode for EventLog<D> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
         read_tag(cursor, TAG_EVENT_LOG)?;
+        let start = cursor.offset;
+        let len = cursor.read_u32()?;
+        if cursor.read_u32()? != !len {
+            return Err(WireError::IntegrityMismatch);
+        }
+        let body =
+            cursor.read_exact(usize::try_from(len).map_err(|_| WireError::LengthOverflow)?)?;
+        let checksum = frame_crc32(&cursor.bytes[start..cursor.offset]);
+        if cursor.read_u32()? != checksum {
+            return Err(WireError::IntegrityMismatch);
+        }
+        let mut body = WireCursor::new(body);
         let mut log = EventLog::new();
-        for _ in 0..cursor.read_len()? {
-            let record_len = cursor.read_len()?;
-            let record_bytes = cursor.read_exact(record_len)?;
+        for _ in 0..body.read_len()? {
+            let record_len = body.read_len()?;
+            let record_bytes = body.read_exact(record_len)?;
             if log.insert_record(Record::<D>::from_wire_bytes(record_bytes)?)
                 == Admission::Collision
             {
                 return Err(WireError::RecordCollision);
             }
+        }
+        if !body.is_empty() {
+            return Err(WireError::TrailingBytes);
         }
         Ok(log)
     }
@@ -2184,5 +2225,127 @@ pub mod laws {
         fn next_usize(&mut self, upper: usize) -> usize {
             (self.next_u64() as usize) % upper
         }
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+    use alloc::vec;
+
+    #[test]
+    fn crc32_matches_standard_check_vector() {
+        assert_eq!(frame_crc32(b"123456789"), 0xcbf4_3926);
+    }
+
+    #[test]
+    fn binding_collision_fixtures_use_product_encoder() {
+        extern crate std;
+        fn fixture<D: WireEncode + WireDecode + PartialEq>(name: &str, deltas: [D; 2]) {
+            let mut log = EventLog::new();
+            log.records = deltas
+                .into_iter()
+                .map(|delta| Record {
+                    id: RecordId {
+                        replica: 1,
+                        sequence: 1,
+                    },
+                    delta,
+                })
+                .collect();
+            let bytes = log.to_wire_bytes().unwrap();
+            assert!(matches!(
+                EventLog::<D>::from_wire_bytes(&bytes),
+                Err(WireError::RecordCollision)
+            ));
+            if let Some(directory) = std::env::var_os("SAFEMESH_FRAME_FIXTURE_DIR") {
+                std::fs::write(std::path::Path::new(&directory).join(name), bytes).unwrap();
+            }
+        }
+        fixture(
+            "gcounter-collision.bin",
+            [
+                GCounterDelta {
+                    replica: 1,
+                    tally: 5,
+                },
+                GCounterDelta {
+                    replica: 1,
+                    tally: 9,
+                },
+            ],
+        );
+        fixture(
+            "flag-collision.bin",
+            [
+                EnableWinsFlagDelta::Enable { token: 5u64 },
+                EnableWinsFlagDelta::Enable { token: 9u64 },
+            ],
+        );
+        fixture(
+            "register-collision.bin",
+            [
+                LwwRegisterDelta {
+                    timestamp: 1,
+                    replica: 1,
+                    value: 5u64,
+                },
+                LwwRegisterDelta {
+                    timestamp: 2,
+                    replica: 1,
+                    value: 9u64,
+                },
+            ],
+        );
+        fixture(
+            "map-collision.bin",
+            [
+                LwwMapDelta::Set {
+                    key: 1u64,
+                    timestamp: 1,
+                    replica: 1,
+                    value: 5u64,
+                },
+                LwwMapDelta::Remove {
+                    key: 1u64,
+                    timestamp: 2,
+                    replica: 1,
+                },
+            ],
+        );
+    }
+
+    fn record(sequence: u64, tally: u64) -> Record<GCounterDelta> {
+        Record {
+            id: RecordId {
+                replica: 1,
+                sequence,
+            },
+            delta: GCounterDelta { replica: 1, tally },
+        }
+    }
+
+    // Deliberately bypass admission to exercise the decoder's collision gate.
+    // The production encoder derives all frame bytes, lengths and checksums.
+    fn wire_log(records: &[Record<GCounterDelta>]) -> Vec<u8> {
+        let mut log = EventLog::new();
+        log.records = records.to_vec();
+        log.to_wire_bytes().unwrap()
+    }
+    #[test]
+    fn decoder_surfaces_conflicts_before_deduplication() {
+        for records in [
+            vec![record(1, 5), record(1, 9)],
+            vec![record(1, 9), record(1, 5)],
+        ] {
+            assert_eq!(
+                EventLog::<GCounterDelta>::from_wire_bytes(&wire_log(&records)),
+                Err(WireError::RecordCollision)
+            );
+        }
+        let decoded =
+            EventLog::<GCounterDelta>::from_wire_bytes(&wire_log(&[record(1, 5), record(1, 5)]))
+                .unwrap();
+        assert_eq!(decoded.records(), &[record(1, 5)]);
     }
 }

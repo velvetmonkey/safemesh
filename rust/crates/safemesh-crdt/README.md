@@ -115,3 +115,19 @@ cd rust
 cargo publish --dry-run -p safemesh-crdt --allow-dirty
 cargo test -p safemesh-crdt --features laws
 ```
+
+### EventLog persistence frame
+
+`EventLog` uses tag `0x03`, replacing the old `0x02` format without a compatibility
+path. The tag is followed by a little-endian u32 body length, its bitwise
+complement, the body, and a little-endian CRC-32/ISO-HDLC. The body contains the
+record count and every length-prefixed record, including each payload. The CRC
+covers both length fields and the entire body. The length complement is checked
+before using the length; the CRC is checked before decoding records. Tag changes
+return `WireError::InvalidTag`; length-pair or checksum mismatches return
+`WireError::IntegrityMismatch`. Truncated frames return `UnexpectedEof`.
+
+This detects accidental corruption, including any single changed byte anywhere
+in a frame. It is not authentication: a forger can recompute the checksum, and
+multiple-byte corruption can have CRC collisions. Record and delta encodings
+remain separate wire types and do not gain this frame integrity check.
