@@ -28,9 +28,11 @@ where
             .unwrap();
     }
     fn persist(&self, path: &Path) {
-        let mut file = fs::File::create(path).unwrap();
+        let temporary = path.with_extension("tmp");
+        let mut file = fs::File::create(&temporary).unwrap();
         file.write_all(&self.log.to_wire_bytes().unwrap()).unwrap();
         file.sync_all().unwrap();
+        fs::rename(&temporary, path).unwrap();
     }
     fn restart(path: &Path, mut state: C) -> Result<Self, WireError> {
         let log = EventLog::<C::Delta>::from_wire_bytes(&fs::read(path).unwrap())?;
