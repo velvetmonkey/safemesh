@@ -48,6 +48,16 @@ pub struct GCounterDelta {
     pub tally: u64,
 }
 
+/// Rejection of a counter delta with an invalid replica coordinate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoordinateError {
+    /// The index is outside `0..replica_count`; the counter is unchanged.
+    ReplicaOutOfRange {
+        replica: usize,
+        replica_count: usize,
+    },
+}
+
 /// A grow-only counter: one tally per replica, join = pointwise max.
 ///
 /// Model: `Crdt.GCounter ι = ι → ℕ` with the Pi join-semilattice. Applying a
@@ -82,12 +92,29 @@ impl GCounter {
     ///
     /// Out-of-range `replica` is ignored (a malformed delta must not corrupt
     /// state; the Lean model has no such case — `Fin n` makes it unrepresentable).
+    /// Use [`Self::try_apply_bump`] to receive an error for an invalid index.
     pub fn apply_bump(&mut self, replica: usize, tally: u64) {
         if let Some(c) = self.counts.get_mut(replica) {
             if tally > *c {
                 *c = tally;
             }
         }
+    }
+
+    /// Apply a single-coordinate delta, returning an error for an invalid index.
+    ///
+    /// Checks the coordinate before mutation. On error, the entire counter is
+    /// unchanged; on success, behaves exactly like [`Self::apply_bump`], including
+    /// accepting an equal or lower tally as a no-op.
+    pub fn try_apply_bump(&mut self, replica: usize, tally: u64) -> Result<(), CoordinateError> {
+        if replica >= self.counts.len() {
+            return Err(CoordinateError::ReplicaOutOfRange {
+                replica,
+                replica_count: self.counts.len(),
+            });
+        }
+        self.apply_bump(replica, tally);
+        Ok(())
     }
 
     /// Full-state merge: pointwise max — `Crdt.gcounter_merge_apply`. A
@@ -212,13 +239,33 @@ impl PnCounter {
 
     /// Apply `SafeMesh.deltaBumpP replica tally` — increment side, one
     /// coordinate on the wire, `⊥` on the other side.
+    /// Out-of-range indices are ignored; use [`Self::try_apply_inc`] for an error.
     pub fn apply_inc(&mut self, replica: usize, tally: u64) {
         self.p.apply_bump(replica, tally);
     }
 
+    /// Apply an increment-side delta with a checked replica coordinate.
+    ///
+    /// Returns [`CoordinateError::ReplicaOutOfRange`] before any mutation if the
+    /// index is invalid. Both sides remain unchanged on error. Valid input has
+    /// the same effect as [`Self::apply_inc`].
+    pub fn try_apply_inc(&mut self, replica: usize, tally: u64) -> Result<(), CoordinateError> {
+        self.p.try_apply_bump(replica, tally)
+    }
+
     /// Apply `SafeMesh.deltaBumpN replica tally` — decrement side.
+    /// Out-of-range indices are ignored; use [`Self::try_apply_dec`] for an error.
     pub fn apply_dec(&mut self, replica: usize, tally: u64) {
         self.n.apply_bump(replica, tally);
+    }
+
+    /// Apply a decrement-side delta with a checked replica coordinate.
+    ///
+    /// Returns [`CoordinateError::ReplicaOutOfRange`] before any mutation if the
+    /// index is invalid. Both sides remain unchanged on error. Valid input has
+    /// the same effect as [`Self::apply_dec`].
+    pub fn try_apply_dec(&mut self, replica: usize, tally: u64) -> Result<(), CoordinateError> {
+        self.n.try_apply_bump(replica, tally)
     }
 
     /// Full-state merge: componentwise G-Counter merge —

@@ -69,9 +69,15 @@ fn gcounter_matches_lean_oracle() {
         let name = case["name"].as_str().unwrap();
         let n = as_usize(&case["n"]);
         let mut g = GCounter::new(n);
+        let mut checked = GCounter::new(n);
         for bump in case["bumps"].as_array().unwrap() {
             let b = bump.as_array().unwrap();
             g.apply_bump(as_usize(&b[0]), b[1].as_u64().unwrap());
+            assert_eq!(
+                checked.try_apply_bump(as_usize(&b[0]), b[1].as_u64().unwrap()),
+                Ok(())
+            );
+            assert_eq!(checked, g, "checked delta mismatch in {name}");
         }
         let expected_state: Vec<u64> = case["expected_state"]
             .as_array()
@@ -116,6 +122,7 @@ fn pncounter_matches_lean_oracle() {
         let name = case["name"].as_str().unwrap();
         let n = as_usize(&case["n"]);
         let mut pn = PnCounter::new(n);
+        let mut checked = PnCounter::new(n);
         for op in case["ops"].as_array().unwrap() {
             let o = op.as_array().unwrap();
             let (kind, replica, tally) = (
@@ -124,11 +131,18 @@ fn pncounter_matches_lean_oracle() {
                 o[2].as_u64().unwrap(),
             );
             match kind {
-                "inc" => pn.apply_inc(replica, tally),
-                "dec" => pn.apply_dec(replica, tally),
+                "inc" => {
+                    pn.apply_inc(replica, tally);
+                    assert_eq!(checked.try_apply_inc(replica, tally), Ok(()));
+                }
+                "dec" => {
+                    pn.apply_dec(replica, tally);
+                    assert_eq!(checked.try_apply_dec(replica, tally), Ok(()));
+                }
                 other => panic!("unknown op kind {other:?} in {name}"),
             }
         }
+        assert_eq!(checked, pn, "checked deltas mismatch in {name}");
         let expected_p: Vec<u64> = case["expected_p"]
             .as_array()
             .unwrap()

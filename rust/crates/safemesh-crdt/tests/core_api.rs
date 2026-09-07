@@ -251,3 +251,86 @@ fn lww_register_uses_total_ordered_winner() {
     register.merge(&other);
     assert_eq!(register.value(), Some(&"beta"));
 }
+
+// Encode every coordinate in fixed-width bytes; equality checks also cover lengths.
+fn g_bytes(counter: &GCounter) -> Vec<u8> {
+    counter
+        .state()
+        .iter()
+        .flat_map(|tally| tally.to_le_bytes())
+        .collect()
+}
+
+fn pn_bytes(counter: &PnCounter) -> Vec<u8> {
+    counter
+        .p_state()
+        .iter()
+        .chain(counter.n_state())
+        .flat_map(|tally| tally.to_le_bytes())
+        .collect()
+}
+
+#[test]
+fn checked_counter_coordinates_reject_without_changing_any_state_bytes() {
+    use safemesh_crdt::CoordinateError;
+
+    for count in [0, 3] {
+        let mut g = GCounter::new(count);
+        let mut pn = PnCounter::new(count);
+        for replica in 0..count {
+            g.apply_bump(replica, 10 + replica as u64);
+            pn.apply_inc(replica, 20 + replica as u64);
+            pn.apply_dec(replica, 30 + replica as u64);
+        }
+        let g_before = g.clone();
+        let pn_before = pn.clone();
+        let g_before_bytes = g_bytes(&g);
+        let pn_before_bytes = pn_bytes(&pn);
+        for replica in [count, 7, usize::MAX] {
+            let error = Err(CoordinateError::ReplicaOutOfRange {
+                replica,
+                replica_count: count,
+            });
+            assert_eq!(g.try_apply_bump(replica, u64::MAX), error);
+            assert_eq!(g, g_before);
+            assert_eq!(g_bytes(&g), g_before_bytes);
+            assert_eq!(pn.try_apply_inc(replica, u64::MAX), error);
+            assert_eq!(pn, pn_before);
+            assert_eq!(pn_bytes(&pn), pn_before_bytes);
+            assert_eq!(pn.try_apply_dec(replica, u64::MAX), error);
+            assert_eq!(pn, pn_before);
+            assert_eq!(pn_bytes(&pn), pn_before_bytes);
+
+            // The compatible infallible paths still silently ignore bad indices.
+            g.apply_bump(replica, u64::MAX);
+            pn.apply_inc(replica, u64::MAX);
+            pn.apply_dec(replica, u64::MAX);
+            assert_eq!(g_bytes(&g), g_before_bytes);
+            assert_eq!(pn_bytes(&pn), pn_before_bytes);
+        }
+    }
+}
+
+#[test]
+fn checked_counter_coordinates_match_infallible_valid_results() {
+    let mut checked_g = GCounter::new(3);
+    let mut legacy_g = checked_g.clone();
+    let mut checked_pn = PnCounter::new(3);
+    let mut legacy_pn = checked_pn.clone();
+    for replica in 0..3 {
+        for tally in [0, 9, 9, 4, u64::MAX] {
+            assert_eq!(checked_g.try_apply_bump(replica, tally), Ok(()));
+            legacy_g.apply_bump(replica, tally);
+            assert_eq!(checked_g, legacy_g);
+            assert_eq!(g_bytes(&checked_g), g_bytes(&legacy_g));
+            assert_eq!(checked_pn.try_apply_inc(replica, tally), Ok(()));
+            legacy_pn.apply_inc(replica, tally);
+            assert_eq!(checked_pn, legacy_pn);
+            assert_eq!(pn_bytes(&checked_pn), pn_bytes(&legacy_pn));
+            assert_eq!(checked_pn.try_apply_dec(replica, tally), Ok(()));
+            legacy_pn.apply_dec(replica, tally);
+            assert_eq!(checked_pn, legacy_pn);
+            assert_eq!(pn_bytes(&checked_pn), pn_bytes(&legacy_pn));
+        }
+    }
+}
