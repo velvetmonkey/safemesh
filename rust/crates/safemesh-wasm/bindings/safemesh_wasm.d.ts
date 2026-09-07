@@ -16,6 +16,7 @@ export class SafeMeshGCounterReplica {
   logBytes(): Uint8Array;
   versionFor(replica: bigint): bigint;
   value(): bigint;
+  sameStateAs(other: SafeMeshGCounterReplica): boolean;
   state(): BigUint64Array;
   free(): void;
 }

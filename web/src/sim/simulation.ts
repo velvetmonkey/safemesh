@@ -1,28 +1,31 @@
 import {
   addDelta,
-  applyGCounterDelta,
   applyORSetDelta,
-  bottomGCounter,
   bottomORSet,
-  bumpDelta,
-  mergeGCounter,
   mergeORSet,
   observedTokens,
-  readGCounter,
   readORSet,
-  sameGCounter,
   sameORSet,
-  type GCounterDelta,
-  type GCounterState,
   type ORSetDelta,
   type ORSetState,
-} from '../crdt'
+} from '../crdt/orset'
+import { SafeMeshGCounterReplica } from '../../../rust/crates/safemesh-wasm/pkg/safemesh_wasm'
+
+export type GCounterDelta = {
+  kind: 'gcounter.bump'
+  replica: number
+  tally: number
+  bytes: Uint8Array
+  payload: 'record' | 'log'
+}
 
 export type MeshDelta = GCounterDelta | ORSetDelta
 
 export type Peer = {
   id: number
-  gcounter: GCounterState
+  // This is a read-only Rust-core snapshot for the UI; `gcounterLog` is the carrier.
+  gcounter: number[]
+  gcounterLog: Uint8Array
   orset: ORSetState
   localTally: number
 }
@@ -65,7 +68,7 @@ export function createSimulation(peerCount = 4): Simulation {
   return {
     peers: Array.from({ length: peerCount }, (_, id) => ({
       id,
-      gcounter: bottomGCounter(peerCount),
+      ...emptyGCounterPeer(id, peerCount),
       orset: bottomORSet(),
       localTally: 0,
     })),
@@ -124,10 +127,12 @@ export function bumpCounter(sim: Simulation, peerId: number): Simulation {
   const peer = sim.peers[peerId]
   if (!peer) return sim
   const tally = peer.localTally + 1
+  const replica = replicaFor(peer, sim.peers.length)
+  const bytes = replica.appendBump(peerId, BigInt(tally))
   return emitDelta(
     sim,
     peerId,
-    bumpDelta(peerId, tally),
+    { kind: 'gcounter.bump', replica: peerId, tally, bytes, payload: 'record' },
     `Camp ${peerId} increases headcount to ${tally}`,
     `peer ${peerId} bumps G-Counter to ${tally}`,
   )
@@ -204,20 +209,22 @@ export function convergence(sim: Simulation): {
   sameRawState: boolean
   sameReads: boolean
   gcounterValue: number
+  gcounterValues: number[]
   orsetElements: string[]
 } {
   const [first] = sim.peers
   if (!first) {
-    return { converged: true, sameRawState: true, sameReads: true, gcounterValue: 0, orsetElements: [] }
+    return { converged: true, sameRawState: true, sameReads: true, gcounterValue: 0, gcounterValues: [], orsetElements: [] }
   }
 
+  const firstReplica = replicaFor(first, sim.peers.length)
   const sameRawState = sim.peers.every(
-    (peer) => sameGCounter(peer.gcounter, first.gcounter) && sameORSet(peer.orset, first.orset),
+    (peer) => replicaFor(peer, sim.peers.length).sameStateAs(firstReplica) && sameORSet(peer.orset, first.orset),
   )
-  const firstGRead = readGCounter(first.gcounter)
+  const firstGRead = Number(firstReplica.value())
   const firstORead = readORSet(first.orset).join('\u0000')
   const sameReads = sim.peers.every(
-    (peer) => readGCounter(peer.gcounter) === firstGRead && readORSet(peer.orset).join('\u0000') === firstORead,
+    (peer) => Number(replicaFor(peer, sim.peers.length).value()) === firstGRead && readORSet(peer.orset).join('\u0000') === firstORead,
   )
 
   return {
@@ -225,6 +232,7 @@ export function convergence(sim: Simulation): {
     sameRawState,
     sameReads,
     gcounterValue: firstGRead,
+    gcounterValues: sim.peers.map((peer) => Number(replicaFor(peer, sim.peers.length).value())),
     orsetElements: readORSet(first.orset),
   }
 }
@@ -399,12 +407,10 @@ function deliverPacket(sim: Simulation, packet: Packet): Simulation {
 
 function applyDeltaToPeer(peer: Peer, delta: MeshDelta): Peer {
   if (delta.kind === 'gcounter.bump') {
-    const gcounter = applyGCounterDelta(peer.gcounter, delta)
-    return {
-      ...peer,
-      gcounter,
-      localTally: peer.id === delta.replica ? Math.max(peer.localTally, delta.tally) : peer.localTally,
-    }
+    const counter = replicaFor(peer, peer.gcounter.length)
+    if (delta.payload === 'record') counter.mergeRecordBytes(delta.bytes)
+    else counter.mergeLogBytes(delta.bytes)
+    return snapshotGCounterPeer(peer, counter)
   }
   return { ...peer, orset: applyORSetDelta(peer.orset, delta) }
 }
@@ -432,13 +438,14 @@ function runAntiEntropy(sim: Simulation): Simulation {
       if (rightToLeft.length === 0 && leftToRight.length === 0) continue
       mergedAny = true
 
-      const merged = {
-        gcounter: mergeGCounter(left.gcounter, right.gcounter),
-        orset: mergeORSet(left.orset, right.orset),
-      }
+      const leftCounter = replicaFor(left, peers.length)
+      const rightCounter = replicaFor(right, peers.length)
+      leftCounter.mergeLogBytes(rightCounter.logBytes())
+      rightCounter.mergeLogBytes(leftCounter.logBytes())
+      const merged = { orset: mergeORSet(left.orset, right.orset) }
       peers = peers.map((peer) => {
-        if (peer.id === left.id) return normalizePeer({ ...left, ...merged })
-        if (peer.id === right.id) return normalizePeer({ ...right, ...merged })
+        if (peer.id === left.id) return normalizePeer({ ...snapshotGCounterPeer(left, leftCounter), ...merged })
+        if (peer.id === right.id) return normalizePeer({ ...snapshotGCounterPeer(right, rightCounter), ...merged })
         return peer
       })
 
@@ -482,30 +489,37 @@ function buildAntiEntropyPackets(sim: Simulation): { packets: Packet[]; nextId: 
   let repairIndex = 0
   const packets: Packet[] = []
   const union = sim.peers.reduce(
-    (merged, peer) => ({
-      gcounter: mergeGCounter(merged.gcounter, peer.gcounter),
-      orset: mergeORSet(merged.orset, peer.orset),
-    }),
-    { gcounter: bottomGCounter(sim.peers.length), orset: bottomORSet() },
+    (merged, peer) => ({ orset: mergeORSet(merged.orset, peer.orset) }),
+    { orset: bottomORSet() },
   )
 
   for (const target of sim.peers) {
-    union.gcounter.forEach((value, replica) => {
-      if (value <= (target.gcounter[replica] ?? 0)) return
-      const source = sim.peers.find((peer) => peer.id !== target.id && (peer.gcounter[replica] ?? 0) >= value)
-      if (!source) return
+    for (const source of sim.peers) {
+      if (source.id === target.id) continue
+      const sourceCounter = replicaFor(source, sim.peers.length)
+      const targetCounter = replicaFor(target, sim.peers.length)
+      const hasMissingRecords = Array.from({ length: sim.peers.length }, (_, replica) =>
+        sourceCounter.versionFor(BigInt(replica)) > targetCounter.versionFor(BigInt(replica)),
+      ).some(Boolean)
+      if (!hasMissingRecords) continue
       packets.push({
         id: `r${nextId}-${repairIndex}`,
         from: source.id,
         to: target.id,
-        delta: bumpDelta(replica, value),
+        delta: {
+          kind: 'gcounter.bump',
+          replica: source.id,
+          tally: Number(sourceCounter.value()),
+          bytes: sourceCounter.logBytes(),
+          payload: 'log',
+        },
         sentAt: sim.now,
         deliverAt: sim.now + sim.latencyMs + 160 + repairIndex * 210,
         phase: 'repair',
       })
       nextId += 1
       repairIndex += 1
-    })
+    }
 
     for (const [token, element] of Object.entries(union.orset.adds)) {
       if (target.orset.adds[token]) continue
@@ -562,11 +576,13 @@ function backfillDescriptions(
 ): Array<{ plain: string; technical: string }> {
   const items: Array<{ plain: string; technical: string }> = []
 
-  source.gcounter.forEach((value, replica) => {
-    if (value > (target.gcounter[replica] ?? 0)) {
-      items.push({ plain: `headcount from Camp ${replica}`, technical: `G(${replica}:=${value})` })
+  const sourceCounter = replicaFor(source, source.gcounter.length)
+  const targetCounter = replicaFor(target, target.gcounter.length)
+  for (let replica = 0; replica < source.gcounter.length; replica += 1) {
+    if (sourceCounter.versionFor(BigInt(replica)) > targetCounter.versionFor(BigInt(replica))) {
+      items.push({ plain: `headcount from Camp ${replica}`, technical: `G(log ${replica})` })
     }
-  })
+  }
 
   for (const [token, element] of Object.entries(source.orset.adds)) {
     if (!target.orset.adds[token]) {
@@ -585,6 +601,25 @@ function backfillDescriptions(
 
 function normalizePeer(peer: Peer): Peer {
   return { ...peer, localTally: Math.max(peer.localTally, peer.gcounter[peer.id] ?? 0) }
+}
+
+function emptyGCounterPeer(id: number, replicas: number): Pick<Peer, 'gcounter' | 'gcounterLog'> {
+  return snapshotGCounterPeer({ id, gcounter: [], gcounterLog: new Uint8Array(), orset: bottomORSet(), localTally: 0 }, new SafeMeshGCounterReplica(BigInt(id), replicas))
+}
+
+function replicaFor(peer: Peer, replicas: number): SafeMeshGCounterReplica {
+  const replica = new SafeMeshGCounterReplica(BigInt(peer.id), replicas)
+  if (peer.gcounterLog.length > 0) replica.mergeLogBytes(peer.gcounterLog)
+  return replica
+}
+
+function snapshotGCounterPeer(peer: Peer, counter: SafeMeshGCounterReplica): Peer {
+  return {
+    ...peer,
+    gcounter: Array.from(counter.state(), Number),
+    gcounterLog: counter.logBytes(),
+    localTally: Math.max(peer.localTally, Number(counter.state()[peer.id] ?? 0n)),
+  }
 }
 
 function appendLog(

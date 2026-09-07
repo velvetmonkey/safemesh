@@ -18,7 +18,7 @@ import {
   Wifi,
 } from 'lucide-react'
 import './App.css'
-import { readGCounter, readORSet } from './crdt'
+import { readORSet } from './crdt/orset'
 import {
   GUIDE_SCENARIOS,
   addElement,
@@ -248,7 +248,7 @@ function App() {
                   onClick={() => setSelectedPeer(peer.id)}
                 >
                   <span className="replica-kicker">Replica {peer.id}</span>
-                  <strong>{readGCounter(peer.gcounter)}</strong>
+                  <strong>{status.gcounterValues[peer.id] ?? 0}</strong>
                   <span>{elements.length > 0 ? elements.join(', ') : 'no records yet'}</span>
                   <code>{digest(peer.gcounter, elements)}</code>
                 </button>
@@ -519,7 +519,7 @@ function storyState(sim: Simulation, status: ReturnType<typeof convergence>) {
 }
 
 function sameRead(peer: Simulation['peers'][number], status: ReturnType<typeof convergence>): boolean {
-  return readGCounter(peer.gcounter) === status.gcounterValue && readORSet(peer.orset).join('\u0000') === status.orsetElements.join('\u0000')
+  return (status.gcounterValues[peer.id] ?? 0) === status.gcounterValue && readORSet(peer.orset).join('\u0000') === status.orsetElements.join('\u0000')
 }
 
 function digest(counter: number[], elements: string[]): string {
