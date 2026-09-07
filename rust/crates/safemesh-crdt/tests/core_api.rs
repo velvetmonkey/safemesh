@@ -4,8 +4,8 @@
 
 use safemesh_crdt::{
     Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta, LwwMap,
-    LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta, PnCounter, PnCounterDelta, Rga,
-    RgaDelta,
+    LwwMapDelta, LwwRegister, LwwRegisterDelta, MergeError, OrSet, OrSetDelta, PnCounter,
+    PnCounterDelta, Rga, RgaDelta,
 };
 
 #[test]
@@ -32,6 +32,100 @@ fn counter_traits_preserve_existing_behavior() {
         tally: 3,
     });
     assert_eq!(pn.value(), 4);
+}
+
+// WS1 regression: the full-state merge must not silently drop the trailing
+// coordinates of a wider peer vector. Before the fix, `merge` zipped to the
+// shorter vector, so a 2-replica node merging a 3-replica peer lost replica 2's
+// tally with no signal.
+#[test]
+fn gcounter_try_merge_rejects_replica_count_mismatch() {
+    let mut narrow = GCounter::new(2);
+    narrow.apply_bump(0, 4);
+    let mut wide = GCounter::new(3);
+    wide.apply_bump(2, 9); // only representable on the wider vector
+    let before = narrow.clone();
+
+    // Checked path surfaces the mismatch instead of truncating.
+    assert_eq!(
+        narrow.try_merge(&wide),
+        Err(MergeError::ReplicaCountMismatch { own: 2, other: 3 })
+    );
+    // State is left untouched on error — no silent loss, no partial apply.
+    assert_eq!(narrow, before);
+    assert_eq!(narrow.state(), &[4, 0]);
+}
+
+#[test]
+fn gcounter_try_merge_matches_merge_on_equal_width() {
+    let mut a = GCounter::new(3);
+    a.apply_bump(0, 5);
+    let mut b = GCounter::new(3);
+    b.apply_bump(1, 7);
+    b.apply_bump(0, 2);
+
+    let mut checked = a.clone();
+    let mut infallible = a.clone();
+    checked.try_merge(&b).expect("equal width merges cleanly");
+    infallible.merge(&b);
+
+    assert_eq!(checked.state(), &[5, 7, 0]);
+    assert_eq!(checked.state(), infallible.state());
+}
+
+#[test]
+fn pncounter_try_merge_is_all_or_nothing_on_mismatch() {
+    let mut narrow = PnCounter::new(2);
+    narrow.apply_delta(PnCounterDelta::Inc {
+        replica: 0,
+        tally: 4,
+    });
+    let mut wide = PnCounter::new(3);
+    wide.apply_delta(PnCounterDelta::Dec {
+        replica: 2,
+        tally: 6,
+    });
+    let before = narrow.clone();
+
+    assert_eq!(
+        narrow.try_merge(&wide),
+        Err(MergeError::ReplicaCountMismatch { own: 2, other: 3 })
+    );
+    // p was well-formed but n side mismatched: self must be unchanged.
+    assert_eq!(narrow, before);
+    assert_eq!(narrow.p_state(), &[4, 0]);
+    assert_eq!(narrow.n_state(), &[0, 0]);
+    assert_eq!(narrow.value(), 4);
+}
+
+#[test]
+fn checked_coordinate_and_checked_merge_coexist() {
+    let mut local = GCounter::new(2);
+    local
+        .try_apply_bump(0, 4)
+        .expect("coordinate is within the replica set");
+
+    let mut peer = GCounter::new(2);
+    peer.try_apply_bump(1, 7)
+        .expect("coordinate is within the replica set");
+    local
+        .try_merge(&peer)
+        .expect("equal-width states merge cleanly");
+
+    assert_eq!(local.state(), &[4, 7]);
+}
+
+#[test]
+fn gcounter_merge_panics_on_mismatch_instead_of_losing_state() {
+    let result = std::panic::catch_unwind(|| {
+        let mut narrow = GCounter::new(2);
+        let wide = GCounter::new(3);
+        narrow.merge(&wide);
+    });
+    assert!(
+        result.is_err(),
+        "infallible merge must not silently truncate"
+    );
 }
 
 #[test]
