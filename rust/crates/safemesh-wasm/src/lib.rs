@@ -4,7 +4,7 @@
 
 use safemesh_crdt::{
     Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta, LwwMap,
-    LwwMapDelta, LwwRegister, LwwRegisterDelta, Record, WireDecode, WireEncode,
+    LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, Record, WireDecode, WireEncode,
 };
 use wasm_bindgen::prelude::*;
 
@@ -25,6 +25,14 @@ impl SafeMeshGCounter {
     #[wasm_bindgen(js_name = applyBump)]
     pub fn apply_bump(&mut self, replica: usize, tally: u64) {
         self.inner.apply_bump(replica, tally);
+    }
+
+    /// Apply a coordinate delta, throwing a descriptive Error for a bad index.
+    #[wasm_bindgen(js_name = tryApplyBump)]
+    pub fn try_apply_bump(&mut self, replica: usize, tally: u64) -> Result<(), JsValue> {
+        self.inner
+            .try_apply_bump(replica, tally)
+            .map_err(|error| JsError::new(&format!("{error:?}")).into())
     }
 
     pub fn value(&self) -> u64 {
@@ -695,10 +703,95 @@ impl SafeMeshLwwRegisterReplica {
     }
 }
 
+/// Observed-remove set of u64 elements and u64 tokens; tokens are global to the set.
+#[wasm_bindgen]
+pub struct SafeMeshOrSet {
+    inner: OrSet<u64, u64>,
+}
+
+#[wasm_bindgen]
+impl SafeMeshOrSet {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner: OrSet::new(),
+        }
+    }
+
+    /// Add an element with a caller-supplied token, exactly as in the Rust core.
+    pub fn add(&mut self, element: u64, token: u64) {
+        self.inner.add(element, token);
+    }
+    /// Tombstone tokens globally, including tokens whose adds have not arrived yet.
+    #[wasm_bindgen(js_name = applyRemove)]
+    pub fn apply_remove(&mut self, tokens: Vec<u64>) {
+        self.inner.apply_remove(tokens);
+    }
+    #[wasm_bindgen(js_name = observedTokens)]
+    pub fn observed_tokens(&self, element: u64) -> Vec<u64> {
+        self.inner.observed_tokens(&element).into_iter().collect()
+    }
+    pub fn elements(&self) -> Vec<u64> {
+        self.inner.elements().into_iter().collect()
+    }
+    pub fn contains(&self, element: u64) -> bool {
+        self.inner.contains(&element)
+    }
+    pub fn tombstones(&self) -> Vec<u64> {
+        self.inner.tombstones().iter().copied().collect()
+    }
+    pub fn merge(&mut self, other: &SafeMeshOrSet) {
+        self.inner.merge(&other.inner);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use safemesh_crdt::{RecordId, WireEncode};
+
+    #[test]
+    fn orset_matches_core_with_concurrent_add_and_early_tombstone() {
+        let mut left = SafeMeshOrSet::new();
+        let mut right = SafeMeshOrSet::new();
+        let mut core_left = OrSet::<u64, u64>::new();
+        let mut core_right = OrSet::<u64, u64>::new();
+        for (element, token) in [(10, 101), (20, 102)] {
+            left.add(element, token);
+            core_left.add(element, token);
+        }
+        right.merge(&left);
+        core_right.merge(&core_left);
+        for (element, token) in [(10, 201), (30, 203), (40, 999), (50, 999)] {
+            right.add(element, token);
+            core_right.add(element, token);
+        }
+        for element in [10, 20] {
+            left.apply_remove(left.observed_tokens(element));
+            core_left.apply_remove(core_left.observed_tokens(&element));
+        }
+        left.apply_remove(vec![999]);
+        core_left.apply_remove([999]);
+        left.merge(&right);
+        core_left.merge(&core_right);
+        left.merge(&right);
+        core_left.merge(&core_right);
+        let expected: Vec<_> = core_left.elements().into_iter().collect();
+        println!("wasm OR-Set={:?} Rust core={expected:?}", left.elements());
+        assert_eq!(left.elements(), expected);
+        assert_eq!(left.elements(), vec![10, 30]);
+        assert_eq!(
+            left.observed_tokens(10),
+            core_left
+                .observed_tokens(&10)
+                .into_iter()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            left.tombstones(),
+            core_left.tombstones().iter().copied().collect::<Vec<_>>()
+        );
+    }
 
     #[test]
     fn wasm_counter_calls_rust_core() {

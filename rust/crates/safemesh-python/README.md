@@ -47,3 +47,26 @@ cd rust/crates/safemesh-python
 It prints `CONVERGED=true` when the sample holder, audit count, and temperature-alert flag converge after partition and heal.
 
 Run `./scripts/package-smoke.sh` from the repository root to build the wheel, install it into a temporary virtualenv, run the demo, and avoid publishing.
+
+## Checked coordinates and OR-Set
+
+`GCounter.try_apply_bump(replica, tally)` raises `IndexError` for an invalid
+coordinate without changing state. `apply_bump` retains its silent behavior.
+
+```python
+left, right = sm.OrSet(), sm.OrSet()
+left.add(10, 101)
+right.merge(left)
+left.apply_remove(left.observed_tokens(10))
+right.add(10, 201)  # Concurrent add uses a fresh token.
+left.merge(right)
+assert left.elements() == [10]
+```
+
+The set delegates to Rust `OrSet<u64, u64>`: elements and tokens are unsigned
+64-bit integers (JavaScript uses `bigint`). Tokens are global to the set; use a
+fresh, replica-unique token for every add to obtain add-wins behavior. Removal
+persists tombstones even before an add arrives, and a reused token affects every
+element carrying it. Observed tokens include tombstoned adds. Merge unions all
+adds and tombstones, and reads return sorted unique live members. This is the
+core's token semantics, including token reuse; the binding does not allocate IDs.

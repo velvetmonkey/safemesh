@@ -54,3 +54,30 @@ python3 -m http.server 8000
 Then open `http://127.0.0.1:8000/examples/browser-convergence.html`.
 
 Run `./scripts/package-smoke.sh` from the repository root to build the bundler package, run `npm pack --dry-run`, and execute the Node convergence demo without publishing.
+
+## Checked coordinates and OR-Set
+
+`SafeMeshGCounter.tryApplyBump(replica, tally)` throws an `Error` with a message such as
+`ReplicaOutOfRange { replica: 2, replica_count: 2 }` for an invalid coordinate
+without changing state. `applyBump` retains its silent behavior.
+
+```js
+const left = new SafeMeshOrSet(), right = new SafeMeshOrSet();
+left.add(10n, 101n);
+right.merge(left);
+left.applyRemove(left.observedTokens(10n));
+right.add(10n, 201n); // Concurrent add uses a fresh token.
+left.merge(right);
+console.log(left.elements()); // BigUint64Array [10n]
+left.free(); right.free();
+```
+
+Import `SafeMeshOrSet` from the generated package alongside the counter classes.
+
+The set delegates to Rust `OrSet<u64, u64>`: elements and tokens are unsigned
+64-bit integers (JavaScript uses `bigint`). Tokens are global to the set; use a
+fresh, replica-unique token for every add to obtain add-wins behavior. Removal
+persists tombstones even before an add arrives, and a reused token affects every
+element carrying it. Observed tokens include tombstoned adds. Merge unions all
+adds and tombstones, and reads return sorted unique live members. This is the
+core's token semantics, including token reuse; the binding does not allocate IDs.
