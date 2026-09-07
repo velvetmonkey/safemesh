@@ -140,6 +140,6 @@ SafeMesh v0 is flat-first. It does not cover references between objects, trees, 
 
 ## License
 
-Apache License 2.0 (Apache-2.0). Copyright (c) 2026 Ben Cassie. See `LICENSE`, `LICENSE-rationale.md`, and `NOTICE`.
+Apache License 2.0 (Apache-2.0). Copyright (c) 2026 Ben Cassie. See `LICENSE` and `NOTICE`.
 
 SafeMesh is open source and permits commercial use under Apache-2.0.
