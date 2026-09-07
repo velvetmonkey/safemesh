@@ -13,7 +13,7 @@ fn record(sequence: u64, tally: u64) -> Record<GCounterDelta> {
 }
 #[test]
 fn record_1_1_live_and_replay() {
-    let mut log = EventLog::new();
+    let mut log = EventLog::with_replica_count(2);
     let mut live = GCounter::new(2);
     let first = log.admit_with(record(1, 5), |d| live.apply_delta(d.clone()));
     let before = log.clone();

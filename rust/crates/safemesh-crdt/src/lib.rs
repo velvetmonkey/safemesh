@@ -38,6 +38,11 @@ pub trait Mergeable {
 pub trait Crdt: Mergeable {
     type Delta;
 
+    /// Fixed replica domain, or `None` for CRDTs without a fixed arity.
+    fn replica_count(&self) -> Option<usize> {
+        None
+    }
+
     fn apply_delta(&mut self, delta: Self::Delta);
 }
 
@@ -194,6 +199,10 @@ impl Mergeable for GCounter {
 
 impl Crdt for GCounter {
     type Delta = GCounterDelta;
+
+    fn replica_count(&self) -> Option<usize> {
+        Some(self.len())
+    }
 
     fn apply_delta(&mut self, delta: Self::Delta) {
         self.apply_bump(delta.replica, delta.tally);
@@ -373,6 +382,10 @@ impl Mergeable for PnCounter {
 
 impl Crdt for PnCounter {
     type Delta = PnCounterDelta;
+
+    fn replica_count(&self) -> Option<usize> {
+        Some(self.p.len())
+    }
 
     fn apply_delta(&mut self, delta: Self::Delta) {
         match delta {
@@ -990,6 +1003,7 @@ pub enum AppendError {
 /// Append-only, deduplicating event log for CRDT deltas.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EventLog<D> {
+    replica_count: Option<usize>,
     records: Vec<Record<D>>,
     seen: BTreeMap<RecordId, usize>,
     version: VersionVector,
@@ -998,10 +1012,31 @@ pub struct EventLog<D> {
 impl<D> EventLog<D> {
     pub fn new() -> Self {
         EventLog {
+            replica_count: None,
             records: Vec::new(),
             seen: BTreeMap::new(),
             version: VersionVector::new(),
         }
+    }
+
+    /// Create a log for a fixed replica domain, including an empty domain.
+    pub fn with_replica_count(replica_count: usize) -> Self {
+        Self {
+            replica_count: Some(replica_count),
+            ..Self::new()
+        }
+    }
+
+    /// Bind persistence metadata to the CRDT's actual domain before recording.
+    pub fn for_crdt<C: Crdt<Delta = D>>(state: &C) -> Self {
+        Self {
+            replica_count: state.replica_count(),
+            ..Self::new()
+        }
+    }
+
+    pub fn replica_count(&self) -> Option<usize> {
+        self.replica_count
     }
 
     pub fn append(&mut self, replica: u64, delta: D) -> RecordId
@@ -1336,6 +1371,96 @@ pub enum WireError {
     RecordCollision,
     IntegrityMismatch,
     InvalidUtf8,
+    /// Legacy frame, or a fixed-domain log constructed without its arity.
+    MissingShape,
+    DeltaTypeMismatch,
+    ReplicaCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    /// Fixed and unbounded replica domains are incompatible.
+    ArityKindMismatch,
+}
+
+/// Stable, versioned identity for persisted payloads, independent of Rust names.
+/// External implementations must use a globally unique schema and change it when
+/// the wire interpretation changes. Never reuse a built-in `safemesh/` identity.
+pub trait WireSchema {
+    fn wire_schema() -> Vec<u8>;
+    const REQUIRES_ARITY: bool = false;
+}
+
+macro_rules! wire_schema {
+    ($ty:ty, $name:literal, $fixed:expr) => {
+        impl WireSchema for $ty {
+            fn wire_schema() -> Vec<u8> {
+                $name.as_bytes().to_vec()
+            }
+            const REQUIRES_ARITY: bool = $fixed;
+        }
+    };
+}
+
+wire_schema!(GCounterDelta, "safemesh/gcounter-delta/v1", true);
+wire_schema!(PnCounterDelta, "safemesh/pncounter-delta/v1", true);
+wire_schema!(GSet<u64>, "safemesh/gset-u64/v1", false);
+wire_schema!(OrSetDelta<u64, u64>, "safemesh/orset-delta-u64-u64/v1", false);
+wire_schema!(OrSetDelta<String, u64>, "safemesh/orset-delta-utf8-u64/v1", false);
+wire_schema!(OrSet<u64, u64>, "safemesh/orset-u64-u64/v1", false);
+wire_schema!(Rga<u64, u64>, "safemesh/rga-u64-u64/v1", false);
+wire_schema!(
+    LwwRegisterDelta<u64>,
+    "safemesh/lww-register-delta-u64/v1",
+    false
+);
+wire_schema!(LwwRegister<u64>, "safemesh/lww-register-u64/v1", false);
+wire_schema!(
+    EnableWinsFlagDelta<u64>,
+    "safemesh/enable-wins-flag-delta-u64/v1",
+    false
+);
+wire_schema!(
+    EnableWinsFlag<u64>,
+    "safemesh/enable-wins-flag-u64/v1",
+    false
+);
+wire_schema!(LwwMapDelta<u64, u64>, "safemesh/lww-map-delta-u64-u64/v1", false);
+wire_schema!(LwwMap<u64, u64>, "safemesh/lww-map-u64-u64/v1", false);
+
+impl<D: WireSchema> WireSchema for Record<D> {
+    fn wire_schema() -> Vec<u8> {
+        let mut schema = b"safemesh/record/v1/".to_vec();
+        schema.extend(D::wire_schema());
+        schema
+    }
+}
+
+impl<D: WireSchema> WireSchema for EventLog<D> {
+    fn wire_schema() -> Vec<u8> {
+        let mut schema = b"safemesh/event-log/v2/".to_vec();
+        schema.extend(D::wire_schema());
+        schema
+    }
+}
+
+impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
+    /// Decode and compare the saved shape with the destination before replay.
+    /// Plain `from_wire_bytes` decodes a log and retains its domain; it does not
+    /// load a CRDT. Use this method at every persisted-state loading boundary.
+    pub fn from_wire_bytes_for<C: Crdt<Delta = D>>(
+        bytes: &[u8],
+        state: &C,
+    ) -> Result<Self, WireError> {
+        let log = Self::from_wire_bytes(bytes)?;
+        match (state.replica_count(), log.replica_count) {
+            (Some(expected), Some(actual)) if expected != actual => {
+                return Err(WireError::ReplicaCountMismatch { expected, actual })
+            }
+            (None, Some(_)) | (Some(_), None) => return Err(WireError::ArityKindMismatch),
+            _ => {}
+        }
+        Ok(log)
+    }
 }
 
 pub trait WireEncode {
@@ -1717,13 +1842,30 @@ fn frame_crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
-// Replacement frame (no legacy decoder): tag, body length, complemented length,
-// body (record count and length-prefixed records), CRC of length fields + body.
+// Shape-bearing frame: tag, body length, complemented length,
+// body (shape marker, schema, arity, record count and length-prefixed records),
+// CRC of length fields + body. Old unshaped frames return MissingShape.
+// u32::MAX cannot be the count of a valid old body within a u32 frame length.
 // Frame lengths, count and CRC are little-endian u32. Check the length pair before trusting it,
 // then verify the CRC before decoding any record or invoking a payload decoder.
-impl<D: WireEncode> WireEncode for EventLog<D> {
+impl<D: WireEncode + WireSchema> WireEncode for EventLog<D> {
     fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        if D::REQUIRES_ARITY && self.replica_count.is_none() {
+            return Err(WireError::MissingShape);
+        }
         let mut body = Vec::new();
+        write_u32(&mut body, u32::MAX);
+        write_bytes(&mut body, &D::wire_schema())?;
+        match self.replica_count {
+            Some(count) => {
+                write_u8(&mut body, 1);
+                write_u64(
+                    &mut body,
+                    u64::try_from(count).map_err(|_| WireError::LengthOverflow)?,
+                );
+            }
+            None => write_u8(&mut body, 0),
+        }
         write_len(&mut body, self.records.len())?;
         for record in &self.records {
             write_bytes(&mut body, &record.to_wire_bytes()?)?;
@@ -1740,7 +1882,7 @@ impl<D: WireEncode> WireEncode for EventLog<D> {
     }
 }
 
-impl<D: WireDecode + PartialEq> WireDecode for EventLog<D> {
+impl<D: WireDecode + WireSchema + PartialEq> WireDecode for EventLog<D> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
         read_tag(cursor, TAG_EVENT_LOG)?;
         let start = cursor.offset;
@@ -1755,7 +1897,23 @@ impl<D: WireDecode + PartialEq> WireDecode for EventLog<D> {
             return Err(WireError::IntegrityMismatch);
         }
         let mut body = WireCursor::new(body);
-        let mut log = EventLog::new();
+        if body.read_u32()? != u32::MAX {
+            return Err(WireError::MissingShape);
+        }
+        let schema_len = body.read_len()?;
+        if body.read_exact(schema_len)? != D::wire_schema() {
+            return Err(WireError::DeltaTypeMismatch);
+        }
+        let replica_count = match body.read_u8()? {
+            0 if !D::REQUIRES_ARITY => None,
+            0 => return Err(WireError::MissingShape),
+            1 => Some(usize::try_from(body.read_u64()?).map_err(|_| WireError::LengthOverflow)?),
+            _ => return Err(WireError::ArityKindMismatch),
+        };
+        let mut log = EventLog {
+            replica_count,
+            ..EventLog::new()
+        };
         for _ in 0..body.read_len()? {
             let record_len = body.read_len()?;
             let record_bytes = body.read_exact(record_len)?;
@@ -2234,6 +2392,28 @@ mod frame_tests {
     use alloc::vec;
 
     #[test]
+    fn legacy_integrity_frames_refuse_missing_shape() {
+        for records in [vec![], vec![record(1, 5)]] {
+            let mut body = Vec::new();
+            write_len(&mut body, records.len()).unwrap();
+            for record in records {
+                write_bytes(&mut body, &record.to_wire_bytes().unwrap()).unwrap();
+            }
+            let mut bytes = vec![TAG_EVENT_LOG];
+            let len = u32::try_from(body.len()).unwrap();
+            write_u32(&mut bytes, len);
+            write_u32(&mut bytes, !len);
+            bytes.extend(body);
+            let crc = frame_crc32(&bytes[1..]);
+            write_u32(&mut bytes, crc);
+            assert_eq!(
+                EventLog::<GCounterDelta>::from_wire_bytes(&bytes),
+                Err(WireError::MissingShape)
+            );
+        }
+    }
+
+    #[test]
     fn crc32_matches_standard_check_vector() {
         assert_eq!(frame_crc32(b"123456789"), 0xcbf4_3926);
     }
@@ -2241,8 +2421,15 @@ mod frame_tests {
     #[test]
     fn binding_collision_fixtures_use_product_encoder() {
         extern crate std;
-        fn fixture<D: WireEncode + WireDecode + PartialEq>(name: &str, deltas: [D; 2]) {
-            let mut log = EventLog::new();
+        fn fixture<D: WireEncode + WireDecode + WireSchema + PartialEq>(
+            name: &str,
+            deltas: [D; 2],
+        ) {
+            let mut log = if D::REQUIRES_ARITY {
+                EventLog::with_replica_count(2)
+            } else {
+                EventLog::new()
+            };
             log.records = deltas
                 .into_iter()
                 .map(|delta| Record {
@@ -2328,7 +2515,7 @@ mod frame_tests {
     // Deliberately bypass admission to exercise the decoder's collision gate.
     // The production encoder derives all frame bytes, lengths and checksums.
     fn wire_log(records: &[Record<GCounterDelta>]) -> Vec<u8> {
-        let mut log = EventLog::new();
+        let mut log = EventLog::with_replica_count(2);
         log.records = records.to_vec();
         log.to_wire_bytes().unwrap()
     }
