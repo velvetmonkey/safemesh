@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use safemesh_crdt::{
     Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta, LwwMap,
-    LwwMapDelta, LwwRegister, LwwRegisterDelta, Record, WireDecode, WireEncode,
+    LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, Record, WireDecode, WireEncode,
 };
 
 fn encode_bytes<'py>(
@@ -35,6 +35,13 @@ impl PyGCounter {
 
     pub fn apply_bump(&mut self, replica: usize, tally: u64) {
         self.inner.apply_bump(replica, tally);
+    }
+
+    /// Apply a coordinate delta, raising IndexError without mutation for a bad index.
+    pub fn try_apply_bump(&mut self, replica: usize, tally: u64) -> PyResult<()> {
+        self.inner
+            .try_apply_bump(replica, tally)
+            .map_err(|error| pyo3::exceptions::PyIndexError::new_err(format!("{error:?}")))
     }
 
     pub fn value(&self) -> u64 {
@@ -730,6 +737,7 @@ impl PyLwwRegisterReplica {
 #[pymodule]
 fn safemesh_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGCounter>()?;
+    m.add_class::<PyOrSet>()?;
     m.add_class::<PyGCounterReplica>()?;
     m.add_class::<PyLwwRegister>()?;
     m.add_class::<PyLwwRegisterReplica>()?;
@@ -746,6 +754,47 @@ fn safemesh_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
+/// Observed-remove set of u64 elements and u64 tokens; tokens are global to the set.
+#[pyclass(name = "OrSet")]
+pub struct PyOrSet {
+    inner: OrSet<u64, u64>,
+}
+
+#[pymethods]
+impl PyOrSet {
+    #[new]
+    pub fn new() -> Self {
+        Self {
+            inner: OrSet::new(),
+        }
+    }
+
+    /// Add an element with a caller-supplied token, exactly as in the Rust core.
+    pub fn add(&mut self, element: u64, token: u64) {
+        self.inner.add(element, token);
+    }
+    /// Tombstone tokens globally, including tokens whose adds have not arrived yet.
+    pub fn apply_remove(&mut self, tokens: Vec<u64>) {
+        self.inner.apply_remove(tokens);
+    }
+
+    pub fn observed_tokens(&self, element: u64) -> Vec<u64> {
+        self.inner.observed_tokens(&element).into_iter().collect()
+    }
+    pub fn elements(&self) -> Vec<u64> {
+        self.inner.elements().into_iter().collect()
+    }
+    pub fn contains(&self, element: u64) -> bool {
+        self.inner.contains(&element)
+    }
+    pub fn tombstones(&self) -> Vec<u64> {
+        self.inner.tombstones().iter().copied().collect()
+    }
+    pub fn merge(&mut self, other: &PyOrSet) {
+        self.inner.merge(&other.inner);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -754,6 +803,68 @@ mod tests {
     fn with_python<T>(f: impl FnOnce(Python<'_>) -> T) -> T {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(f)
+    }
+
+    #[test]
+    fn checked_counter_raises_index_error_without_mutation() {
+        with_python(|py| {
+            let mut counter = PyGCounter::new(2);
+            let error = counter.try_apply_bump(2, 9).unwrap_err();
+            assert!(error.is_instance_of::<pyo3::exceptions::PyIndexError>(py));
+            assert_eq!(
+                error.to_string(),
+                "IndexError: ReplicaOutOfRange { replica: 2, replica_count: 2 }"
+            );
+            assert_eq!(counter.state(), vec![0, 0]);
+            counter.apply_bump(2, 9);
+            assert_eq!(counter.state(), vec![0, 0]);
+            counter.try_apply_bump(1, 9).unwrap();
+            counter.try_apply_bump(1, 2).unwrap();
+            assert_eq!(counter.value(), 9);
+        });
+    }
+
+    #[test]
+    fn orset_matches_core_with_concurrent_add_and_early_tombstone() {
+        let mut left = PyOrSet::new();
+        let mut right = PyOrSet::new();
+        let mut core_left = OrSet::<u64, u64>::new();
+        let mut core_right = OrSet::<u64, u64>::new();
+        for (element, token) in [(10, 101), (20, 102)] {
+            left.add(element, token);
+            core_left.add(element, token);
+        }
+        right.merge(&left);
+        core_right.merge(&core_left);
+        for (element, token) in [(10, 201), (30, 203), (40, 999), (50, 999)] {
+            right.add(element, token);
+            core_right.add(element, token);
+        }
+        for element in [10, 20] {
+            left.apply_remove(left.observed_tokens(element));
+            core_left.apply_remove(core_left.observed_tokens(&element));
+        }
+        left.apply_remove(vec![999]);
+        core_left.apply_remove([999]);
+        left.merge(&right);
+        core_left.merge(&core_right);
+        left.merge(&right);
+        core_left.merge(&core_right);
+        let expected: Vec<_> = core_left.elements().into_iter().collect();
+        println!("python OR-Set={:?} Rust core={expected:?}", left.elements());
+        assert_eq!(left.elements(), expected);
+        assert_eq!(left.elements(), vec![10, 30]);
+        assert_eq!(
+            left.observed_tokens(10),
+            core_left
+                .observed_tokens(&10)
+                .into_iter()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            left.tombstones(),
+            core_left.tombstones().iter().copied().collect::<Vec<_>>()
+        );
     }
 
     #[test]

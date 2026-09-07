@@ -2,6 +2,7 @@
 export class SafeMeshGCounter {
   constructor(replicas: number);
   applyBump(replica: number, tally: bigint): void;
+  tryApplyBump(replica: number, tally: bigint): void;
   value(): bigint;
   state(): BigUint64Array;
   free(): void;
@@ -101,3 +102,22 @@ export function lwwMapSetDeltaToWire(key: bigint, timestamp: bigint, replica: bi
 export function lwwMapRemoveDeltaToWire(key: bigint, timestamp: bigint, replica: bigint): Uint8Array;
 export function enableWinsFlagEnableDeltaToWire(token: bigint): Uint8Array;
 export function enableWinsFlagDisableDeltaToWire(tokens: BigUint64Array): Uint8Array;
+
+export class SafeMeshOrSet {
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Add an element with a caller-supplied token, exactly as in the Rust core.
+     */
+    add(element: bigint, token: bigint): void;
+    /**
+     * Tombstone tokens globally, including tokens whose adds have not arrived yet.
+     */
+    applyRemove(tokens: BigUint64Array): void;
+    contains(element: bigint): boolean;
+    elements(): BigUint64Array;
+    merge(other: SafeMeshOrSet): void;
+    constructor();
+    observedTokens(element: bigint): BigUint64Array;
+    tombstones(): BigUint64Array;
+}
