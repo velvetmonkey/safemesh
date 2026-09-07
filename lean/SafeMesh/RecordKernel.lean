@@ -368,3 +368,69 @@ end SafeMesh.RecordKernel
 #print axioms SafeMesh.RecordKernel.ownedReachable
 #print axioms SafeMesh.RecordKernel.ownedConvergence
 #print axioms SafeMesh.RecordKernel.validPermitted
+
+/-! ## Checked ordinary restart (M2 packet C)
+
+The shell validates the existing wire frame/configuration and reacquires the
+fence. The kernel composes the same corpus-bound ownership and admission rules,
+starting empty; the committed allocation must equal the replayed high-water mark.
+No write capability escapes the shell until this entire operation succeeds.
+-/
+namespace SafeMesh.RecordKernel
+
+def replayOwned {S : Type} [SemilatticeSup S] [OrderBot S] [DecidableEq S]
+    (c : WriteContext) : List (OwnedPayload × Record S) →
+    Replica S × Nat → Option (Replica S × Nat)
+  | [], s => some s
+  | (p, r) :: rs, s =>
+    if refuses c r.1 p || decide (outcome s.1 r ≠ .accepted) then none
+    else replayOwned c rs (ownedStep c p r s)
+
+def checkedRestart {S : Type} [SemilatticeSup S] [OrderBot S] [DecidableEq S]
+    (c : WriteContext) (rs : List (OwnedPayload × Record S)) (saved : Nat) :
+    Option (Replica S × Nat) :=
+  -- This guard also applies to an empty history.
+  if refuses c (c.config.writer, 1) .remove then none else
+    match replayOwned c rs (empty, 0) with
+    | none => none
+    | some s => if s.2 = saved then some s else none
+
+theorem replayOwnedReachable {S : Type} [SemilatticeSup S] [OrderBot S]
+    [DecidableEq S] (c : WriteContext) (rs : List (OwnedPayload × Record S))
+    (s t : Replica S × Nat) (hs : Reachable s.1)
+    (h : replayOwned c rs s = some t) : Reachable t.1 := by
+  induction rs generalizing s with
+  | nil =>
+    have ht : s = t := Option.some.inj h
+    exact ht ▸ hs
+  | cons r rs ih =>
+    simp only [replayOwned] at h
+    split at h
+    · contradiction
+    · exact ih _ (ownedReachable c r.1 r.2 s hs) h
+
+/-- Successful restart restores the committed allocation and a cache equal to
+independent replay, using the M1 theorem instead of assuming cache correctness. -/
+theorem checkedRestartSound {S : Type} [SemilatticeSup S] [OrderBot S]
+    [DecidableEq S] (c : WriteContext) (rs : List (OwnedPayload × Record S))
+    (saved : Nat) (t : Replica S × Nat)
+    (h : checkedRestart c rs saved = some t) :
+    replay t.1.log = t.1.live ∧ t.2 = saved := by
+  unfold checkedRestart at h
+  split at h
+  · contradiction
+  · cases he : replayOwned c rs (empty, 0) with
+    | none => simp [he] at h
+    | some s =>
+      simp only [he] at h
+      split at h
+      · have ht : s = t := Option.some.inj h
+        subst t
+        exact ⟨replayAgrees.1 S s.1
+          (replayOwnedReachable c rs (empty, 0) s Reachable.empty he), by assumption⟩
+      · contradiction
+
+end SafeMesh.RecordKernel
+
+#print axioms SafeMesh.RecordKernel.replayOwnedReachable
+#print axioms SafeMesh.RecordKernel.checkedRestartSound
