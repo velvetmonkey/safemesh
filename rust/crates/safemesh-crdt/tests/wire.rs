@@ -101,7 +101,7 @@ fn canonical_state_encodings_are_sorted() {
 
 #[test]
 fn event_log_roundtrips_and_preserves_deduped_records() {
-    let mut log = EventLog::new();
+    let mut log = EventLog::with_replica_count(2);
     log.append(
         1,
         PnCounterDelta::Inc {
@@ -583,9 +583,9 @@ fn event_log_refuses_every_single_byte_change() {
 #[test]
 fn event_log_empty_and_embedded_frames_roundtrip_and_reject_truncation() {
     use safemesh_crdt::WireCursor;
-    let empty = EventLog::<GCounterDelta>::new();
+    let empty = EventLog::<GCounterDelta>::with_replica_count(2);
     roundtrip(empty.clone());
-    let mut log = EventLog::new();
+    let mut log = EventLog::with_replica_count(2);
     log.append(
         1,
         GCounterDelta {
@@ -635,4 +635,102 @@ fn event_log_empty_and_embedded_frames_roundtrip_and_reject_truncation() {
             Err(WireError::InvalidTag)
         );
     }
+}
+
+#[test]
+fn event_log_shape_rejects_wrong_type_even_when_empty_or_nested() {
+    use safemesh_crdt::{GCounter, OrSetDelta};
+    for populated in [false, true] {
+        let mut source = EventLog::for_crdt(&GCounter::new(2));
+        if populated {
+            source.append(
+                0,
+                GCounterDelta {
+                    replica: 0,
+                    tally: 7,
+                },
+            );
+        }
+        let bytes = source.to_wire_bytes().unwrap();
+        assert_eq!(
+            EventLog::<PnCounterDelta>::from_wire_bytes(&bytes),
+            Err(WireError::DeltaTypeMismatch)
+        );
+        let mut outer = EventLog::new();
+        if populated {
+            outer.append(0, source);
+        }
+        let bytes = outer.to_wire_bytes().unwrap();
+        assert_eq!(
+            EventLog::<EventLog<PnCounterDelta>>::from_wire_bytes(&bytes),
+            Err(WireError::DeltaTypeMismatch)
+        );
+    }
+    // Remove payloads have identical fields, but distinct element schemas.
+    let mut source = EventLog::new();
+    source.append(0, OrSetDelta::<u64, u64>::Remove { tokens: vec![7] });
+    assert_eq!(
+        EventLog::<OrSetDelta<String, u64>>::from_wire_bytes(&source.to_wire_bytes().unwrap()),
+        Err(WireError::DeltaTypeMismatch)
+    );
+}
+
+#[test]
+fn event_log_shape_checks_full_domain_including_empty_and_zero() {
+    use safemesh_crdt::{GCounter, PnCounter};
+    for count in [0, 2, 3] {
+        let state = GCounter::new(count);
+        let log = EventLog::for_crdt(&state);
+        let bytes = log.to_wire_bytes().unwrap();
+        assert_eq!(
+            EventLog::<GCounterDelta>::from_wire_bytes_for(&bytes, &state),
+            Ok(log)
+        );
+        for other in [0, 2, 3] {
+            if count != other {
+                assert_eq!(
+                    EventLog::<GCounterDelta>::from_wire_bytes_for(&bytes, &GCounter::new(other)),
+                    Err(WireError::ReplicaCountMismatch {
+                        expected: other,
+                        actual: count
+                    })
+                );
+            }
+        }
+        let pn = PnCounter::new(count);
+        let bytes = EventLog::for_crdt(&pn).to_wire_bytes().unwrap();
+        assert_eq!(
+            EventLog::<PnCounterDelta>::from_wire_bytes_for(&bytes, &PnCounter::new(count + 1)),
+            Err(WireError::ReplicaCountMismatch {
+                expected: count + 1,
+                actual: count
+            })
+        );
+    }
+    assert_eq!(
+        EventLog::<GCounterDelta>::new().to_wire_bytes(),
+        Err(WireError::MissingShape)
+    );
+    assert_eq!(
+        EventLog::<PnCounterDelta>::new().to_wire_bytes(),
+        Err(WireError::MissingShape)
+    );
+}
+
+#[test]
+fn event_log_shape_distinguishes_unbounded_from_fixed_zero() {
+    let state = EnableWinsFlag::<u64>::new();
+    let bytes = EventLog::<EnableWinsFlagDelta<u64>>::with_replica_count(0)
+        .to_wire_bytes()
+        .unwrap();
+    assert_eq!(
+        EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes_for(&bytes, &state),
+        Err(WireError::ArityKindMismatch)
+    );
+    let log = EventLog::for_crdt(&state);
+    let bytes = log.to_wire_bytes().unwrap();
+    assert_eq!(
+        EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes_for(&bytes, &state),
+        Ok(log)
+    );
 }

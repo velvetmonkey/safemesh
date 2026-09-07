@@ -3,7 +3,7 @@
 //! Public API walk: m2slice <scratch-directory> [--require-integrity].
 use safemesh_crdt::{
     Admission, Crdt, EventLog, GCounter, GCounterDelta, OrSet, OrSetDelta, Record, WireDecode,
-    WireEncode, WireError,
+    WireEncode, WireError, WireSchema,
 };
 use std::{fmt::Debug, fs, io::Write, path::Path};
 
@@ -14,12 +14,12 @@ struct Replica<C: Crdt> {
 }
 impl<C: Crdt> Replica<C>
 where
-    C::Delta: Clone + PartialEq + WireEncode + WireDecode,
+    C::Delta: Clone + PartialEq + WireEncode + WireDecode + WireSchema,
 {
     fn new(state: C) -> Self {
         Self {
+            log: EventLog::for_crdt(&state),
             state,
-            log: EventLog::new(),
         }
     }
     fn local(&mut self, id: u64, delta: C::Delta) {
@@ -35,7 +35,7 @@ where
         fs::rename(&temporary, path).unwrap();
     }
     fn restart(path: &Path, mut state: C) -> Result<Self, WireError> {
-        let log = EventLog::<C::Delta>::from_wire_bytes(&fs::read(path).unwrap())?;
+        let log = EventLog::<C::Delta>::from_wire_bytes_for(&fs::read(path).unwrap(), &state)?;
         for r in log.records() {
             state.apply_delta(r.delta.clone());
         }
@@ -44,7 +44,7 @@ where
 }
 fn exchange<C: Crdt>(a: &mut Replica<C>, b: &mut Replica<C>)
 where
-    C::Delta: Clone + PartialEq + WireEncode + WireDecode,
+    C::Delta: Clone + PartialEq + WireEncode + WireDecode + WireSchema,
 {
     // Both directions captured before delivery; only real wire bytes cross.
     let ab: Vec<_> = a
@@ -78,7 +78,7 @@ fn journey<C: Crdt + Debug + PartialEq>(
     initial: [C::Delta; 2],
     partition: impl Fn(&C) -> [C::Delta; 2],
 ) where
-    C::Delta: Clone + PartialEq + WireEncode + WireDecode,
+    C::Delta: Clone + PartialEq + WireEncode + WireDecode + WireSchema,
 {
     let paths = [
         root.join(format!("{name}-a.log")),
@@ -138,7 +138,7 @@ fn corruption<C: Crdt + Debug + PartialEq>(
     needle: &[u8],
 ) -> bool
 where
-    C::Delta: Clone + PartialEq + WireEncode + WireDecode,
+    C::Delta: Clone + PartialEq + WireEncode + WireDecode + WireSchema,
 {
     let path = root.join(format!("{name}-a.log"));
     let bytes = fs::read(&path).unwrap();
@@ -251,6 +251,50 @@ fn main() {
         assert!(
             counter && orset,
             "step 5 integrity wall: persisted payload corruption silently loads a different state"
+        );
+    }
+}
+
+#[cfg(test)]
+mod logshape_tests {
+    use super::*;
+
+    #[test]
+    fn physical_tamper_two_replica_log_into_three() {
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/logshape-tamper");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("counter.log");
+        let path = path.as_path();
+        let mut source = Replica::new(GCounter::new(2));
+        source.local(
+            0,
+            GCounterDelta {
+                replica: 0,
+                tally: 10,
+            },
+        );
+        source.local(
+            1,
+            GCounterDelta {
+                replica: 1,
+                tally: 20,
+            },
+        );
+        source.persist(path);
+        let bytes = fs::read(path).unwrap();
+        let result = Replica::restart(path, GCounter::new(3));
+        assert_eq!(fs::read(path).unwrap(), bytes);
+        let outcome = match result {
+            Ok(replica) => format!("Ok wrong-state={:?}", replica.state.state()),
+            Err(error) => format!("Err({error:?})"),
+        };
+        println!(
+            "two-replica persisted bytes={} three-replica restart={outcome}",
+            bytes.len()
+        );
+        assert_eq!(
+            outcome,
+            "Err(ReplicaCountMismatch { expected: 3, actual: 2 })"
         );
     }
 }

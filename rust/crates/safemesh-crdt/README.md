@@ -121,7 +121,8 @@ cargo test -p safemesh-crdt --features laws
 `EventLog` uses tag `0x03`, replacing the old `0x02` format without a compatibility
 path. The tag is followed by a little-endian u32 body length, its bitwise
 complement, the body, and a little-endian CRC-32/ISO-HDLC. The body contains the
-record count and every length-prefixed record, including each payload. The CRC
+shape header described below, the record count and every length-prefixed record,
+including each payload. The CRC
 covers both length fields and the entire body. The length complement is checked
 before using the length; the CRC is checked before decoding records. Tag changes
 return `WireError::InvalidTag`; length-pair or checksum mismatches return
@@ -131,3 +132,36 @@ This detects accidental corruption, including any single changed byte anywhere
 in a frame. It is not authentication: a forger can recompute the checksum, and
 multiple-byte corruption can have CRC collisions. Record and delta encodings
 remain separate wire types and do not gain this frame integrity check.
+
+
+The shape-bearing layout retains tag `0x03` and the integrity envelope, but
+**changes persisted EventLog bytes**. The body starts with little-endian
+`u32::MAX` (an impossible record count for a valid old frame), a u32-length-prefixed
+stable UTF-8 schema identity, and an arity discriminator: `0` for an unbounded
+domain, or `1` followed by the little-endian u64 replica count. The count can be
+zero. The existing record count and records follow. All shape fields are covered
+by the existing CRC. Schemas describe complete delta types, including enum variants
+and element types; nested log/record identities recursively include their payload
+schema. Individual record and delta bytes are unchanged.
+
+Construct persisted logs with `EventLog::for_crdt(&state)` (or
+`with_replica_count(n)` for an explicitly fixed domain). `EventLog::new()` remains
+available for in-memory logs and unbounded CRDTs; encoding an unshaped G-Counter
+or PN-Counter log returns `WireError::MissingShape`. Decode at a destination with
+`EventLog::from_wire_bytes_for(bytes, &state)` before applying any records.
+A different delta schema returns `DeltaTypeMismatch`; a different fixed arity
+returns `ReplicaCountMismatch { expected, actual }`; fixed/unbounded disagreement
+returns `ArityKindMismatch`. Plain `from_wire_bytes` decodes the log, checks its
+delta schema, and retains the saved arity; it does not apply records to a CRDT.
+The Python/WASM replica loaders and the `m2slice` persistence example use the
+destination-aware decoder.
+
+Existing `0x03` files without the shape header now return `MissingShape`.
+There is no automatic migration: old bytes cannot establish the original arity,
+including replicas that never emitted a delta. Preserve old files and use the
+old release plus independently verified original schema/arity to recover and
+re-encode records with the new API. Do not infer arity from the largest coordinate.
+New files are also incompatible with old decoders. A G-Counter frame grows by
+43 bytes; other overhead is 9 plus the schema byte length, plus 8 for fixed arity.
+External payloads persisted in EventLog must implement `WireSchema` with a stable,
+unique identity; external fixed-domain CRDTs must implement `Crdt::replica_count`.

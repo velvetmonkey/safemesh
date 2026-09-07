@@ -259,7 +259,7 @@ impl SafeMeshGCounterReplica {
         SafeMeshGCounterReplica {
             replica_id,
             state: GCounter::new(replicas),
-            log: EventLog::new(),
+            log: EventLog::with_replica_count(replicas),
         }
     }
 
@@ -301,12 +301,19 @@ impl SafeMeshGCounterReplica {
 
     #[wasm_bindgen(js_name = mergeLogBytes)]
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
-        let log = EventLog::<GCounterDelta>::from_wire_bytes(bytes).map_err(|error| {
-            JsValue::from_str(match error {
-                safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                _ => "failed to decode event log",
-            })
-        })?;
+        let log = EventLog::<GCounterDelta>::from_wire_bytes_for(bytes, &self.state).map_err(
+            |error| {
+                JsValue::from_str(match error {
+                    safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                    safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
+                        "replica count mismatch"
+                    }
+                    safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
+                    safemesh_crdt::WireError::MissingShape => "event log missing shape",
+                    _ => "failed to decode event log",
+                })
+            },
+        )?;
         if log
             .records()
             .iter()
@@ -410,10 +417,15 @@ impl SafeMeshEnableWinsFlagReplica {
 
     #[wasm_bindgen(js_name = mergeLogBytes)]
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
-        let log =
-            EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes(bytes).map_err(|error| {
+        let log = EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes_for(bytes, &self.state)
+            .map_err(|error| {
                 JsValue::from_str(match error {
                     safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                    safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
+                        "replica count mismatch"
+                    }
+                    safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
+                    safemesh_crdt::WireError::MissingShape => "event log missing shape",
                     _ => "failed to decode event log",
                 })
             })?;
@@ -536,12 +548,18 @@ impl SafeMeshLwwMapReplica {
 
     #[wasm_bindgen(js_name = mergeLogBytes)]
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
-        let log = EventLog::<LwwMapDelta<u64, u64>>::from_wire_bytes(bytes).map_err(|error| {
-            JsValue::from_str(match error {
-                safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                _ => "failed to decode event log",
-            })
-        })?;
+        let log = EventLog::<LwwMapDelta<u64, u64>>::from_wire_bytes_for(bytes, &self.state)
+            .map_err(|error| {
+                JsValue::from_str(match error {
+                    safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                    safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
+                        "replica count mismatch"
+                    }
+                    safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
+                    safemesh_crdt::WireError::MissingShape => "event log missing shape",
+                    _ => "failed to decode event log",
+                })
+            })?;
         for record in log.records().iter().cloned() {
             if self.log.admit_with(record, |delta| {
                 self.state.apply_delta(delta.clone());
@@ -647,12 +665,18 @@ impl SafeMeshLwwRegisterReplica {
 
     #[wasm_bindgen(js_name = mergeLogBytes)]
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
-        let log = EventLog::<LwwRegisterDelta<u64>>::from_wire_bytes(bytes).map_err(|error| {
-            JsValue::from_str(match error {
-                safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                _ => "failed to decode event log",
-            })
-        })?;
+        let log = EventLog::<LwwRegisterDelta<u64>>::from_wire_bytes_for(bytes, &self.state)
+            .map_err(|error| {
+                JsValue::from_str(match error {
+                    safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                    safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
+                        "replica count mismatch"
+                    }
+                    safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
+                    safemesh_crdt::WireError::MissingShape => "event log missing shape",
+                    _ => "failed to decode event log",
+                })
+            })?;
         for record in log.records().iter().cloned() {
             if self.log.admit_with(record, |delta| {
                 self.state.apply_delta(delta.clone());

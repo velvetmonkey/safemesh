@@ -283,7 +283,7 @@ impl PyGCounterReplica {
         PyGCounterReplica {
             replica_id,
             state: GCounter::new(replicas),
-            log: EventLog::new(),
+            log: EventLog::with_replica_count(replicas),
         }
     }
 
@@ -335,12 +335,19 @@ impl PyGCounterReplica {
     }
 
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
-        let log = EventLog::<GCounterDelta>::from_wire_bytes(bytes).map_err(|error| {
-            pyo3::exceptions::PyValueError::new_err(match error {
-                safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                _ => "failed to decode event log",
-            })
-        })?;
+        let log = EventLog::<GCounterDelta>::from_wire_bytes_for(bytes, &self.state).map_err(
+            |error| {
+                pyo3::exceptions::PyValueError::new_err(match error {
+                    safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                    safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
+                        "replica count mismatch"
+                    }
+                    safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
+                    safemesh_crdt::WireError::MissingShape => "event log missing shape",
+                    _ => "failed to decode event log",
+                })
+            },
+        )?;
         if log
             .records()
             .iter()
@@ -452,10 +459,15 @@ impl PyEnableWinsFlagReplica {
     }
 
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
-        let log =
-            EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes(bytes).map_err(|error| {
+        let log = EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes_for(bytes, &self.state)
+            .map_err(|error| {
                 pyo3::exceptions::PyValueError::new_err(match error {
                     safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                    safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
+                        "replica count mismatch"
+                    }
+                    safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
+                    safemesh_crdt::WireError::MissingShape => "event log missing shape",
                     _ => "failed to decode event log",
                 })
             })?;
@@ -578,12 +590,18 @@ impl PyLwwMapReplica {
     }
 
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
-        let log = EventLog::<LwwMapDelta<u64, u64>>::from_wire_bytes(bytes).map_err(|error| {
-            pyo3::exceptions::PyValueError::new_err(match error {
-                safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                _ => "failed to decode event log",
-            })
-        })?;
+        let log = EventLog::<LwwMapDelta<u64, u64>>::from_wire_bytes_for(bytes, &self.state)
+            .map_err(|error| {
+                pyo3::exceptions::PyValueError::new_err(match error {
+                    safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                    safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
+                        "replica count mismatch"
+                    }
+                    safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
+                    safemesh_crdt::WireError::MissingShape => "event log missing shape",
+                    _ => "failed to decode event log",
+                })
+            })?;
         for record in log.records().iter().cloned() {
             if self.log.admit_with(record, |delta| {
                 self.state.apply_delta(delta.clone());
@@ -684,12 +702,18 @@ impl PyLwwRegisterReplica {
     }
 
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
-        let log = EventLog::<LwwRegisterDelta<u64>>::from_wire_bytes(bytes).map_err(|error| {
-            pyo3::exceptions::PyValueError::new_err(match error {
-                safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                _ => "failed to decode event log",
-            })
-        })?;
+        let log = EventLog::<LwwRegisterDelta<u64>>::from_wire_bytes_for(bytes, &self.state)
+            .map_err(|error| {
+                pyo3::exceptions::PyValueError::new_err(match error {
+                    safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                    safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
+                        "replica count mismatch"
+                    }
+                    safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
+                    safemesh_crdt::WireError::MissingShape => "event log missing shape",
+                    _ => "failed to decode event log",
+                })
+            })?;
         for record in log.records().iter().cloned() {
             if self.log.admit_with(record, |delta| {
                 self.state.apply_delta(delta.clone());
@@ -1174,7 +1198,7 @@ mod admission_tests {
                         .contains("record ID collision"));
                     assert_eq!(replica.state, state);
                     assert_eq!(replica.log, log);
-                    let mut incoming = EventLog::new();
+                    let mut incoming = EventLog::for_crdt(&replica.state);
                     assert_eq!(
                         incoming.insert_record(second),
                         safemesh_crdt::Admission::Accepted
@@ -1249,6 +1273,30 @@ mod admission_tests {
     }
 
     #[test]
+    fn persisted_counter_shape_mismatch_leaves_destination_unchanged() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let mut source = PyGCounterReplica::new(0, 2);
+            source.append_bump(py, 0, 10).unwrap();
+            source.append_bump(py, 1, 20).unwrap();
+            let bytes = source.log.to_wire_bytes().unwrap();
+            let mut target = PyGCounterReplica::new(0, 3);
+            let state = target.state.clone();
+            let log = target.log.clone();
+            assert!(target
+                .merge_log_bytes(&bytes)
+                .unwrap_err()
+                .to_string()
+                .contains("replica count mismatch"));
+            assert_eq!(target.state, state);
+            assert_eq!(target.log, log);
+            let mut matching = PyGCounterReplica::new(0, 2);
+            matching.merge_log_bytes(&bytes).unwrap();
+            assert_eq!(matching.state, source.state);
+        });
+    }
+
+    #[test]
     fn invalid_counter_coordinates_are_rejected_before_admission() {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
@@ -1267,7 +1315,7 @@ mod admission_tests {
             assert!(replica
                 .merge_record_bytes(&record.to_wire_bytes().unwrap())
                 .is_err());
-            let mut log = EventLog::new();
+            let mut log = EventLog::with_replica_count(2);
             log.insert_record(record);
             assert!(replica
                 .merge_log_bytes(&log.to_wire_bytes().unwrap())
