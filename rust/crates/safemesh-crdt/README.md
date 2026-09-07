@@ -189,3 +189,21 @@ This adapter acknowledges in memory. It does not yet commit edits durably or
 recover an existing store: opening a previously initialized store with the lock
 available returns `RecoveryRequired`. The default core remains `no_std`; raw
 carriers and `EventLog` do not themselves grant an exclusive writer lease.
+
+### Durable local commits (packet B)
+
+With `local-writer`, use `local::DurableReplica::counter` or `utf8_set` for
+acknowledged durable edits. Supply an existing, durably created directory on the
+supported Linux local filesystem and keep it and its fence files in place.
+The same ticket, ownership, append, and receive rules apply. Each accepted edit
+replaces one file containing allocation/ownership metadata and the unchanged log
+wire bytes; temporary-file write, file sync, rename, and directory sync finish
+before success reaches the caller. The example and adapter share this replacement
+routine. Any commit I/O error disables further writes and ticket renewal on that
+instance; an ambiguous failure may have committed the transaction despite the
+error, so callers must not assume it was rolled back.
+
+`CommittedTransaction::read` reopens the committed metadata and log bytes without
+granting a write lease. It is a storage read, not checked history validation.
+Writable restart remains packet C: durable constructors return `RecoveryRequired`
+for an existing store. This path does not claim general power-loss certification.

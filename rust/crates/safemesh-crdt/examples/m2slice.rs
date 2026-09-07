@@ -5,7 +5,10 @@ use safemesh_crdt::{
     Admission, Crdt, EventLog, GCounter, GCounterDelta, OrSet, OrSetDelta, Record, WireDecode,
     WireEncode, WireError, WireSchema,
 };
-use std::{fmt::Debug, fs, io::Write, path::Path};
+use std::{fmt::Debug, fs, path::Path};
+
+#[path = "../src/persistence.rs"]
+mod persistence;
 
 // Caller orchestration; no library-private or test-only APIs.
 struct Replica<C: Crdt> {
@@ -28,11 +31,7 @@ where
             .unwrap();
     }
     fn persist(&self, path: &Path) {
-        let temporary = path.with_extension("tmp");
-        let mut file = fs::File::create(&temporary).unwrap();
-        file.write_all(&self.log.to_wire_bytes().unwrap()).unwrap();
-        file.sync_all().unwrap();
-        fs::rename(&temporary, path).unwrap();
+        persistence::replace(path, &self.log.to_wire_bytes().unwrap()).unwrap();
     }
     fn restart(path: &Path, mut state: C) -> Result<Self, WireError> {
         let log = EventLog::<C::Delta>::from_wire_bytes_for(&fs::read(path).unwrap(), &state)?;
