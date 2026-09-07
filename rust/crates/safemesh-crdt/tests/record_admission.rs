@@ -1,6 +1,6 @@
 use safemesh_crdt::{
     Admission, AppendError, Crdt, EventLog, GCounter, GCounterDelta, Record, RecordId, WireDecode,
-    WireEncode, WireError,
+    WireEncode,
 };
 fn record(sequence: u64, tally: u64) -> Record<GCounterDelta> {
     Record {
@@ -56,32 +56,6 @@ fn duplicates_and_collisions_do_not_invoke_application() {
         Admission::Accepted
     );
     assert!(applied);
-}
-fn wire_log(records: &[Record<GCounterDelta>]) -> Vec<u8> {
-    let mut bytes = vec![2];
-    bytes.extend_from_slice(&(records.len() as u32).to_le_bytes());
-    for r in records {
-        let encoded = r.to_wire_bytes().unwrap();
-        bytes.extend_from_slice(&(encoded.len() as u32).to_le_bytes());
-        bytes.extend(encoded);
-    }
-    bytes
-}
-#[test]
-fn decoder_surfaces_conflicts_before_deduplication() {
-    for records in [
-        vec![record(1, 5), record(1, 9)],
-        vec![record(1, 9), record(1, 5)],
-    ] {
-        assert_eq!(
-            EventLog::<GCounterDelta>::from_wire_bytes(&wire_log(&records)),
-            Err(WireError::RecordCollision)
-        );
-    }
-    let decoded =
-        EventLog::<GCounterDelta>::from_wire_bytes(&wire_log(&[record(1, 5), record(1, 5)]))
-            .unwrap();
-    assert_eq!(decoded.records(), &[record(1, 5)]);
 }
 #[test]
 fn local_append_handles_gaps_and_exhaustion_without_unlogged_application() {

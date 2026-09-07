@@ -160,7 +160,10 @@ where
     bad[offset] ^= 1;
     fs::write(&bad_path, &bad).unwrap();
     let detected = match Replica::restart(&bad_path, empty()) {
-        Err(_) => true,
+        Err(error) => {
+            println!("{name} corrupt-payload-offset={offset} restart=Err({error:?})");
+            true
+        }
         Ok(restarted) => {
             assert_ne!(
                 restarted.state, original.state,
