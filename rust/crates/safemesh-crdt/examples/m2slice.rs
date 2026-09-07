@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Ben Cassie
 // SPDX-License-Identifier: Apache-2.0
 //! Public API walk: m2slice <scratch-directory> [--require-integrity].
+//! Use --features laws and a fresh scratch directory for the packet D process
+//! journey (Linux local filesystems). Keep the directory for subsequent recovery.
 use safemesh_crdt::{
     Admission, Crdt, EventLog, GCounter, GCounterDelta, OrSet, OrSetDelta, Record, WireDecode,
     WireEncode, WireError, WireSchema,
@@ -179,6 +181,10 @@ where
     detected
 }
 fn main() {
+    #[cfg(feature = "local-writer")]
+    if let Some(root) = std::env::var_os("SAFEMESH_M2_JOINED_CHILD") {
+        joined::child(Path::new(&root));
+    }
     let mut args = std::env::args().skip(1);
     let root = args
         .next()
@@ -186,6 +192,8 @@ fn main() {
     let require_integrity = args.next().as_deref() == Some("--require-integrity");
     let root = Path::new(&root);
     fs::create_dir_all(root).unwrap();
+    #[cfg(feature = "local-writer")]
+    joined::run(root);
     journey(
         root,
         "counter",
@@ -295,5 +303,252 @@ mod logshape_tests {
             outcome,
             "Err(ReplicaCountMismatch { expected: 3, actual: 2 })"
         );
+    }
+}
+
+// Packet D composes the public owned/durable/restart APIs. The earlier walk
+// remains available without local-writer; use --features laws for this journey.
+#[cfg(feature = "local-writer")]
+mod joined {
+    use super::*;
+    use safemesh_crdt::{
+        local::DurableReplica,
+        ownership::{OwnedDelta, WriterConfig},
+        RecordId,
+    };
+    use std::io::Write;
+
+    // IDs are scoped to a CRDT log; tokens are scoped to its set. Capture
+    // allocations at issuance, not received copies (which intentionally repeat).
+    fn unique<T: PartialEq>(values: &[T]) -> bool {
+        values
+            .iter()
+            .enumerate()
+            .all(|(i, x)| !values[..i].contains(x))
+    }
+    fn allocations<D>(records: &[Record<D>]) -> Vec<RecordId> {
+        records.iter().map(|r| r.id).collect()
+    }
+    fn tokens(records: &[Record<OrSetDelta<String, u64>>]) -> Vec<u64> {
+        records
+            .iter()
+            .filter_map(|r| match r.delta {
+                OrSetDelta::Add { token, .. } => Some(token),
+                OrSetDelta::Remove { .. } => None,
+            })
+            .collect()
+    }
+    fn check_allocations<T: PartialEq + Clone>(name: &str, before: &[T], after: &[T]) {
+        assert!(!before.is_empty() && !after.is_empty());
+        let mut all = before.to_vec();
+        all.extend_from_slice(after);
+        assert!(unique(&all), "{name}: allocation reused");
+        assert!(!before.iter().any(|x| after.contains(x)));
+        all.push(before[0].clone());
+        assert!(!unique(&all), "{name}: planted duplicate escaped collector");
+        std::println!(
+            "{name} before={} after={} overlap=0 planted-duplicate=detected",
+            before.len(),
+            after.len()
+        );
+    }
+    fn joined_exchange<C>(
+        a: &mut DurableReplica<C>,
+        b: &mut DurableReplica<C>,
+        empty: impl Fn() -> C,
+    ) where
+        C: Crdt + PartialEq + std::fmt::Debug,
+        C::Delta: OwnedDelta + Clone + PartialEq + WireEncode + WireDecode + WireSchema,
+    {
+        let ab: Vec<_> = a
+            .log()
+            .since(b.log().version())
+            .iter()
+            .map(|r| r.to_wire_bytes().unwrap())
+            .collect();
+        let ba: Vec<_> = b
+            .log()
+            .since(a.log().version())
+            .iter()
+            .map(|r| r.to_wire_bytes().unwrap())
+            .collect();
+        assert!(!ab.is_empty() && !ba.is_empty());
+        // Same two batches, opposite delivery orders, through M1 admission.
+        let mut finals = Vec::new();
+        for batches in [[&ab, &ba], [&ba, &ab]] {
+            let mut state = empty();
+            let mut log = EventLog::for_crdt(&state);
+            for batch in batches {
+                for packet in batch {
+                    let record = Record::<C::Delta>::from_wire_bytes(packet).unwrap();
+                    assert_eq!(
+                        log.admit_with(record, |d| state.apply_delta(d.clone())),
+                        Admission::Accepted
+                    );
+                }
+            }
+            finals.push(state);
+        }
+        assert_eq!(finals[0], finals[1]);
+        for (receiver, packets) in [(b, ab), (a, ba)] {
+            for packet in packets {
+                assert_eq!(
+                    receiver
+                        .receive(
+                            receiver.ticket(),
+                            Record::<C::Delta>::from_wire_bytes(&packet).unwrap()
+                        )
+                        .unwrap(),
+                    Admission::Accepted
+                );
+            }
+            assert_eq!(receiver.state(), &finals[0]);
+        }
+    }
+    fn joined_config(writer: u64) -> WriterConfig {
+        WriterConfig { writers: 2, writer }
+    }
+    fn joined_finish(root: &Path, loss: bool) {
+        let counter_root = root.join("counter");
+        let set_root = root.join("set");
+        let before_c = EventLog::<GCounterDelta>::from_wire_bytes_for(
+            &fs::read(root.join("counter-issued")).unwrap(),
+            &GCounter::new(2),
+        )
+        .unwrap();
+        let before_s = EventLog::<OrSetDelta<String, u64>>::from_wire_bytes_for(
+            &fs::read(root.join("set-issued")).unwrap(),
+            &OrSet::new(),
+        )
+        .unwrap();
+        assert_eq!(before_c.records().len(), 2);
+        assert_eq!(before_s.records().len(), 2);
+        let mut a = DurableReplica::restart_counter(&counter_root, joined_config(0)).unwrap();
+        let mut sa = DurableReplica::restart_utf8_set(&set_root, joined_config(0)).unwrap();
+        if loss {
+            assert_eq!(a.state().state(), &[0, 0]);
+            assert!(!sa.state().contains(&"café☕".into()));
+            assert!(!sa.state().contains(&"東京".into()));
+            assert!(a.log().records().is_empty() && sa.log().records().is_empty());
+            std::println!(
+                "joined LOSS: acknowledged counter=9 and UTF-8 edits absent after process restart"
+            );
+            return;
+        }
+        assert_eq!(a.state().state(), &[9, 0]);
+        for word in ["café☕", "東京"] {
+            assert!(sa.state().contains(&word.into()));
+        }
+        let mut b = DurableReplica::restart_counter(&counter_root, joined_config(1)).unwrap();
+        let mut sb = DurableReplica::restart_utf8_set(&set_root, joined_config(1)).unwrap();
+        let after_c = [
+            a.bump(a.ticket(), 12).unwrap(),
+            b.bump(b.ticket(), 7).unwrap(),
+        ];
+        let after_s = [
+            sa.add(sa.ticket(), "naïve".into()).unwrap(),
+            sb.add(sb.ticket(), "γειά".into()).unwrap(),
+        ];
+        check_allocations(
+            "counter IDs",
+            &allocations(before_c.records()),
+            &allocations(&after_c),
+        );
+        check_allocations(
+            "set IDs",
+            &allocations(before_s.records()),
+            &allocations(&after_s),
+        );
+        check_allocations("set tokens", &tokens(before_s.records()), &tokens(&after_s));
+        joined_exchange(&mut a, &mut b, || GCounter::new(2));
+        joined_exchange(&mut sa, &mut sb, OrSet::new);
+        assert_eq!(a.state(), b.state());
+        assert_eq!(a.state().state(), &[12, 7]);
+        assert_eq!(sa.state(), sb.state());
+        for word in ["café☕", "東京", "naïve", "γειά"] {
+            assert!(sa.state().contains(&word.into()));
+        }
+        for r in before_c.records() {
+            assert!(a.log().records().contains(r) && b.log().records().contains(r));
+        }
+        for r in before_s.records() {
+            assert!(sa.log().records().contains(r) && sb.log().records().contains(r));
+        }
+        let state_c = a.state().clone();
+        let state_s = sa.state().clone();
+        drop((a, b, sa, sb));
+        for writer in 0..2 {
+            assert_eq!(
+                DurableReplica::restart_counter(&counter_root, joined_config(writer))
+                    .unwrap()
+                    .state(),
+                &state_c
+            );
+            assert_eq!(
+                DurableReplica::restart_utf8_set(&set_root, joined_config(writer))
+                    .unwrap()
+                    .state(),
+                &state_s
+            );
+        }
+        std::println!("joined HAPPY: all acknowledged records survive; both exchange orders converge; second restart survives");
+    }
+
+    fn joined_start(root: &Path, loss: bool) {
+        for name in ["counter", "set"] {
+            fs::create_dir_all(root.join(name)).unwrap();
+        }
+        // Make the newly created store directories durable before edits.
+        fs::File::open(root).unwrap().sync_all().unwrap();
+        // Both replicas exist before the offline edits; neither exchanges yet.
+        let _b = DurableReplica::counter(&root.join("counter"), joined_config(1)).unwrap();
+        let _sb = DurableReplica::utf8_set(&root.join("set"), joined_config(1)).unwrap();
+        let mut c = DurableReplica::counter(&root.join("counter"), joined_config(0)).unwrap();
+        let mut s = DurableReplica::utf8_set(&root.join("set"), joined_config(0)).unwrap();
+        assert!(!loss);
+        c.bump(c.ticket(), 5).unwrap();
+        c.bump(c.ticket(), 9).unwrap();
+        s.add(s.ticket(), "café☕".into()).unwrap();
+        s.add(s.ticket(), "東京".into()).unwrap();
+        // External audit only: restart never reads these files as recovery data.
+        fs::write(
+            root.join("counter-issued"),
+            c.log().to_wire_bytes().unwrap(),
+        )
+        .unwrap();
+        fs::write(root.join("set-issued"), s.log().to_wire_bytes().unwrap()).unwrap();
+        std::println!("joined ACK counter=5,9 set=café☕,東京 loss={loss}");
+        std::io::stdout().flush().unwrap();
+        // Intentionally bypass destructors: a real process ends after ACK.
+        std::process::exit(77);
+    }
+
+    pub fn child(root: &Path) {
+        joined_start(root, false);
+    }
+    pub fn run(root: &Path) {
+        let root = root.join("joined");
+        fs::create_dir_all(&root).unwrap();
+        fs::File::open(root.parent().unwrap())
+            .unwrap()
+            .sync_all()
+            .unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .env("SAFEMESH_M2_JOINED_CHILD", &root)
+            .output()
+            .unwrap();
+        fs::write(
+            root.join("child.exit"),
+            output.status.code().unwrap().to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("child.exit")).unwrap(),
+            "77",
+            "{output:?}"
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("joined ACK"));
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+        joined_finish(&root, false);
     }
 }
