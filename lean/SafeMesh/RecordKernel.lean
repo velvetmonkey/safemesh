@@ -8,7 +8,8 @@ import SafeMesh.Delta
 /-!
 # Record lifecycle
 
-Four theorems only: admission, idempotence, collision, replay agreement.
+The M1 lifecycle has four theorems: admission, idempotence, collision, replay
+agreement. The M2 ownership extension follows below.
 The live state carries accepted-record provenance as well as its CRDT value:
 an accepted delta can be below the current value, so value inequality alone
 cannot characterize admission. Provenance is logical bookkeeping, not a second
@@ -189,3 +190,181 @@ the admission API/semantics to expose Collision. A protocol that transmits that
 outcome may need a separately specified response extension; no bytes are changed
 or specified here. Naturals abstract bounded Rust identifiers and tallies.
 -/
+
+/-! ## Fixed ownership (M2 packet A)
+
+The configured writers are `0 .. writers-1`. A counter coordinate belongs to
+its same-numbered author. An add's token is `sequence * writers + author`;
+record sequences are positive and bounded at the Rust boundary. A remove
+references observed tokens from ANY author; it does not allocate a token.
+The local-filesystem shell supplies lock ownership and the current generation.
+This model proves the decision on those facts, not OS lock implementation or
+storage durability. Rust transcribes these definitions under corpus conformance.
+-/
+namespace SafeMesh.RecordKernel
+
+structure WriterConfig where
+  writers : Nat
+  writer : Nat
+  deriving Repr
+
+structure WriteContext where
+  config : WriterConfig
+  held : Bool
+  generation : Nat
+  currentGeneration : Nat
+  localWrite : Bool
+  deriving Repr
+
+inductive OwnedPayload where
+  | counter (coordinate : Nat)
+  | add (token : Nat)
+  | remove
+  deriving Repr
+
+def token (writers author sequence : Nat) : Nat := sequence * writers + author
+
+def maxWord : Nat := 18446744073709551615
+
+def nextSequence (last : Nat) : Option Nat :=
+  if last < maxWord then some (last + 1) else none
+
+theorem sequenceFresh (last next : Nat) (h : nextSequence last = some next) :
+    last < next ∧ next ≤ maxWord := by
+  unfold nextSequence at h
+  split at h
+  · rename_i hp
+    simp only [Option.some.injEq] at h
+    omega
+  · contradiction
+
+def allocateToken (writers author sequence : Nat) : Option Nat :=
+  if author < writers ∧ 0 < sequence ∧ token writers author sequence ≤ maxWord
+  then some (token writers author sequence) else none
+
+def payloadOwned (writers : Nat) (id : RecordId) : OwnedPayload → Prop
+  | .counter coordinate => coordinate = id.1
+  | .add t => allocateToken writers id.1 id.2 = some t
+  | .remove => True
+
+instance (writers : Nat) (id : RecordId) (p : OwnedPayload) :
+    Decidable (payloadOwned writers id p) := by
+  cases p <;> unfold payloadOwned <;> infer_instance
+
+def permitted (c : WriteContext) (id : RecordId) (p : OwnedPayload) : Prop :=
+  c.config.writer < c.config.writers ∧ c.held = true ∧ 0 < c.generation ∧
+  c.generation = c.currentGeneration ∧ id.1 < c.config.writers ∧ 0 < id.2 ∧
+  (c.localWrite = true → id.1 = c.config.writer) ∧ payloadOwned c.config.writers id p
+
+instance (c : WriteContext) (id : RecordId) (p : OwnedPayload) :
+    Decidable (permitted c id p) := by unfold permitted; infer_instance
+
+def refuses (c : WriteContext) (id : RecordId) (p : OwnedPayload) : Bool :=
+  !decide (permitted c id p)
+
+/-- The author, local writer and coordinate obligations follow from the exact
+predicate used to generate the executable oracle. -/
+theorem ownedWriter (c : WriteContext) (id : RecordId) (p : OwnedPayload)
+    (h : refuses c id p = false) :
+    id.1 < c.config.writers ∧ (c.localWrite = true → id.1 = c.config.writer) := by
+  have hp : permitted c id p := by simpa [refuses] using h
+  exact ⟨hp.2.2.2.2.1, hp.2.2.2.2.2.2.1⟩
+
+theorem ownedCoordinate (c : WriteContext) (id : RecordId) (coordinate : Nat)
+    (h : refuses c id (.counter coordinate) = false) : coordinate = id.1 := by
+  have hp : permitted c id (.counter coordinate) := by simpa [refuses] using h
+  exact hp.2.2.2.2.2.2.2
+
+/-- Modulo recovers the configured author, so two distinct authors cannot mint
+one token. This includes every sequence, not merely the sampled corpus. -/
+theorem tokenOwner (n a s : Nat) (ha : a < n) : token n a s % n = a := by
+  simp [token, Nat.add_mod, Nat.mod_eq_of_lt ha]
+
+theorem tokenDisjoint (n a b s t : Nat) (ha : a < n) (hb : b < n)
+    (hne : a ≠ b) : token n a s ≠ token n b t := by
+  intro h
+  have hm := congrArg (fun v => v % n) h
+  dsimp at hm
+  rw [tokenOwner n a s ha, tokenOwner n b t hb] at hm
+  exact hne hm
+
+/-- A writer also cannot reuse a token at two distinct record sequences. -/
+theorem tokenSequence (n a s t : Nat) (hn : 0 < n)
+    (h : token n a s = token n a t) : s = t := by
+  have hm : s * n = t * n := by simpa [token] using h
+  exact Nat.eq_of_mul_eq_mul_right hn hm
+
+theorem allocatedOwned (n a s t : Nat) (h : allocateToken n a s = some t) :
+    a < n ∧ 0 < s ∧ t = token n a s ∧ t ≤ maxWord := by
+  unfold allocateToken at h
+  split at h
+  · rename_i hp
+    simp only [Option.some.injEq] at h
+    exact ⟨hp.1, hp.2.1, h.symm, h ▸ hp.2.2⟩
+  · contradiction
+
+theorem competingRefused (c : WriteContext) (id : RecordId) (p : OwnedPayload)
+    (h : c.held = false) : refuses c id p = true := by
+  simp [refuses, permitted, h]
+
+theorem staleRefused (c : WriteContext) (id : RecordId) (p : OwnedPayload)
+    (h : c.generation ≠ c.currentGeneration) : refuses c id p = true := by
+  simp [refuses, permitted, h]
+
+theorem foreignCoordinateRefused (c : WriteContext) (id : RecordId) (coord : Nat)
+    (h : coord ≠ id.1) : refuses c id (.counter coord) = true := by
+  simp [refuses, permitted, payloadOwned, h]
+
+theorem foreignTokenRefused (c : WriteContext) (id : RecordId) (t : Nat)
+    (h : allocateToken c.config.writers id.1 id.2 ≠ some t) :
+    refuses c id (.add t) = true := by
+  simp [refuses, permitted, payloadOwned, h]
+
+/-- Validation wraps, and precedes, the SAME M1 step. The second component is
+allocation metadata. Refusal leaves the entire pair byte-representable as-is. -/
+def ownedStep {S : Type} [SemilatticeSup S] [OrderBot S] [DecidableEq S]
+    (c : WriteContext) (p : OwnedPayload) (r : Record S)
+    (s : Replica S × Nat) : Replica S × Nat :=
+  if refuses c r.1 p then s else
+    (step s.1 r, if outcome s.1 r = .accepted ∧ r.1.1 = c.config.writer
+      then max s.2 r.1.2 else s.2)
+
+theorem refusedUnchanged {S : Type} [SemilatticeSup S] [OrderBot S] [DecidableEq S]
+    (c : WriteContext) (p : OwnedPayload) (r : Record S) (s : Replica S × Nat)
+    (h : refuses c r.1 p = true) : ownedStep c p r s = s := by
+  simp [ownedStep, h]
+
+theorem ownedReachable {S : Type} [SemilatticeSup S] [OrderBot S] [DecidableEq S]
+    (c : WriteContext) (p : OwnedPayload) (r : Record S) (s : Replica S × Nat)
+    (h : Reachable s.1) : Reachable (ownedStep c p r s).1 := by
+  unfold ownedStep
+  split
+  · exact h
+  · exact Reachable.step r h
+
+/-- The guard preserves the M1 equal-accepted-set convergence guarantee. -/
+theorem ownedConvergence {S : Type} [SemilatticeSup S] [OrderBot S] [DecidableEq S]
+    (a b : Replica S) (ha : Reachable a) (hb : Reachable b) (h : a.log = b.log) :
+    a.live = b.live := collision.2 a b ha hb h
+
+/-- Positive control: exactly the permitted domain passes the guard. -/
+theorem validPermitted (c : WriteContext) (id : RecordId) (p : OwnedPayload)
+    (h : permitted c id p) : refuses c id p = false := by simp [refuses, h]
+
+end SafeMesh.RecordKernel
+
+#print axioms SafeMesh.RecordKernel.sequenceFresh
+#print axioms SafeMesh.RecordKernel.ownedWriter
+#print axioms SafeMesh.RecordKernel.ownedCoordinate
+#print axioms SafeMesh.RecordKernel.tokenOwner
+#print axioms SafeMesh.RecordKernel.tokenDisjoint
+#print axioms SafeMesh.RecordKernel.tokenSequence
+#print axioms SafeMesh.RecordKernel.allocatedOwned
+#print axioms SafeMesh.RecordKernel.competingRefused
+#print axioms SafeMesh.RecordKernel.staleRefused
+#print axioms SafeMesh.RecordKernel.foreignCoordinateRefused
+#print axioms SafeMesh.RecordKernel.foreignTokenRefused
+#print axioms SafeMesh.RecordKernel.refusedUnchanged
+#print axioms SafeMesh.RecordKernel.ownedReachable
+#print axioms SafeMesh.RecordKernel.ownedConvergence
+#print axioms SafeMesh.RecordKernel.validPermitted

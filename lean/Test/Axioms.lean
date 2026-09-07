@@ -91,3 +91,61 @@ import SafeMesh
 
 def main : IO Unit :=
   IO.println "axiom gate passed: all checks pinned by #guard_msgs at compile time"
+
+-- Record lifecycle and packet-A ownership: extend the existing axiom gate.
+/-- info: 'SafeMesh.RecordKernel.admission' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.admission
+
+/-- info: 'SafeMesh.RecordKernel.idempotence' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.idempotence
+
+/-- info: 'SafeMesh.RecordKernel.collision' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.collision
+
+/-- info: 'SafeMesh.RecordKernel.replayAgrees' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.replayAgrees
+
+/-- info: 'SafeMesh.RecordKernel.sequenceFresh' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.sequenceFresh
+
+/-- info: 'SafeMesh.RecordKernel.ownedWriter' depends on axioms: [propext] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.ownedWriter
+
+/-- info: 'SafeMesh.RecordKernel.ownedCoordinate' depends on axioms: [propext] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.ownedCoordinate
+
+/-- info: 'SafeMesh.RecordKernel.tokenOwner' depends on axioms: [propext] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.tokenOwner
+
+/-- info: 'SafeMesh.RecordKernel.tokenDisjoint' depends on axioms: [propext] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.tokenDisjoint
+
+/-- info: 'SafeMesh.RecordKernel.tokenSequence' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.tokenSequence
+
+/-- info: 'SafeMesh.RecordKernel.allocatedOwned' depends on axioms: [propext] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.allocatedOwned
+
+/-- info: 'SafeMesh.RecordKernel.competingRefused' depends on axioms: [propext] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.competingRefused
+
+/-- info: 'SafeMesh.RecordKernel.staleRefused' depends on axioms: [propext] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.staleRefused
+
+/-- info: 'SafeMesh.RecordKernel.foreignCoordinateRefused' depends on axioms: [propext] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.foreignCoordinateRefused
+
+/-- info: 'SafeMesh.RecordKernel.foreignTokenRefused' depends on axioms: [propext] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.foreignTokenRefused
+
+/-- info: 'SafeMesh.RecordKernel.refusedUnchanged' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.refusedUnchanged
+
+/-- info: 'SafeMesh.RecordKernel.ownedReachable' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.ownedReachable
+
+/-- info: 'SafeMesh.RecordKernel.ownedConvergence' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.ownedConvergence
+
+/-- info: 'SafeMesh.RecordKernel.validPermitted' depends on axioms: [propext] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.validPermitted

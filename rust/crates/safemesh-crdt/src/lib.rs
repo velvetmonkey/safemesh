@@ -20,6 +20,12 @@
 #![deny(unsafe_code)]
 
 extern crate alloc;
+#[cfg(all(feature = "local-writer", target_os = "linux"))]
+extern crate std;
+
+#[cfg(all(feature = "local-writer", target_os = "linux"))]
+pub mod local;
+pub mod ownership;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec;
@@ -41,6 +47,11 @@ pub trait Crdt: Mergeable {
     /// Fixed replica domain, or `None` for CRDTs without a fixed arity.
     fn replica_count(&self) -> Option<usize> {
         None
+    }
+
+    /// Validate decoded records before admission or replay into this carrier.
+    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
+        Ok(())
     }
 
     fn apply_delta(&mut self, delta: Self::Delta);
@@ -199,6 +210,11 @@ impl Mergeable for GCounter {
 
 impl Crdt for GCounter {
     type Delta = GCounterDelta;
+
+    fn validate_record(&self, id: RecordId, delta: &Self::Delta) -> Result<(), WireError> {
+        ownership::check_counter_record(self.len(), id, delta)
+            .map_err(|_| WireError::OwnershipViolation)
+    }
 
     fn replica_count(&self) -> Option<usize> {
         Some(self.len())
@@ -1364,6 +1380,7 @@ const TAG_LWW_MAP_U64: u8 = 0x72;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WireError {
+    OwnershipViolation,
     UnexpectedEof,
     InvalidTag,
     TrailingBytes,
@@ -1458,6 +1475,9 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
             }
             (None, Some(_)) | (Some(_), None) => return Err(WireError::ArityKindMismatch),
             _ => {}
+        }
+        for record in log.records() {
+            state.validate_record(record.id, &record.delta)?;
         }
         Ok(log)
     }

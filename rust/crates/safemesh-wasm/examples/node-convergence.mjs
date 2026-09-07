@@ -13,8 +13,8 @@ const {
 const left = new SafeMeshGCounterReplica(1n, 3);
 const right = new SafeMeshGCounterReplica(2n, 3);
 
-const leftRecord = left.appendBump(0, 5n);
-const rightRecord = right.appendBump(1, 7n);
+const leftRecord = left.appendBump(1, 5n);
+const rightRecord = right.appendBump(2, 7n);
 
 left.mergeRecordBytes(rightRecord);
 right.mergeRecordBytes(leftRecord);

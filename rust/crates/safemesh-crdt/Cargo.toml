@@ -14,7 +14,8 @@ categories = ["data-structures", "embedded", "no-std"]
 
 [features]
 default = []
-laws = []
+local-writer = []
+laws = ["local-writer"]
 
 [dependencies]
 

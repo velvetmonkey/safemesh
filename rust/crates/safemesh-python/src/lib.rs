@@ -293,9 +293,21 @@ impl PyGCounterReplica {
         counter_replica: usize,
         tally: u64,
     ) -> PyResult<Bound<'py, PyBytes>> {
-        if counter_replica >= self.state.len() {
+        if safemesh_crdt::ownership::check_counter_record(
+            self.state.len(),
+            safemesh_crdt::RecordId {
+                replica: self.replica_id,
+                sequence: 1,
+            },
+            &GCounterDelta {
+                replica: counter_replica,
+                tally,
+            },
+        )
+        .is_err()
+        {
             return Err(pyo3::exceptions::PyValueError::new_err(
-                "counter replica out of range",
+                "counter coordinate out of range or not owned by record author",
             ));
         }
         let delta = GCounterDelta {
@@ -318,9 +330,15 @@ impl PyGCounterReplica {
     pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
         let record = Record::<GCounterDelta>::from_wire_bytes(bytes)
             .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode record"))?;
-        if record.delta.replica >= self.state.len() {
+        if safemesh_crdt::ownership::check_counter_record(
+            self.state.len(),
+            record.id,
+            &record.delta,
+        )
+        .is_err()
+        {
             return Err(pyo3::exceptions::PyValueError::new_err(
-                "counter replica out of range",
+                "counter coordinate out of range or not owned by record author",
             ));
         }
         if self.log.admit_with(record, |delta| {
@@ -348,13 +366,12 @@ impl PyGCounterReplica {
                 })
             },
         )?;
-        if log
-            .records()
-            .iter()
-            .any(|r| r.delta.replica >= self.state.len())
-        {
+        if log.records().iter().any(|r| {
+            safemesh_crdt::ownership::check_counter_record(self.state.len(), r.id, &r.delta)
+                .is_err()
+        }) {
             return Err(pyo3::exceptions::PyValueError::new_err(
-                "counter replica out of range",
+                "counter coordinate out of range or not owned by record author",
             ));
         }
         for record in log.records().iter().cloned() {
@@ -1278,7 +1295,9 @@ mod admission_tests {
         Python::with_gil(|py| {
             let mut source = PyGCounterReplica::new(0, 2);
             source.append_bump(py, 0, 10).unwrap();
-            source.append_bump(py, 1, 20).unwrap();
+            let mut second_writer = PyGCounterReplica::new(1, 2);
+            let second = second_writer.append_bump(py, 1, 20).unwrap();
+            source.merge_record_bytes(second.as_bytes()).unwrap();
             let bytes = source.log.to_wire_bytes().unwrap();
             let mut target = PyGCounterReplica::new(0, 3);
             let state = target.state.clone();
