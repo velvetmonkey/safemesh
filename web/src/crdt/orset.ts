@@ -24,8 +24,8 @@ export function bottomORSet(): ORSetState {
 }
 
 // Mirrors SafeMesh.orAddDelta and deltaORSet_lookup.
-// Honesty boundary: OR-Set is Lean-proven in SafeMesh, but no Rust OR-Set body
-// is shipped yet; this TypeScript is a demo mirror only.
+// Honesty boundary: Rust OR-Set ships in safemesh-crdt and safemesh-wasm,
+// but the Lab uses this TypeScript demo mirror, not the Rust body.
 export function addDelta(element: ORSetElement, token: ORSetToken): ORSetDelta {
   return { kind: 'orset.add', element, token }
 }

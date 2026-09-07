@@ -365,6 +365,12 @@ impl SafeMeshGCounterReplica {
         self.state.value()
     }
 
+    /// Compare the Rust-core carrier states without reproducing its equality in JavaScript.
+    #[wasm_bindgen(js_name = sameStateAs)]
+    pub fn same_state_as(&self, other: &SafeMeshGCounterReplica) -> bool {
+        self.state == other.state
+    }
+
     #[wasm_bindgen(js_name = state)]
     pub fn state(&self) -> Vec<u64> {
         self.state.state().to_vec()

@@ -31,11 +31,11 @@ The scenario flow is intentionally manual: choose what can go wrong, then use th
 
 ## Honesty Boundary
 
-Lean is the SafeMesh semantic oracle. The TypeScript in this PWA is not proof-carrying verified code; it is a browser demo mirror.
+Lean is the SafeMesh semantic oracle. The G-Counter runs the Rust core through WASM; the OR-Set runs a TypeScript demo mirror, which is not proof-carrying verified code. The Lean-backed Rust core is the proof-carrying surface for modeled CRDT semantics.
 
-- G-Counter: mirrors `SafeMesh.deltaBump`, `SafeMesh.deltaGCounter_correct`, `SafeMesh.delta_dissemination_sec`, and `SafeMesh.merge_deltaState`. This CRDT also has a shipped Rust body that is differentially tested over corpus C.
+- G-Counter: runs the Rust core through WASM, backed by `SafeMesh.deltaBump`, `SafeMesh.deltaGCounter_correct`, `SafeMesh.delta_dissemination_sec`, and `SafeMesh.merge_deltaState`. The Rust body is differentially tested over corpus C.
 - PN-Counter: included only as a small TypeScript reference mirror of `SafeMesh.deltaBumpP`, `SafeMesh.deltaBumpN`, and `SafeMesh.deltaPNCounter_correct_P/_N`; the current UI does not center it.
-- OR-Set: mirrors Lean-proven `SafeMesh.orAddDelta`, `SafeMesh.orRemoveDelta`, and `SafeMesh.deltaORSet_lookup` directly. Rust OR-Set ships in `safemesh-crdt` and is differentially tested over corpus C.
+- OR-Set: the Lab’s TypeScript implementation mirrors Lean-proven `SafeMesh.orAddDelta`, `SafeMesh.orRemoveDelta`, and `SafeMesh.deltaORSet_lookup` directly. Rust OR-Set ships in `safemesh-crdt` and is differentially tested over corpus C, but the Lab does not use it.
 
 Do not present this PWA as the verified artifact. It is the demo skin around the proof-backed product body.
 
