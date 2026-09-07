@@ -20,7 +20,8 @@ Start with the [short Rust walkthrough](rust/crates/safemesh-crdt/README.md#pers
 It runs the small [`m2slice` application](rust/crates/safemesh-crdt/examples/m2slice.rs)
 with a counter and a UTF-8 OR-Set: write logs, restore replicas, make independent
 updates during a simulated partition, then exchange records and explain the result.
-This walk uses Rust; Python, WASM and the C FFI do not expose OR-Set.
+This walk uses Rust. Python, WASM and the C FFI expose OR-Set too, as `OrSet`,
+`SafeMeshOrSet` and the `safemesh_orset_*` functions.
 
 ## Install matrix
 
