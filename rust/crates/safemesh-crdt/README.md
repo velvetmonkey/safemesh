@@ -165,3 +165,27 @@ New files are also incompatible with old decoders. A G-Counter frame grows by
 43 bytes; other overhead is 9 plus the schema byte length, plus 8 for fixed arity.
 External payloads persisted in EventLog must implement `WireSchema` with a stable,
 unique identity; external fixed-domain CRDTs must implement `Crdt::replica_count`.
+
+
+## Checked local writers (Linux)
+
+Enable the optional `local-writer` feature to use `local::LocalReplica::counter`
+or `local::LocalReplica::utf8_set`. Configure every replica with the same fixed
+`WriterConfig::writers` and a distinct `WriterConfig::writer` in `0..writers`.
+All local processes for that replica set must use the same storage directory.
+The adapter holds an exclusive file lock until drop; keep its fence files in
+place. A contending instance is read-only and returns `LocalError::Refused` on
+writes. Unsupported locking and filesystem I/O return errors.
+
+Capture `ticket()` and pass it to `bump`, `add`, `remove`, or `receive`. `renew`
+revokes older tickets. Counter edits use the configured writer's coordinate;
+set adds allocate `sequence * writers + writer` with checked arithmetic. Incoming
+adds must carry that record author's token. Removes may reference other writers'
+observed tokens. Validation precedes the existing log admission and uses the
+ownership rules tested against the Lean-generated corpus. Use `receive` for
+individual decoded records; duplicate and reordered valid delivery is supported.
+
+This adapter acknowledges in memory. It does not yet commit edits durably or
+recover an existing store: opening a previously initialized store with the lock
+available returns `RecoveryRequired`. The default core remains `no_std`; raw
+carriers and `EventLog` do not themselves grant an exclusive writer lease.

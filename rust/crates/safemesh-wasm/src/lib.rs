@@ -279,8 +279,23 @@ impl SafeMeshGCounterReplica {
 
     #[wasm_bindgen(js_name = appendBump)]
     pub fn append_bump(&mut self, counter_replica: usize, tally: u64) -> Result<Vec<u8>, JsValue> {
-        if counter_replica >= self.state.len() {
-            return Err(safe_mesh_error(2, "counter replica out of range"));
+        if safemesh_crdt::ownership::check_counter_record(
+            self.state.len(),
+            safemesh_crdt::RecordId {
+                replica: self.replica_id,
+                sequence: 1,
+            },
+            &GCounterDelta {
+                replica: counter_replica,
+                tally,
+            },
+        )
+        .is_err()
+        {
+            return Err(safe_mesh_error(
+                2,
+                "counter coordinate out of range or not owned by record author",
+            ));
         }
         let delta = GCounterDelta {
             replica: counter_replica,
@@ -301,8 +316,17 @@ impl SafeMeshGCounterReplica {
     pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
         let record = Record::<GCounterDelta>::from_wire_bytes(bytes)
             .map_err(|_| safe_mesh_error(1, "failed to decode record"))?;
-        if record.delta.replica >= self.state.len() {
-            return Err(safe_mesh_error(2, "counter replica out of range"));
+        if safemesh_crdt::ownership::check_counter_record(
+            self.state.len(),
+            record.id,
+            &record.delta,
+        )
+        .is_err()
+        {
+            return Err(safe_mesh_error(
+                2,
+                "counter coordinate out of range or not owned by record author",
+            ));
         }
         if self.log.admit_with(record, |delta| {
             self.state.apply_delta(delta.clone());
@@ -331,12 +355,14 @@ impl SafeMeshGCounterReplica {
                 )
             },
         )?;
-        if log
-            .records()
-            .iter()
-            .any(|r| r.delta.replica >= self.state.len())
-        {
-            return Err(safe_mesh_error(2, "counter replica out of range"));
+        if log.records().iter().any(|r| {
+            safemesh_crdt::ownership::check_counter_record(self.state.len(), r.id, &r.delta)
+                .is_err()
+        }) {
+            return Err(safe_mesh_error(
+                2,
+                "counter coordinate out of range or not owned by record author",
+            ));
         }
         for record in log.records().iter().cloned() {
             if self.log.admit_with(record, |delta| {

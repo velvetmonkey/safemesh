@@ -237,6 +237,64 @@ def rgaCaseJson (c : RGACase) : String :=
   s!"\"expected_tombstones\":{natSetJson s.2}," ++
   s!"\"expected_read\":{natList (Crdt.RGA.read s)}}"
 
+
+/-! ## Packet-A ownership oracle (same definitions as the proved rules) -/
+open SafeMesh.RecordKernel in
+def ownershipCaseJson (name : String) (c : WriteContext) (id : RecordId)
+    (p : OwnedPayload) : String :=
+  let (kind, value) := match p with
+    | .counter v => (0, v)
+    | .add v => (1, v)
+    | .remove => (2, 0)
+  let bit (b : Bool) : Nat := if b then 1 else 0
+  let inputs := [c.config.writers, c.config.writer, bit c.held, c.generation,
+    c.currentGeneration, bit c.localWrite, id.1, id.2, kind, value]
+  s!"\{\"name\":\"{name}\",\"inputs\":{natList inputs},\"refused\":{refuses c id p}}"
+
+open SafeMesh.RecordKernel in
+def ownershipCasesJson : List String := Id.run do
+  let mut cases := []
+  -- Cross the individual context and payload boundaries, rather than relying
+  -- only on a few hand-picked successful operations.
+  for n in [0, 1, 2, 4] do
+    for writer in [0, 1, 4] do
+      for author in [0, 1, 4] do
+        for seq in [0, 1, 2] do
+          for held in [false, true] do
+            for localWrite in [false, true] do
+              let c : WriteContext := ⟨⟨n, writer⟩, held, 1, 1, localWrite⟩
+              for p in [OwnedPayload.counter author, .counter (author+1),
+                  .add (token n author seq), .add (token n author seq+1), .remove] do
+                cases := cases ++ [ownershipCaseJson "matrix" c (author,seq) p]
+  for (g, current) in [(0,0), (0,1), (1,2), (2,1), (2,2), (maxWord,maxWord)] do
+    let c : WriteContext := ⟨⟨2, 0⟩, true, g, current, true⟩
+    cases := cases ++ [ownershipCaseJson "generation" c (0,1) (.counter 0)]
+  for (n, author, seq, t) in [(2,1,maxWord,maxWord), (1,0,maxWord,maxWord),
+      (2,0,maxWord/2,maxWord-1), (2,1,maxWord/2,maxWord)] do
+    let c : WriteContext := ⟨⟨n, 0⟩, true, 1, 1, false⟩
+    cases := cases ++ [ownershipCaseJson "bounded-token" c (author,seq) (.add t)]
+  return cases
+
+open SafeMesh.RecordKernel in
+def allocationCasesJson : List String := Id.run do
+  let mut cases := []
+  for n in [0, 1, 2, 4, maxWord] do
+    for author in [0, 1, 3, maxWord] do
+      for seq in [0, 1, 2, maxWord/4, maxWord] do
+        let expected := match allocateToken n author seq with
+          | some t => toString t
+          | none => "null"
+        cases := cases ++ [s!"\{\"inputs\":{natList [n,author,seq]},\"token\":{expected}}"]
+  return cases
+
+open SafeMesh.RecordKernel in
+def sequenceCasesJson : List String :=
+  [0, 1, maxWord-1, maxWord].map fun last =>
+    let next := match nextSequence last with
+      | some n => toString n
+      | none => "null"
+    s!"\{\"last\":{last},\"next\":{next}}"
+
 def corpusJson : String :=
   "{\"schema\":\"safemesh-conformance-v1\",\"replicas\":" ++ toString N ++
   ",\"gcounter\":[\n  " ++
@@ -249,6 +307,12 @@ def corpusJson : String :=
   String.intercalate ",\n  " (orCases.map orCaseJson) ++
   "\n],\"rga\":[\n  " ++
   String.intercalate ",\n  " (rgaCases.map rgaCaseJson) ++
+  "\n],\"ownership\":[\n  " ++
+  String.intercalate ",\n  " ownershipCasesJson ++
+  "\n],\"allocation\":[\n  " ++
+  String.intercalate ",\n  " allocationCasesJson ++
+  "\n],\"sequence\":[\n  " ++
+  String.intercalate ",\n  " sequenceCasesJson ++
   "\n]}"
 
 def main : IO Unit := IO.println corpusJson

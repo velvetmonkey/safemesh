@@ -259,3 +259,101 @@ fn split_delivery_merge_agrees_with_oracle() {
         );
     }
 }
+
+#[test]
+fn owned_writes_match_lean_oracle() {
+    use safemesh_crdt::{ownership::*, GCounterDelta, RecordId};
+    let corpus: Value = serde_json::from_str(CORPUS).unwrap();
+    let cases = corpus["ownership"]
+        .as_array()
+        .expect("ownership oracle required");
+    assert!(cases.len() >= 2000);
+    let mut permitted = 0;
+    let mut refused = 0;
+    for case in cases {
+        let input = as_u64_vec(&case["inputs"]);
+        let ctx = WriteContext {
+            config: WriterConfig {
+                writers: input[0],
+                writer: input[1],
+            },
+            held: input[2] != 0,
+            generation: input[3],
+            current_generation: input[4],
+            local: input[5] != 0,
+        };
+        let id = RecordId {
+            replica: input[6],
+            sequence: input[7],
+        };
+        let payload = match input[8] {
+            0 => GCounterDelta {
+                replica: input[9] as usize,
+                tally: 7,
+            }
+            .owned_payload(),
+            1 => safemesh_crdt::OrSetDelta::Add {
+                element: String::from("café☕"),
+                token: input[9],
+            }
+            .owned_payload(),
+            2 => safemesh_crdt::OrSetDelta::<String, u64>::Remove { tokens: vec![2, 3] }
+                .owned_payload(),
+            _ => panic!("invalid oracle payload kind"),
+        };
+        let expected = case["refused"].as_bool().unwrap();
+        assert_eq!(
+            refuses(ctx, id, payload),
+            expected,
+            "ownership oracle: {case}"
+        );
+        if expected {
+            refused += 1;
+        } else {
+            permitted += 1;
+        }
+        // Bind the adapter used by existing counter replicas to the same oracle.
+        if input[8] == 0
+            && ctx.config.writer == 0
+            && ctx.held
+            && ctx.generation == 1
+            && ctx.current_generation == 1
+            && !ctx.local
+        {
+            let delta = GCounterDelta {
+                replica: input[9] as usize,
+                tally: 7,
+            };
+            assert_eq!(
+                check_counter_record(input[0] as usize, id, &delta).is_err(),
+                expected
+            );
+        }
+    }
+    assert!(permitted > 0 && refused > 0);
+    let allocations = corpus["allocation"]
+        .as_array()
+        .expect("allocation oracle required");
+    assert_eq!(allocations.len(), 100);
+    for case in allocations {
+        let input = as_u64_vec(&case["inputs"]);
+        assert_eq!(
+            allocate_token(input[0], input[1], input[2]),
+            case["token"].as_u64(),
+            "allocation oracle: {case}"
+        );
+    }
+    for case in corpus["sequence"]
+        .as_array()
+        .expect("sequence oracle required")
+    {
+        assert_eq!(
+            next_sequence(case["last"].as_u64().unwrap()),
+            case["next"].as_u64()
+        );
+    }
+    println!(
+        "ownership corpus permitted={permitted} refused={refused} allocations={}",
+        allocations.len()
+    );
+}

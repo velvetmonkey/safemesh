@@ -79,9 +79,9 @@ def run_scenario() -> Report:
         sm.LwwMapReplica(3),
     ]
     audit = [
+        sm.GCounterReplica(0, 3),
         sm.GCounterReplica(1, 3),
         sm.GCounterReplica(2, 3),
-        sm.GCounterReplica(3, 3),
     ]
     alert = [
         sm.EnableWinsFlagReplica(1),
