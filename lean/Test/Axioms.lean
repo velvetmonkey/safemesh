@@ -149,3 +149,9 @@ def main : IO Unit :=
 
 /-- info: 'SafeMesh.RecordKernel.validPermitted' depends on axioms: [propext] -/
 #guard_msgs in #print axioms SafeMesh.RecordKernel.validPermitted
+
+/-- info: 'SafeMesh.RecordKernel.replayOwnedReachable' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.replayOwnedReachable
+
+/-- info: 'SafeMesh.RecordKernel.checkedRestartSound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms SafeMesh.RecordKernel.checkedRestartSound

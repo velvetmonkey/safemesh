@@ -2,12 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Linux/local-filesystem packet-A adapter. All writers for a replica set must
 //! use the same directory and fixed configuration. Keep fence files in place.
-//! A previously initialized store requires checked recovery (packet C); this
-//! adapter errors instead of resetting allocation on restart. LocalReplica
-//! acknowledges in memory; DurableReplica adds packet-B durable commits.
+//! LocalReplica acknowledges in memory; DurableReplica commits before acknowledgement
+//! and offers checked ordinary restart of an existing committed store.
 use crate::{
     ownership::*, Admission, Crdt, EventLog, GCounter, GCounterDelta, OrSet, OrSetDelta, Record,
-    RecordId, WireEncode, WireSchema,
+    RecordId, WireDecode, WireEncode, WireError, WireSchema,
 };
 use alloc::{format, string::String, vec::Vec};
 use std::{
@@ -22,6 +21,8 @@ pub enum LocalError {
     Exhausted,
     RecoveryRequired,
     Configuration,
+    History(WireError),
+    InvalidHistory,
     Io(io::Error),
 }
 impl From<io::Error> for LocalError {
@@ -318,8 +319,8 @@ fn transaction_path(root: &Path, config: WriterConfig) -> PathBuf {
 /// exist durably and remain in place; all writers use the same fixed root and
 /// configuration. Each Accepted/Ok(record) follows full transaction replacement
 /// and file + directory sync. Any persistence error permanently disables this
-/// instance's writes, retaining its fence until drop. Existing stores error:
-/// writable restart and history validation belong to packet C.
+/// instance's writes, retaining its fence until drop. Use the explicit restart
+/// constructors for existing stores; fresh constructors never reset a store.
 pub struct DurableReplica<C: Crdt> {
     inner: LocalReplica<C>,
     path: PathBuf,
@@ -424,7 +425,76 @@ where
         }
     }
 }
+impl<C: Crdt> DurableReplica<C>
+where
+    C::Delta: OwnedDelta + Clone + PartialEq + WireEncode + WireDecode + WireSchema,
+{
+    fn restart(root: &Path, config: WriterConfig, state: C) -> Result<Self, LocalError> {
+        config.validate().map_err(|_| LocalError::Configuration)?;
+        let root = root.canonicalize()?;
+        // Opening without create is deliberate: missing ownership is not a new store.
+        let mut fence = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.join(format!("writer-{}.fence", config.writer)))?;
+        match fence.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => return Err(LocalError::Refused),
+            Err(TryLockError::Error(e)) => return Err(e.into()),
+        }
+        let mut bytes = Vec::new();
+        fence.read_to_end(&mut bytes)?;
+        if bytes.len() != 24 {
+            return Err(LocalError::RecoveryRequired);
+        }
+        let word = |i| u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+        if word(0) != config.writers || word(8) != config.writer {
+            return Err(LocalError::Configuration);
+        }
+        let generation = word(16);
+        if generation == 0 {
+            return Err(LocalError::RecoveryRequired);
+        }
+        // The lock covers reading, checking and replaying the complete transaction.
+        let transaction = CommittedTransaction::read(&root, config)?;
+        let log = EventLog::<C::Delta>::from_wire_bytes_for(&transaction.log_bytes, &state)
+            .map_err(LocalError::History)?;
+        let mut inner = LocalReplica {
+            config,
+            fence,
+            held: true,
+            generation,
+            log: EventLog::for_crdt(&state),
+            state,
+            last_sequence: 0,
+        };
+        // Compose packet A's corpus-bound ownedStep with M1 admission/replay.
+        // This candidate is private until every record and allocation check passes.
+        for record in log.records() {
+            if inner.admit(inner.ticket(), record.clone(), false)? != Admission::Accepted {
+                return Err(LocalError::InvalidHistory);
+            }
+        }
+        if inner.last_sequence != transaction.last_sequence {
+            return Err(LocalError::InvalidHistory);
+        }
+        // A ticket from before restart must not authorize the newly acquired lease.
+        inner.renew(inner.ticket())?;
+        Ok(Self {
+            inner,
+            path: transaction_path(&root, config),
+        })
+    }
+}
+
 impl DurableReplica<GCounter> {
+    /// Reacquire ownership, validate the committed history and replay fresh state.
+    /// Any error returns no replica and grants no write ticket.
+    pub fn restart_counter(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
+        config.validate().map_err(|_| LocalError::Configuration)?;
+        let n = usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?;
+        Self::restart(root, config, GCounter::new(n))
+    }
     pub fn counter(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
         let n = usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?;
@@ -445,6 +515,10 @@ impl DurableReplica<GCounter> {
     }
 }
 impl DurableReplica<OrSet<String, u64>> {
+    /// Checked ordinary restart, including tombstones and token allocation.
+    pub fn restart_utf8_set(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
+        Self::restart(root, config, OrSet::new())
+    }
     pub fn utf8_set(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
         Self::fresh(root, config, OrSet::new())
     }
@@ -575,6 +649,293 @@ mod durable_tests {
             );
         }
     }
+    #[test]
+    fn restart_still_works_and_fresh_allocation() {
+        let root = root();
+        let mut r = DurableReplica::counter(&root, config()).unwrap();
+        let before = r.bump(r.ticket(), 5).unwrap();
+        r.receive(
+            r.ticket(),
+            Record {
+                id: RecordId {
+                    replica: 1,
+                    sequence: 40,
+                },
+                delta: GCounterDelta {
+                    replica: 1,
+                    tally: 7,
+                },
+            },
+        )
+        .unwrap();
+        let old = r.ticket();
+        let state = r.state().state().to_vec();
+        let log = r.log().to_wire_bytes().unwrap();
+        let allocation = r.allocation_bytes();
+        drop(r);
+        let mut r = DurableReplica::restart_counter(&root, config()).unwrap();
+        assert_eq!(r.state().state(), state);
+        assert_eq!(r.log().to_wire_bytes().unwrap(), log);
+        assert_eq!(r.allocation_bytes(), allocation);
+        assert!(matches!(r.bump(old, 9), Err(LocalError::Refused)));
+        let after = r.bump(r.ticket(), 9).unwrap();
+        assert_eq!(
+            before.id,
+            RecordId {
+                replica: 0,
+                sequence: 1
+            }
+        );
+        assert_eq!(
+            after.id,
+            RecordId {
+                replica: 0,
+                sequence: 2
+            }
+        );
+        assert_eq!(r.state().state(), &[9, 7]);
+        std::println!(
+            "controls=7,2 counter replay={state:?} writable=true IDs {:?} -> {:?}",
+            before.id,
+            after.id
+        );
+        drop(r);
+        assert_eq!(
+            DurableReplica::restart_counter(&root, config())
+                .unwrap()
+                .state()
+                .state(),
+            &[9, 7]
+        );
+
+        let root = self::root();
+        let mut r = DurableReplica::utf8_set(&root, config()).unwrap();
+        let before = r.add(r.ticket(), "café☕".into()).unwrap();
+        let removed = r.remove(r.ticket(), &"café☕".into()).unwrap();
+        r.receive(
+            r.ticket(),
+            Record {
+                id: RecordId {
+                    replica: 1,
+                    sequence: 40,
+                },
+                delta: OrSetDelta::Add {
+                    element: "東京".into(),
+                    token: 81,
+                },
+            },
+        )
+        .unwrap();
+        let state = r.state().clone();
+        let log = r.log().to_wire_bytes().unwrap();
+        let allocation = r.allocation_bytes();
+        let old = r.ticket();
+        drop(r);
+        let mut r = DurableReplica::restart_utf8_set(&root, config()).unwrap();
+        assert_eq!(r.state(), &state);
+        assert_eq!(r.log().to_wire_bytes().unwrap(), log);
+        assert_eq!(r.allocation_bytes(), allocation);
+        assert!(matches!(
+            r.add(old, "stale".into()),
+            Err(LocalError::Refused)
+        ));
+        let after = r.add(r.ticket(), "café☕".into()).unwrap();
+        assert_eq!(
+            before.id,
+            RecordId {
+                replica: 0,
+                sequence: 1
+            }
+        );
+        assert_eq!(
+            removed.id,
+            RecordId {
+                replica: 0,
+                sequence: 2
+            }
+        );
+        assert_eq!(
+            after.id,
+            RecordId {
+                replica: 0,
+                sequence: 3
+            }
+        );
+        assert!(matches!(before.delta, OrSetDelta::Add { token: 2, .. }));
+        assert!(matches!(after.delta, OrSetDelta::Add { token: 6, .. }));
+        assert!(r.state().contains(&"café☕".into()));
+        assert!(r.state().contains(&"東京".into()));
+        assert!(r.state().tombstones().contains(&2));
+        std::println!("controls=7,2 set replay=equal including tombstone 2 and remote token 81; writable=true IDs {:?}, {:?} -> {:?}; tokens 2 -> 6", before.id, removed.id, after.id);
+        drop(r);
+        let r = DurableReplica::restart_utf8_set(&root, config()).unwrap();
+        assert!(r.state().contains(&"café☕".into()));
+        assert!(r.state().tombstones().contains(&2));
+    }
+    fn initialized(kind: &str) -> PathBuf {
+        let root = root();
+        if kind == "counter" {
+            let mut r = DurableReplica::counter(&root, config()).unwrap();
+            r.bump(r.ticket(), 5).unwrap();
+        } else {
+            let mut r = DurableReplica::utf8_set(&root, config()).unwrap();
+            r.add(r.ticket(), "café☕".into()).unwrap();
+        }
+        root
+    }
+    // Success proves the returned replica can commit a fresh edit.
+    fn restart_and_write(kind: &str, root: &Path, config: WriterConfig) -> Result<(), LocalError> {
+        if kind == "counter" {
+            let mut r = DurableReplica::restart_counter(root, config)?;
+            r.bump(r.ticket(), 9)?;
+        } else {
+            let mut r = DurableReplica::restart_utf8_set(root, config)?;
+            r.add(r.ticket(), "new".into())?;
+        }
+        Ok(())
+    }
+    #[test]
+    fn restart_corrupt_history() {
+        for kind in ["counter", "set"] {
+            let root = initialized(kind);
+            let path = transaction_path(&root, config());
+            let mut bytes = fs::read(&path).unwrap();
+            // Damage the checksum; the well-formed payload permits revert control 8.
+            *bytes.last_mut().unwrap() ^= 1;
+            fs::write(&path, &bytes).unwrap();
+            let result = restart_and_write(kind, &root, config());
+            std::println!(
+                "control=3 {kind} result={result:?} writable={}",
+                result.is_ok()
+            );
+            assert!(matches!(
+                result,
+                Err(LocalError::History(WireError::IntegrityMismatch))
+            ));
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+        }
+    }
+    #[test]
+    fn restart_mismatched_history() {
+        for kind in ["counter", "set"] {
+            let root = initialized(kind);
+            let path = transaction_path(&root, config());
+            let original = fs::read(&path).unwrap();
+            let mut bytes = original.clone();
+            bytes[..8].copy_from_slice(&3u64.to_le_bytes());
+            fs::write(&path, &bytes).unwrap();
+            let result = restart_and_write(kind, &root, config());
+            std::println!(
+                "control=4 {kind} result={result:?} writable={}",
+                result.is_ok()
+            );
+            assert!(matches!(result, Err(LocalError::Configuration)));
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            fs::write(&path, original).unwrap();
+            assert!(matches!(
+                restart_and_write(
+                    kind,
+                    &root,
+                    WriterConfig {
+                        writers: 3,
+                        writer: 0
+                    }
+                ),
+                Err(LocalError::Configuration)
+            ));
+        }
+        let root = initialized("counter");
+        assert!(matches!(
+            DurableReplica::restart_utf8_set(&root, config()),
+            Err(LocalError::History(WireError::DeltaTypeMismatch))
+        ));
+    }
+    #[test]
+    fn restart_invalid_history() {
+        for kind in ["counter", "set"] {
+            let root = initialized(kind);
+            let path = transaction_path(&root, config());
+            // Serialize with the product: valid framing, invalid ownership.
+            if kind == "counter" {
+                let mut log = EventLog::for_crdt(&GCounter::new(2));
+                assert_eq!(
+                    log.insert_record(Record {
+                        id: RecordId {
+                            replica: 0,
+                            sequence: 1
+                        },
+                        delta: GCounterDelta {
+                            replica: 1,
+                            tally: 5
+                        },
+                    }),
+                    Admission::Accepted
+                );
+                DurableReplica::<GCounter>::commit(&path, config(), &log, 1).unwrap();
+            } else {
+                let mut log = EventLog::for_crdt(&OrSet::<String, u64>::new());
+                assert_eq!(
+                    log.insert_record(Record {
+                        id: RecordId {
+                            replica: 0,
+                            sequence: 1
+                        },
+                        delta: OrSetDelta::Add {
+                            element: "foreign".into(),
+                            token: 3
+                        },
+                    }),
+                    Admission::Accepted
+                );
+                DurableReplica::<OrSet<String, u64>>::commit(&path, config(), &log, 1).unwrap();
+            }
+            let bytes = fs::read(&path).unwrap();
+            let result = restart_and_write(kind, &root, config());
+            std::println!(
+                "control=5 {kind} result={result:?} writable={}",
+                result.is_ok()
+            );
+            assert!(matches!(
+                result,
+                Err(LocalError::Refused) | Err(LocalError::History(_))
+            ));
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            let root = initialized(kind);
+            let path = transaction_path(&root, config());
+            let original = fs::read(&path).unwrap();
+            for last in [0u64, 2, u64::MAX] {
+                let mut bytes = original.clone();
+                bytes[16..24].copy_from_slice(&last.to_le_bytes());
+                fs::write(&path, &bytes).unwrap();
+                assert!(matches!(
+                    restart_and_write(kind, &root, config()),
+                    Err(LocalError::InvalidHistory)
+                ));
+                assert_eq!(fs::read(&path).unwrap(), bytes);
+            }
+        }
+    }
+    #[test]
+    fn restart_unavailable_ownership() {
+        let root = root();
+        let r = DurableReplica::counter(&root, config()).unwrap();
+        assert!(matches!(
+            DurableReplica::restart_counter(&root, config()),
+            Err(LocalError::Refused)
+        ));
+        drop(r);
+        restart_and_write("counter", &root, config()).unwrap();
+        let root = self::root();
+        let r = DurableReplica::utf8_set(&root, config()).unwrap();
+        assert!(matches!(
+            DurableReplica::restart_utf8_set(&root, config()),
+            Err(LocalError::Refused)
+        ));
+        drop(r);
+        restart_and_write("set", &root, config()).unwrap();
+        std::println!("control=6 both primitives: held fence Refused, no replica; released fence and empty histories: writable");
+    }
+
     #[test]
     fn durable_child() {
         if let Ok(root) = std::env::var("SAFEMESH_DURABLE_ROOT") {
