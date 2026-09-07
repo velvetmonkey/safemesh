@@ -27,12 +27,12 @@ impl SafeMeshGCounter {
         self.inner.apply_bump(replica, tally);
     }
 
-    /// Apply a coordinate delta, throwing a descriptive string for a bad index.
+    /// Apply a coordinate delta, throwing a descriptive Error for a bad index.
     #[wasm_bindgen(js_name = tryApplyBump)]
     pub fn try_apply_bump(&mut self, replica: usize, tally: u64) -> Result<(), JsValue> {
         self.inner
             .try_apply_bump(replica, tally)
-            .map_err(|error| JsValue::from_str(&format!("{error:?}")))
+            .map_err(|error| JsError::new(&format!("{error:?}")).into())
     }
 
     pub fn value(&self) -> u64 {

@@ -57,7 +57,7 @@ Run `./scripts/package-smoke.sh` from the repository root to build the bundler p
 
 ## Checked coordinates and OR-Set
 
-`SafeMeshGCounter.tryApplyBump(replica, tally)` throws a string such as
+`SafeMeshGCounter.tryApplyBump(replica, tally)` throws an `Error` with a message such as
 `ReplicaOutOfRange { replica: 2, replica_count: 2 }` for an invalid coordinate
 without changing state. `applyBump` retains its silent behavior.
 
