@@ -463,6 +463,11 @@ mod joined {
         joined_exchange(&mut a, &mut b, || GCounter::new(2));
         joined_exchange(&mut sa, &mut sb, OrSet::new);
         assert_eq!(a.state(), b.state());
+        std::println!(
+            "joined reconciled counter={:?} set={:?}",
+            a.state().state(),
+            sa.state()
+        );
         assert_eq!(a.state().state(), &[12, 7]);
         assert_eq!(sa.state(), sb.state());
         for word in ["café☕", "東京", "naïve", "γειά"] {
@@ -517,7 +522,7 @@ mod joined {
         )
         .unwrap();
         fs::write(root.join("set-issued"), s.log().to_wire_bytes().unwrap()).unwrap();
-        std::println!("joined ACK counter=5,9 set=café☕,東京 loss={loss}");
+        std::println!("joined ACK counter-successive-tallies=5,9 set=café☕,東京 loss={loss}");
         std::io::stdout().flush().unwrap();
         // Intentionally bypass destructors: a real process ends after ACK.
         std::process::exit(77);

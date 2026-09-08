@@ -126,11 +126,12 @@ The example also writes separate `counter-corrupt.log` and
 and payload mutations rejected by the frame CRC. Captured output:
 
 ```text
-joined ACK counter=5,9 set=café☕,東京 loss=false
+joined ACK counter-successive-tallies=5,9 set=café☕,東京 loss=false
 
 counter IDs before=2 after=2 overlap=0 planted-duplicate=detected
 set IDs before=2 after=2 overlap=0 planted-duplicate=detected
 set tokens before=2 after=2 overlap=0 planted-duplicate=detected
+joined reconciled counter=[12, 7] set=OrSet { adds: {("café☕", 2), ("naïve", 6), ("γειά", 3), ("東京", 4)}, tombstones: {} }
 joined HAPPY: all acknowledged records survive; both exchange orders converge; second restart survives
 counter step=1 WORKS
 counter step=2 WORKS
