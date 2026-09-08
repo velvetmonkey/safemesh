@@ -14,7 +14,7 @@ export default defineConfig({
       writeBundle(options, bundle) {
         const outDir = resolve(options.dir ?? 'dist')
         const worker = readFileSync(resolve(outDir, 'sw.js'), 'utf8')
-        const shell = ['/', '/README.md', '/manifest.webmanifest', '/pwa-icon.svg', '/favicon.svg']
+        const shell = ['/', '/manifest.webmanifest', '/pwa-icon.svg', '/favicon.svg']
         const assets = [...new Set([...shell, ...Object.keys(bundle).map((name) => `/${name}`)])].sort()
         // Version the complete artifact, including public files, with the build's own bytes.
         const hash = createHash('sha256').update(worker)

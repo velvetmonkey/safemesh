@@ -39,8 +39,14 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const copy = response.clone()
-          caches.open(CACHE_NAME).then((cache) => cache.put('/', copy))
+          if (response.ok) {
+            const copy = response.clone()
+            const contentType = response.headers.get('content-type') || ''
+            // The root key is the offline application fallback, so only an HTML
+            // shell may replace it. Other navigation responses retain their own URL.
+            const cacheKey = contentType.includes('text/html') ? '/' : response.url
+            caches.open(CACHE_NAME).then((cache) => cache.put(cacheKey, copy))
+          }
           return response
         })
         .catch(() => caches.match('/')),
