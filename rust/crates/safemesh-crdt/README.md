@@ -70,8 +70,8 @@ from public Rust APIs. It first runs the joined durable journey for both a count
 and a UTF-8 set, using `local::DurableReplica`:
 
 - A real child process creates two writers for each CRDT, commits offline edits,
-  prints `joined ACK`, and exits with code 77 without running destructors. The
-  parent saves and checks that code in `walk-logs/joined/child.exit`, then restarts
+  prints `joined ACK`, and exits without running destructors. The
+  parent saves and checks the exit code in `walk-logs/joined/child.exit`, then restarts
   the child's stores through `DurableReplica::restart_counter` and
   `DurableReplica::restart_utf8_set`. Both entry points lock the store, validate
   and replay its history, check allocation metadata, and renew the write ticket.
@@ -114,20 +114,21 @@ APIs; use `DurableReplica` and `joined::run` for the durable embedding example:
   `persist` writes each whole log's bytes to a file and calls `sync_all`.
   The app drops both replicas, then `restart` reads and decodes each log and
   replays its deltas into an empty state. This restart happens within one process.
-  The persisted `EventLog` carries tag `0x03` and a shape header with body sentinel
-  `u32::MAX`, the delta schema identity (`safemesh/gcounter-delta/v1` for the counter,
-  `safemesh/orset-delta-utf8-u64/v1` for the set), and arity (fixed at 2 for the
-  counter, unbounded for the set); the caller must still supply the delta type and
-  matching empty-state shape, here a two-slot counter or a string/token OR-Set,
-  because decoding validates the supplied type and shape rather than constructing
-  a CRDT from the recorded identity.
+  The frame's tag, sentinel and schema identities are format details described in
+  [EventLog persistence frame](#eventlog-persistence-frame); the step output
+  reports replay checks rather than a decoded header. The caller must still
+  supply the delta type and matching empty-state shape, here a two-slot counter
+  or a string/token OR-Set, because decoding validates the supplied type and
+  shape rather than constructing a CRDT from the recorded identity.
 - **Partition and reconcile (steps 6–8):** the app withholds exchange while each
   replica makes a local update, asserts that their states differ, and writes
   both logs. It then exchanges missing records, asserts equal states and version
   vectors, writes the reconciled logs, and checks that replay matches state and log.
 
-The counter starts at tallies 10 and 20; independent updates produce 11 and 22,
-so the reconciled value is **33**. For the set, A removes the observed token 100
+The counter’s step 8 line shows the reconciled per-replica tallies 11 and 22;
+it prints the counter state rather than their sum. Each slot keeps
+its highest tally, so both replicas’ progress survives reconciliation.
+For the set, A removes the observed token 100
 for `café☕` while B adds `café☕` with fresh token 201. Token 100 remains tombstoned;
 token 201 survives, so both replicas contain **`café☕` and `東京`**. Each final log
 has four records. The files are under `walk-logs`: `counter-a.log`, `counter-b.log`,
