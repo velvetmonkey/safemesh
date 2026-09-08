@@ -14,7 +14,7 @@ npm run preview
 npm run test
 ```
 
-The app is static and has no backend. After a first load, the service worker caches the app shell so it can reopen offline.
+The app is static and has no backend. On a first online visit to the production build, the service worker precaches the app shell, including JavaScript, CSS, and WASM. Once installation completes, the Lab can reopen offline.
 
 ## What It Demonstrates
 
@@ -47,4 +47,4 @@ The Lean anchor for this backfill is `SafeMesh.merge_deltaState`: merging replic
 
 ## PWA Cache Note
 
-The service worker uses a versioned cache and network-first navigation. Old caches are deleted on activation so development rebuilds are not pinned behind a stale app shell.
+The service worker uses a versioned cache and network-first navigation. Production builds derive the cache version from the emitted files and precache them during installation. Old caches are deleted on activation. Offline reopening is supported for production builds (`npm run build` followed by `npm run preview`), not the Vite development server.
