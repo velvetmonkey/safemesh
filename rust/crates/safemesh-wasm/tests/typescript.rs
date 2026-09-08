@@ -22,12 +22,12 @@ fn typescript_surface_lists_the_public_binding() {
     assert!(DTS.contains("export class SafeMeshStringOrSetRecord"));
     assert!(DTS.contains("appendAdd(element: string, token: bigint): Uint8Array"));
     assert!(DTS.contains("appendRemoveObserved(element: string): Uint8Array"));
-    assert!(DTS.contains("mergeRecordBytes(bytes: Uint8Array): string"));
+    assert!(DTS.contains("mergeRecordBytes(bytes: Uint8Array): \"accepted\" | \"duplicate\""));
     assert!(DTS.contains("elements(): string[]"));
     assert!(DTS.contains("observedTokens(element: string): BigUint64Array"));
     assert!(DTS.contains("addEntries(): SafeMeshStringOrSetAddEntry[]"));
     assert!(DTS.contains("static inspectRecordBytes(bytes: Uint8Array): SafeMeshStringOrSetRecord"));
-    assert!(DTS.contains("deltaKind(): string"));
+    assert!(DTS.contains("deltaKind(): \"add\" | \"remove\""));
     assert!(DTS.contains("element(): string | undefined"));
     assert!(DTS.contains("token(): bigint | undefined"));
     assert!(DTS.contains("applyBump(replica: number, tally: bigint): void"));

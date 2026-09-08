@@ -101,7 +101,7 @@ export class SafeMeshStringOrSetReplica {
   constructor(replicaId: bigint);
   appendAdd(element: string, token: bigint): Uint8Array;
   appendRemoveObserved(element: string): Uint8Array;
-  mergeRecordBytes(bytes: Uint8Array): string;
+  mergeRecordBytes(bytes: Uint8Array): "accepted" | "duplicate";
   mergeLogBytes(bytes: Uint8Array): void;
   logBytes(): Uint8Array;
   versionFor(replica: bigint): bigint;
@@ -122,7 +122,7 @@ export class SafeMeshStringOrSetAddEntry {
 export class SafeMeshStringOrSetRecord {
   replica(): bigint;
   sequence(): bigint;
-  deltaKind(): string;
+  deltaKind(): "add" | "remove";
   element(): string | undefined;
   token(): bigint | undefined;
   tokens(): BigUint64Array;

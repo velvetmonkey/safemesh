@@ -907,7 +907,10 @@ impl SafeMeshStringOrSetRecord {
         self.id.sequence
     }
 
-    #[wasm_bindgen(js_name = deltaKind)]
+    #[wasm_bindgen(
+        js_name = deltaKind,
+        unchecked_return_type = "\"add\" | \"remove\""
+    )]
     pub fn delta_kind(&self) -> String {
         match self.delta {
             OrSetDelta::Add { .. } => "add".to_string(),
@@ -1037,7 +1040,10 @@ impl SafeMeshStringOrSetReplica {
     /// new and applied, `"duplicate"` when a record with the same identity and
     /// payload was already in the log (state does not move). A record whose
     /// identity is known but whose payload differs throws `record ID collision`.
-    #[wasm_bindgen(js_name = mergeRecordBytes)]
+    #[wasm_bindgen(
+        js_name = mergeRecordBytes,
+        unchecked_return_type = "\"accepted\" | \"duplicate\""
+    )]
     pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> Result<String, JsValue> {
         self.try_merge_record_bytes(bytes)
             .map(str::to_string)
