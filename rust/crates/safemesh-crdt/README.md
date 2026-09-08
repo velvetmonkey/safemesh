@@ -53,9 +53,6 @@ walkthrough with a same-process restart, without the durable journey.
 `local-writer` enables everything this example needs; `laws` also enables it but
 adds law-checking helpers that the example does not use.
 
-The captured command uses the rustup Cargo shim at `/home/monkey/.cargo/bin/cargo`
-and explicitly selects `+stable`, so no default toolchain is required. Substitute
-your own Cargo path if different, and install the stable toolchain if needed.
 Start in an empty directory where you can download and build the repository.
 Use a fresh `walk-logs` directory for this example: its fresh constructors refuse
 to overwrite an existing durable store.
@@ -64,7 +61,7 @@ Run these three commands in the same shell:
 ```sh
 git clone --quiet https://github.com/velvetmonkey/safemesh.git safemesh
 cd safemesh
-/home/monkey/.cargo/bin/cargo +stable run --quiet --manifest-path rust/Cargo.toml -p safemesh-crdt --features local-writer --example m2slice -- ./walk-logs
+cargo run --quiet --manifest-path rust/Cargo.toml -p safemesh-crdt --features local-writer --example m2slice -- ./walk-logs
 ```
 
 The first two commands produce no output. The third runs
