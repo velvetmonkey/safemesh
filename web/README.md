@@ -6,6 +6,10 @@ Interactive browser demo for the SafeMesh "watch it converge" story.
 
 ## Run
 
+Use Node.js 24.x (`package.json` specifies `>=24 <25`; tested with v24.20.0). On Node v22.22.3, `npm install` prints `EBADENGINE`, although installation and the production build succeeded in this run. Run the commands below from `web/`, stopping each server with Ctrl-C before running the next command.
+
+Use a browser with WebAssembly and service workers enabled; this walkthrough was tested with Chromium 153.0.8010.12. Open the local URL printed by the server at its root path (`/`).
+
 ```sh
 npm install
 npm run dev
@@ -15,6 +19,12 @@ npm run test
 ```
 
 The app is static and has no backend. On a first online visit to the Lab root (`/`) in the production build, the service worker precaches the app shell, including JavaScript, CSS, and WASM. Once installation completes, the Lab root can reopen offline.
+
+There is no in-page installation-complete indicator. For a local offline test:
+
+1. Open the production preview's root URL, then run `(await navigator.serviceWorker.ready).active.state` in the browser's developer console; wait for `'activated'`.
+2. Stop `npm run preview` with Ctrl-C in its terminal, disconnecting the local server.
+3. Reload the same root URL: the heading `Same message. Five failures. Same finish.` still appears. Reload again or open that URL in a new tab in the same browser profile; the Lab still opens.
 
 ## What It Demonstrates
 

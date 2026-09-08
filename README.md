@@ -37,6 +37,8 @@ SafeMesh v0.1 is publish-ready only. These commands are dry-run or local wheel/p
 
 Polished walkthroughs and captured assets live in [`demos/README.md`](demos/README.md).
 
+For the browser-based SafeMesh Lab, follow the [web README's run instructions](web/README.md#run).
+
 Each one-liner exits nonzero unless the modeled replicas converge and prints `CONVERGED=true` on success.
 
 | Surface | One-liner from the repo root |
