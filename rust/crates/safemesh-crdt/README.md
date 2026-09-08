@@ -61,7 +61,10 @@ Run these three commands in the same shell:
 ```sh
 git clone --quiet https://github.com/velvetmonkey/safemesh.git safemesh
 cd safemesh
-cargo run --quiet --manifest-path rust/Cargo.toml -p safemesh-crdt --features local-writer --example m2slice -- ./walk-logs
+cargo run --quiet --manifest-path rust/Cargo.toml -p safemesh-crdt --features local-writer --example m2slice -- ./walk-logs && \
+  printf 'joined child exit=' && cat ./walk-logs/joined/child.exit && printf '\n' && \
+  printf 'counter delta schema=' && strings ./walk-logs/counter-a.log && \
+  printf 'UTF-8 set delta schema=' && strings ./walk-logs/utf8-orset-a.log
 ```
 
 The first two commands produce no output. The third runs
@@ -70,8 +73,8 @@ from public Rust APIs. It first runs the joined durable journey for both a count
 and a UTF-8 set, using `local::DurableReplica`:
 
 - A real child process creates two writers for each CRDT, commits offline edits,
-  prints `joined ACK`, and exits without running destructors. The
-  parent saves and checks the exit code in `walk-logs/joined/child.exit`, then restarts
+  prints `joined ACK`, and exits with code 77 without running destructors. The
+  parent saves and checks that code in `walk-logs/joined/child.exit`, then restarts
   the child's stores through `DurableReplica::restart_counter` and
   `DurableReplica::restart_utf8_set`. Both entry points lock the store, validate
   and replay its history, check allocation metadata, and renew the write ticket.
@@ -114,12 +117,13 @@ APIs; use `DurableReplica` and `joined::run` for the durable embedding example:
   `persist` writes each whole log's bytes to a file and calls `sync_all`.
   The app drops both replicas, then `restart` reads and decodes each log and
   replays its deltas into an empty state. This restart happens within one process.
-  The frame's tag, sentinel and schema identities are format details described in
-  [EventLog persistence frame](#eventlog-persistence-frame); the step output
-  reports replay checks rather than a decoded header. The caller must still
-  supply the delta type and matching empty-state shape, here a two-slot counter
-  or a string/token OR-Set, because decoding validates the supplied type and
-  shape rather than constructing a CRDT from the recorded identity.
+  The persisted `EventLog` carries the delta schema identity
+  (`safemesh/gcounter-delta/v1` for the counter,
+  `safemesh/orset-delta-utf8-u64/v1` for the set), shown in the captured output
+  above. The caller must still supply the delta type and matching empty-state
+  shape, here a two-slot counter or a string/token OR-Set, because decoding
+  validates the supplied type and shape rather than constructing a CRDT from the
+  recorded identity.
 - **Partition and reconcile (steps 6–8):** the app withholds exchange while each
   replica makes a local update, asserts that their states differ, and writes
   both logs. It then exchanges missing records, asserts equal states and version
@@ -168,6 +172,9 @@ counter corrupt-byte-detected=true
 utf8-orset corrupt-tag-detected=true error=InvalidTag
 utf8-orset corrupt-payload-offset=212 restart=Err(IntegrityMismatch)
 utf8-orset corrupt-byte-detected=true
+joined child exit=77
+counter delta schema=safemesh/gcounter-delta/v1
+UTF-8 set delta schema=safemesh/orset-delta-utf8-u64/v1
 ```
 
 ## Verify locally
