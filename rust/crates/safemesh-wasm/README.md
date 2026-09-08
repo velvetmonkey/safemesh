@@ -81,3 +81,32 @@ persists tombstones even before an add arrives, and a reused token affects every
 element carrying it. Observed tokens include tombstoned adds. Merge unions all
 adds and tombstones, and reads return sorted unique live members. This is the
 core's token semantics, including token reuse; the binding does not allocate IDs.
+
+## String OR-Set replica with an event log
+
+`SafeMeshStringOrSetReplica` carries an `OrSet<String, u64>` behind an
+`EventLog`, so records can be replayed, deduplicated and repaired from a log
+the same way `SafeMeshGCounterReplica` does. It sits beside `SafeMeshOrSet`,
+which is unchanged and still exposes whole-state merge over `u64` elements.
+
+```js
+const left = new SafeMeshStringOrSetReplica(1n);
+const right = new SafeMeshStringOrSetReplica(2n);
+const add = left.appendAdd("vaccine", 11n);
+right.mergeRecordBytes(add); // "accepted"
+right.mergeRecordBytes(add); // "duplicate": same record identity and payload, state unchanged
+right.mergeRecordBytes(left.appendRemoveObserved("vaccine"));
+console.log(right.elements()); // []
+console.log(right.observedTokens("vaccine")); // BigUint64Array [11n]
+const view = SafeMeshStringOrSetReplica.inspectRecordBytes(add);
+console.log(view.replica(), view.sequence(), view.deltaKind(), view.element(), view.token());
+```
+
+`mergeRecordBytes` returns the core's admission verdict; a record whose
+identity is already known with a different payload throws
+`record ID collision`, and bytes the core cannot decode throw
+`failed to decode record: <reason>`. `inspectRecordBytes` decodes record bytes
+through the same core decoder without admitting them anywhere. Every value
+these classes return is computed by `safemesh-crdt`; the binding holds no
+set or log logic of its own. Token semantics are the core's, exactly as for
+`SafeMeshOrSet` above.
