@@ -69,9 +69,13 @@ the corresponding `journey` call in `main` as the embedding example for your app
   `persist` writes each whole log's bytes to a file and calls `sync_all`.
   The app drops both replicas, then `restart` reads and decodes each log and
   replays its deltas into an empty state. This restart happens within one process.
-  The persisted log carries no schema or counter arity: the caller must supply
-  the delta type and matching empty-state shape, here a two-slot counter or
-  a string/token OR-Set.
+  The persisted `EventLog` carries tag `0x03` and a shape header with body sentinel
+  `u32::MAX`, the delta schema identity (`safemesh/gcounter-delta/v1` for the counter,
+  `safemesh/orset-delta-utf8-u64/v1` for the set), and arity (fixed at 2 for the
+  counter, unbounded for the set); the caller must still supply the delta type and
+  matching empty-state shape, here a two-slot counter or a string/token OR-Set,
+  because decoding validates the supplied type and shape rather than constructing
+  a CRDT from the recorded identity.
 - **Partition and reconcile (steps 6–8):** the app withholds exchange while each
   replica makes a local update, asserts that their states differ, and writes
   both logs. It then exchanges missing records, asserts equal states and version
