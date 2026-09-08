@@ -14,8 +14,10 @@ See the repository `CLAIMS.md` and `WHAT-IS-PROVEN.md` for the full wording rule
 
 ```toml
 [dependencies]
-safemesh-crdt = "0.1.0"
+safemesh-crdt = { git = "https://github.com/velvetmonkey/safemesh.git" }
 ```
+
+A registry release of `safemesh-crdt` has not yet been made.
 
 ## Quickstart
 
@@ -39,7 +41,10 @@ assert_eq!(left.value(), right.value());
 ## Persist, restore, partition and reconcile
 
 This Rust-only walk needs Git, Cargo and a Rust toolchain; no Lean setup or
-registry publication is needed. Python, WASM and the C FFI do not expose OR-Set.
+registry publication is needed. Python exposes `OrSet`, WASM exposes
+`SafeMeshOrSet`, and the C FFI exposes the `safemesh_orset_*` functions; each wraps
+`OrSet<u64, u64>` (u64 elements and caller-supplied u64 tokens). The Rust walk uses
+`OrSet<String, u64>` for UTF-8 strings.
 Start in an empty directory where you can download and build the repository.
 Run these three commands in the same shell:
 
@@ -205,5 +210,10 @@ error, so callers must not assume it was rolled back.
 
 `CommittedTransaction::read` reopens the committed metadata and log bytes without
 granting a write lease. It is a storage read, not checked history validation.
-Writable restart remains packet C: durable constructors return `RecoveryRequired`
+With `local-writer` on Linux, use `local::DurableReplica::restart_counter` or
+`local::DurableReplica::restart_utf8_set` to reopen an existing durable store with
+its `WriterConfig`. They reacquire the exclusive fence lock, validate and replay
+the committed history, check allocation metadata, and renew the write ticket
+before returning a writable replica. Any error returns no replica or write ticket.
+The fresh `counter` and `utf8_set` constructors still return `RecoveryRequired`
 for an existing store. This path does not claim general power-loss certification.
