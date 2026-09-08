@@ -86,7 +86,7 @@ has four records. The files are under `walk-logs`: `counter-a.log`, `counter-b.l
 
 The example also writes separate `counter-corrupt.log` and
 `utf8-orset-corrupt.log` controls. Their output shows a rejected tag mutation
-and payload mutations that load changed states. Captured output:
+and payload mutations rejected by the frame CRC. Captured output:
 
 ```text
 counter step=1 WORKS
