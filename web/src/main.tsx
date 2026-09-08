@@ -10,7 +10,12 @@ createRoot(document.getElementById('root')!).render(
 )
 
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch(() => undefined)
-  })
+  const register = () => {
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch((error) => {
+      console.error('SafeMesh service worker registration failed.', error)
+    })
+  }
+  // WASM initialization can finish after the window's load event.
+  if (document.readyState === 'complete') register()
+  else window.addEventListener('load', register, { once: true })
 }
