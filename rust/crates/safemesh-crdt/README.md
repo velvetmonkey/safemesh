@@ -79,6 +79,18 @@ and a UTF-8 set, using `local::DurableReplica`:
   reused, and exchanges records. Both delivery orders converge to counter tallies
   `[12, 7]` and a set containing `café☕`, `東京`, `naïve`, and `γειά`. It drops and
   reopens the replicas again before printing `joined HAPPY`.
+  Each writer advances only its own counter slot, and reconciliation keeps the
+  highest tally seen for each slot regardless of arrival order, so neither writer's
+  progress is overwritten by a last writer.
+  Here writer 0 sets successive tallies of 5, 9 and 12 while writer 1 sets 7,
+  giving slot maxima of 12 and 7, exactly the printed `[12, 7]`.
+  The members `café☕` and `東京` exercise preservation of two- and three-byte UTF-8
+  characters through storage and exchange: `é` is precomposed, and both `☕` and
+  the CJK characters are within the Basic Multilingual Plane, so these examples
+  do not cover combining accents or four-byte characters outside that plane.
+  Using character counts instead of byte lengths would split these strings at
+  the wrong boundary and cause decoding to fail or recover incorrect members or
+  tokens, a bug ASCII alone would not expose.
 - Durable stores live in `walk-logs/joined/counter` and `walk-logs/joined/set`.
   Each `writer-<id>.transaction` holds allocation metadata and log bytes; an edit
   succeeds only after replacement and file/directory sync. Keep the directories
@@ -261,3 +273,10 @@ the committed history, check allocation metadata, and renew the write ticket
 before returning a writable replica. Any error returns no replica or write ticket.
 The fresh `counter` and `utf8_set` constructors still return `RecoveryRequired`
 for an existing store. This path does not claim general power-loss certification.
+
+The joined walkthrough demonstrates that acknowledged edits can be recovered
+from the child's committed stores after it exits without running destructors,
+that writing can resume without reusing the checked record IDs or set tokens,
+and that the reconciled state survives a second reopen.
+It does not exercise a machine power cut or interruption partway through a commit,
+so it does not establish recovery from those failures.
