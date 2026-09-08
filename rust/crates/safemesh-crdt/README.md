@@ -45,19 +45,55 @@ registry publication is needed. Python exposes `OrSet`, WASM exposes
 `SafeMeshOrSet`, and the C FFI exposes the `safemesh_orset_*` functions; each wraps
 `OrSet<u64, u64>` (u64 elements and caller-supplied u64 tokens). The Rust walk uses
 `OrSet<String, u64>` for UTF-8 strings.
+The durable journey requires Linux and a local filesystem supporting file locks
+and file/directory sync. On macOS or Windows, the command below fails to compile:
+the example imports `local`, but that module is gated on both `local-writer` and
+Linux. Omitting `--features local-writer` runs only the earlier `EventLog`
+walkthrough with a same-process restart, without the durable journey.
+`local-writer` enables everything this example needs; `laws` also enables it but
+adds law-checking helpers that the example does not use.
+
+The captured command uses the rustup Cargo shim at `/home/monkey/.cargo/bin/cargo`
+and explicitly selects `+stable`, so no default toolchain is required. Substitute
+your own Cargo path if different, and install the stable toolchain if needed.
 Start in an empty directory where you can download and build the repository.
+Use a fresh `walk-logs` directory for this example: its fresh constructors refuse
+to overwrite an existing durable store.
 Run these three commands in the same shell:
 
 ```sh
 git clone --quiet https://github.com/velvetmonkey/safemesh.git safemesh
 cd safemesh
-cargo run --quiet --manifest-path rust/Cargo.toml -p safemesh-crdt --example m2slice -- ./walk-logs
+/home/monkey/.cargo/bin/cargo +stable run --quiet --manifest-path rust/Cargo.toml -p safemesh-crdt --features local-writer --example m2slice -- ./walk-logs
 ```
 
 The first two commands produce no output. The third runs
 [`examples/m2slice.rs`](examples/m2slice.rs), a small application built entirely
-from public Rust APIs. It runs both choices; use its `Replica<C>` wrapper and
-the corresponding `journey` call in `main` as the embedding example for your app:
+from public Rust APIs. It first runs the joined durable journey for both a counter
+and a UTF-8 set, using `local::DurableReplica`:
+
+- A real child process creates two writers for each CRDT, commits offline edits,
+  prints `joined ACK`, and exits with code 77 without running destructors. The
+  parent saves and checks that code in `walk-logs/joined/child.exit`, then restarts
+  the child's stores through `DurableReplica::restart_counter` and
+  `DurableReplica::restart_utf8_set`. Both entry points lock the store, validate
+  and replay its history, check allocation metadata, and renew the write ticket.
+- The parent commits more edits, checks that record IDs and set tokens were not
+  reused, and exchanges records. Both delivery orders converge to counter tallies
+  `[12, 7]` and a set containing `café☕`, `東京`, `naïve`, and `γειά`. It drops and
+  reopens the replicas again before printing `joined HAPPY`.
+- Durable stores live in `walk-logs/joined/counter` and `walk-logs/joined/set`.
+  Each `writer-<id>.transaction` holds allocation metadata and log bytes; an edit
+  succeeds only after replacement and file/directory sync. Keep the directories
+  and `writer-<id>.fence` files in place: each fence stores the writer configuration
+  and ticket generation and supplies the exclusive lock that prevents competing
+  processes from writing as the same writer. Renewal invalidates old tickets;
+  restart requires the existing fence rather than creating a replacement.
+  `counter-issued` and `set-issued` are audit copies, not recovery inputs.
+
+The example then runs the earlier `EventLog` walkthrough for both choices. Its
+`Replica<C>` wrapper and corresponding `journey` calls illustrate these lower-level
+APIs; use `DurableReplica` and `joined::run` for the durable embedding example:
 
 - **Choose and embed (steps 1–2):** `GCounter::new(2)` tracks two replica tallies;
   `OrSet::<String, u64>::new()` tracks strings with unique add tokens. `Replica`
@@ -93,6 +129,12 @@ The example also writes separate `counter-corrupt.log` and
 and payload mutations rejected by the frame CRC. Captured output:
 
 ```text
+joined ACK counter=5,9 set=café☕,東京 loss=false
+
+counter IDs before=2 after=2 overlap=0 planted-duplicate=detected
+set IDs before=2 after=2 overlap=0 planted-duplicate=detected
+set tokens before=2 after=2 overlap=0 planted-duplicate=detected
+joined HAPPY: all acknowledged records survive; both exchange orders converge; second restart survives
 counter step=1 WORKS
 counter step=2 WORKS
 counter step=3 WORKS
