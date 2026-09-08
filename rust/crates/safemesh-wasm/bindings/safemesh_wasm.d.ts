@@ -97,6 +97,38 @@ export class SafeMeshEnableWinsFlagReplica {
   free(): void;
 }
 
+export class SafeMeshStringOrSetReplica {
+  constructor(replicaId: bigint);
+  appendAdd(element: string, token: bigint): Uint8Array;
+  appendRemoveObserved(element: string): Uint8Array;
+  mergeRecordBytes(bytes: Uint8Array): string;
+  mergeLogBytes(bytes: Uint8Array): void;
+  logBytes(): Uint8Array;
+  versionFor(replica: bigint): bigint;
+  elements(): string[];
+  observedTokens(element: string): BigUint64Array;
+  tombstones(): BigUint64Array;
+  addEntries(): SafeMeshStringOrSetAddEntry[];
+  static inspectRecordBytes(bytes: Uint8Array): SafeMeshStringOrSetRecord;
+  free(): void;
+}
+
+export class SafeMeshStringOrSetAddEntry {
+  element(): string;
+  token(): bigint;
+  free(): void;
+}
+
+export class SafeMeshStringOrSetRecord {
+  replica(): bigint;
+  sequence(): bigint;
+  deltaKind(): string;
+  element(): string | undefined;
+  token(): bigint | undefined;
+  tokens(): BigUint64Array;
+  free(): void;
+}
+
 export function gcounterDeltaToWire(replica: number, tally: bigint): Uint8Array;
 export function lwwRegisterDeltaToWire(timestamp: bigint, replica: bigint, value: bigint): Uint8Array;
 export function lwwMapSetDeltaToWire(key: bigint, timestamp: bigint, replica: bigint, value: bigint): Uint8Array;

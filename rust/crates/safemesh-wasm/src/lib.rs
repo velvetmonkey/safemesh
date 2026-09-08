@@ -4,7 +4,7 @@
 
 use safemesh_crdt::{
     Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta, LwwMap,
-    LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, Record, WireDecode, WireEncode,
+    LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta, Record, WireDecode, WireEncode,
 };
 use wasm_bindgen::prelude::*;
 
@@ -827,6 +827,278 @@ impl SafeMeshOrSet {
     }
 }
 
+/// Binding-level failure carried across the native/wasm boundary.
+///
+/// Native tests read the code and message directly; the wasm methods convert
+/// it into a `SafeMeshError` with the same code and message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BindingError {
+    code: u32,
+    message: String,
+}
+
+impl From<BindingError> for JsValue {
+    fn from(error: BindingError) -> JsValue {
+        safe_mesh_error(error.code, &error.message)
+    }
+}
+
+fn binding_error(code: u32, message: impl Into<String>) -> BindingError {
+    BindingError {
+        code,
+        message: message.into(),
+    }
+}
+
+fn event_log_decode_error(error: safemesh_crdt::WireError) -> BindingError {
+    binding_error(
+        1,
+        match error {
+            safemesh_crdt::WireError::RecordCollision => "record ID collision".to_string(),
+            safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
+                "replica count mismatch".to_string()
+            }
+            safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch".to_string(),
+            safemesh_crdt::WireError::MissingShape => "event log missing shape".to_string(),
+            other => format!("failed to decode event log: {other:?}"),
+        },
+    )
+}
+
+/// One `(element, token)` add pair as the core `OrSet` stores it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[wasm_bindgen]
+pub struct SafeMeshStringOrSetAddEntry {
+    element: String,
+    token: u64,
+}
+
+#[wasm_bindgen]
+impl SafeMeshStringOrSetAddEntry {
+    pub fn element(&self) -> String {
+        self.element.clone()
+    }
+
+    pub fn token(&self) -> u64 {
+        self.token
+    }
+}
+
+/// A record decoded by the core, exposed field by field so a consumer can label
+/// record bytes without keeping its own metadata alongside them.
+///
+/// `deltaKind()` is `"add"` (then `element()` and `token()` are set, `tokens()`
+/// is empty) or `"remove"` (then `tokens()` carries the tombstoned tokens and
+/// `element()`/`token()` are undefined).
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[wasm_bindgen]
+pub struct SafeMeshStringOrSetRecord {
+    id: safemesh_crdt::RecordId,
+    delta: OrSetDelta<String, u64>,
+}
+
+#[wasm_bindgen]
+impl SafeMeshStringOrSetRecord {
+    pub fn replica(&self) -> u64 {
+        self.id.replica
+    }
+
+    pub fn sequence(&self) -> u64 {
+        self.id.sequence
+    }
+
+    #[wasm_bindgen(js_name = deltaKind)]
+    pub fn delta_kind(&self) -> String {
+        match self.delta {
+            OrSetDelta::Add { .. } => "add".to_string(),
+            OrSetDelta::Remove { .. } => "remove".to_string(),
+        }
+    }
+
+    pub fn element(&self) -> Option<String> {
+        match &self.delta {
+            OrSetDelta::Add { element, .. } => Some(element.clone()),
+            OrSetDelta::Remove { .. } => None,
+        }
+    }
+
+    pub fn token(&self) -> Option<u64> {
+        match &self.delta {
+            OrSetDelta::Add { token, .. } => Some(*token),
+            OrSetDelta::Remove { .. } => None,
+        }
+    }
+
+    pub fn tokens(&self) -> Vec<u64> {
+        match &self.delta {
+            OrSetDelta::Add { .. } => Vec::new(),
+            OrSetDelta::Remove { tokens } => tokens.clone(),
+        }
+    }
+}
+
+/// Observed-remove set of UTF-8 string elements and u64 tokens, carried by an
+/// event log so records can be replayed, deduplicated and repaired from a log.
+///
+/// Every value is computed by `safemesh_crdt::OrSet<String, u64>` and
+/// `safemesh_crdt::EventLog`; this type only moves bytes and values across the
+/// boundary. Tokens are global to the set, exactly as in `SafeMeshOrSet`.
+#[wasm_bindgen]
+pub struct SafeMeshStringOrSetReplica {
+    replica_id: u64,
+    state: OrSet<String, u64>,
+    log: EventLog<OrSetDelta<String, u64>>,
+}
+
+impl SafeMeshStringOrSetReplica {
+    fn append(&mut self, delta: OrSetDelta<String, u64>) -> Result<Vec<u8>, BindingError> {
+        let id = self
+            .log
+            .append_with(self.replica_id, delta.clone(), |delta| {
+                self.state.apply_delta(delta.clone());
+            })
+            .map_err(|_| binding_error(1, "event log sequence exhausted"))?;
+        Record { id, delta }
+            .to_wire_bytes()
+            .map_err(|error| binding_error(1, format!("failed to encode record: {error:?}")))
+    }
+
+    fn admit(
+        &mut self,
+        record: Record<OrSetDelta<String, u64>>,
+    ) -> Result<safemesh_crdt::Admission, BindingError> {
+        match self.log.admit_with(record, |delta| {
+            self.state.apply_delta(delta.clone());
+        }) {
+            safemesh_crdt::Admission::Collision => Err(binding_error(1, "record ID collision")),
+            admission => Ok(admission),
+        }
+    }
+
+    fn decode_record(bytes: &[u8]) -> Result<Record<OrSetDelta<String, u64>>, BindingError> {
+        Record::<OrSetDelta<String, u64>>::from_wire_bytes(bytes)
+            .map_err(|error| binding_error(1, format!("failed to decode record: {error:?}")))
+    }
+
+    fn try_merge_record_bytes(&mut self, bytes: &[u8]) -> Result<&'static str, BindingError> {
+        let record = Self::decode_record(bytes)?;
+        Ok(match self.admit(record)? {
+            safemesh_crdt::Admission::Accepted => "accepted",
+            safemesh_crdt::Admission::Duplicate => "duplicate",
+            safemesh_crdt::Admission::Collision => unreachable!("admit maps collision to Err"),
+        })
+    }
+
+    fn try_merge_log_bytes(&mut self, bytes: &[u8]) -> Result<(), BindingError> {
+        let log = EventLog::<OrSetDelta<String, u64>>::from_wire_bytes_for(bytes, &self.state)
+            .map_err(event_log_decode_error)?;
+        for record in log.records().iter().cloned() {
+            self.admit(record)?;
+        }
+        Ok(())
+    }
+
+    fn try_inspect_record_bytes(bytes: &[u8]) -> Result<SafeMeshStringOrSetRecord, BindingError> {
+        let Record { id, delta } = Self::decode_record(bytes)?;
+        Ok(SafeMeshStringOrSetRecord { id, delta })
+    }
+}
+
+#[wasm_bindgen]
+impl SafeMeshStringOrSetReplica {
+    #[wasm_bindgen(constructor)]
+    pub fn new(replica_id: u64) -> Self {
+        SafeMeshStringOrSetReplica {
+            replica_id,
+            state: OrSet::new(),
+            log: EventLog::new(),
+        }
+    }
+
+    /// Append an add record for `(element, token)` and return its wire bytes.
+    #[wasm_bindgen(js_name = appendAdd)]
+    pub fn append_add(&mut self, element: String, token: u64) -> Result<Vec<u8>, JsValue> {
+        self.append(OrSetDelta::Add { element, token })
+            .map_err(JsValue::from)
+    }
+
+    /// Append a remove record tombstoning every token this replica has observed
+    /// for `element`, as the core reports them, and return its wire bytes.
+    #[wasm_bindgen(js_name = appendRemoveObserved)]
+    pub fn append_remove_observed(&mut self, element: String) -> Result<Vec<u8>, JsValue> {
+        let tokens = self.state.observed_tokens(&element).into_iter().collect();
+        self.append(OrSetDelta::Remove { tokens })
+            .map_err(JsValue::from)
+    }
+
+    /// Decode one record and admit it through the core event log.
+    ///
+    /// Returns the core's admission verdict: `"accepted"` when the record was
+    /// new and applied, `"duplicate"` when a record with the same identity and
+    /// payload was already in the log (state does not move). A record whose
+    /// identity is known but whose payload differs throws `record ID collision`.
+    #[wasm_bindgen(js_name = mergeRecordBytes)]
+    pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> Result<String, JsValue> {
+        self.try_merge_record_bytes(bytes)
+            .map(str::to_string)
+            .map_err(JsValue::from)
+    }
+
+    #[wasm_bindgen(js_name = mergeLogBytes)]
+    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
+        self.try_merge_log_bytes(bytes).map_err(JsValue::from)
+    }
+
+    #[wasm_bindgen(js_name = logBytes)]
+    pub fn log_bytes(&self) -> Result<Vec<u8>, JsValue> {
+        self.log
+            .to_wire_bytes()
+            .map_err(|error| safe_mesh_error(1, &format!("failed to encode event log: {error:?}")))
+    }
+
+    #[wasm_bindgen(js_name = versionFor)]
+    pub fn version_for(&self, replica: u64) -> u64 {
+        self.log.version().get(replica)
+    }
+
+    /// Live members, sorted and unique, as the core computes them.
+    pub fn elements(&self) -> Vec<String> {
+        self.state.elements().into_iter().collect()
+    }
+
+    /// Every token ever added for `element`, including tombstoned ones.
+    #[wasm_bindgen(js_name = observedTokens)]
+    pub fn observed_tokens(&self, element: String) -> Vec<u64> {
+        self.state.observed_tokens(&element).into_iter().collect()
+    }
+
+    pub fn tombstones(&self) -> Vec<u64> {
+        self.state.tombstones().iter().copied().collect()
+    }
+
+    /// Every `(element, token)` add pair the core holds, tombstoned or not.
+    #[wasm_bindgen(js_name = addEntries)]
+    pub fn add_entries(&self) -> Vec<SafeMeshStringOrSetAddEntry> {
+        self.state
+            .adds()
+            .iter()
+            .map(|(element, token)| SafeMeshStringOrSetAddEntry {
+                element: element.clone(),
+                token: *token,
+            })
+            .collect()
+    }
+
+    /// Decode record bytes through the core without admitting them anywhere.
+    ///
+    /// Named after `mergeRecordBytes`: same input, but this only looks. It does
+    /// not touch any replica, so it is static.
+    #[wasm_bindgen(js_name = inspectRecordBytes)]
+    pub fn inspect_record_bytes(bytes: &[u8]) -> Result<SafeMeshStringOrSetRecord, JsValue> {
+        Self::try_inspect_record_bytes(bytes).map_err(JsValue::from)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1107,5 +1379,359 @@ mod tests {
         left.merge_log_bytes(&right.log_bytes().unwrap()).unwrap();
         assert_eq!(left.value_or(0), right.value_or(0));
         assert_eq!(left.writer_replica_or(0), 2);
+    }
+
+    fn string_orset_pairs(entries: Vec<SafeMeshStringOrSetAddEntry>) -> Vec<(String, u64)> {
+        entries
+            .iter()
+            .map(|entry| (entry.element(), entry.token()))
+            .collect()
+    }
+
+    #[test]
+    fn wasm_string_orset_replica_round_trips_records_through_core() {
+        let mut left = SafeMeshStringOrSetReplica::new(1);
+        let mut right = SafeMeshStringOrSetReplica::new(2);
+        let mut core = OrSet::<String, u64>::new();
+
+        let add_bytes = left.append_add("vaccine".to_string(), 11).unwrap();
+        assert_eq!(
+            right.try_merge_record_bytes(&add_bytes).unwrap(),
+            "accepted"
+        );
+        core.apply_delta(OrSetDelta::Add {
+            element: "vaccine".to_string(),
+            token: 11,
+        });
+        println!(
+            "C1 appendAdd: left.elements={:?} right.elements={:?} core.elements={:?}",
+            left.elements(),
+            right.elements(),
+            core.elements()
+        );
+        assert_eq!(right.elements(), left.elements());
+        assert_eq!(right.elements(), vec!["vaccine".to_string()]);
+        assert_eq!(
+            right.elements(),
+            core.elements().into_iter().collect::<Vec<_>>()
+        );
+        assert_eq!(right.observed_tokens("vaccine".to_string()), vec![11]);
+
+        let remove_bytes = left.append_remove_observed("vaccine".to_string()).unwrap();
+        assert_eq!(
+            right.try_merge_record_bytes(&remove_bytes).unwrap(),
+            "accepted"
+        );
+        core.apply_delta(OrSetDelta::Remove { tokens: vec![11] });
+        println!(
+            "C1 appendRemoveObserved: left.elements={:?} right.elements={:?} core.elements={:?} tombstones={:?}",
+            left.elements(),
+            right.elements(),
+            core.elements(),
+            right.tombstones()
+        );
+        assert_eq!(right.elements(), left.elements());
+        assert!(right.elements().is_empty());
+        assert_eq!(right.tombstones(), left.tombstones());
+        assert_eq!(right.tombstones(), vec![11]);
+        assert_eq!(
+            right.tombstones(),
+            core.tombstones().iter().copied().collect::<Vec<_>>()
+        );
+        let entries = string_orset_pairs(right.add_entries());
+        assert_eq!(entries, string_orset_pairs(left.add_entries()));
+        assert_eq!(entries, vec![("vaccine".to_string(), 11)]);
+        assert_eq!(entries, core.adds().iter().cloned().collect::<Vec<_>>());
+
+        let mut third = SafeMeshStringOrSetReplica::new(3);
+        third
+            .try_merge_log_bytes(&left.log_bytes().unwrap())
+            .unwrap();
+        assert_eq!(third.elements(), left.elements());
+        assert_eq!(third.tombstones(), left.tombstones());
+        assert_eq!(
+            string_orset_pairs(third.add_entries()),
+            string_orset_pairs(left.add_entries())
+        );
+        for replica in [&left, &right, &third] {
+            assert_eq!(replica.version_for(1), 2);
+            assert_eq!(replica.version_for(2), 0);
+        }
+    }
+
+    #[test]
+    fn wasm_string_orset_replica_rejects_duplicate_record_without_moving_state() {
+        let mut author = SafeMeshStringOrSetReplica::new(1);
+        let mut reader = SafeMeshStringOrSetReplica::new(2);
+        let bytes = author.append_add("vaccine".to_string(), 11).unwrap();
+
+        let first = reader.try_merge_record_bytes(&bytes).unwrap();
+        let before = (
+            reader.elements(),
+            reader.tombstones(),
+            reader.version_for(1),
+            reader.log.records().len(),
+        );
+        let second = reader.try_merge_record_bytes(&bytes).unwrap();
+        let after = (
+            reader.elements(),
+            reader.tombstones(),
+            reader.version_for(1),
+            reader.log.records().len(),
+        );
+        println!("C2 first merge={first} second merge={second}");
+        println!(
+            "C2 state before second merge (elements, tombstones, version[1], records)={before:?}"
+        );
+        println!(
+            "C2 state after  second merge (elements, tombstones, version[1], records)={after:?}"
+        );
+        assert_eq!(first, "accepted");
+        assert_eq!(second, "duplicate");
+        assert_eq!(before, after);
+        assert_eq!(after.3, 1);
+
+        // Same identity, different payload: the core reports a collision and the
+        // binding refuses it rather than absorbing either reading.
+        let forged = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 1,
+            },
+            delta: OrSetDelta::Add {
+                element: "forged".to_string(),
+                token: 99,
+            },
+        }
+        .to_wire_bytes()
+        .unwrap();
+        let error = reader.try_merge_record_bytes(&forged).unwrap_err();
+        println!("C2 same id, different payload: {}", error.message);
+        assert_eq!(error.message, "record ID collision");
+        assert_eq!(reader.elements(), before.0);
+        assert_eq!(reader.log.records().len(), 1);
+    }
+
+    #[test]
+    fn wasm_string_orset_replica_refuses_corrupted_bytes_without_panicking() {
+        let mut author = SafeMeshStringOrSetReplica::new(1);
+        let good = author.append_add("vaccine".to_string(), 11).unwrap();
+
+        let mut reader = SafeMeshStringOrSetReplica::new(2);
+        assert_eq!(reader.try_merge_record_bytes(&good).unwrap(), "accepted");
+        assert_eq!(reader.elements(), vec!["vaccine".to_string()]);
+        println!(
+            "C3 good record ({} bytes): accepted, elements={:?}",
+            good.len(),
+            reader.elements()
+        );
+
+        let mut planted = good.clone();
+        planted[0] ^= 0xff;
+        let mut reader = SafeMeshStringOrSetReplica::new(2);
+        let error = reader.try_merge_record_bytes(&planted).unwrap_err();
+        println!("C3 planted bad byte 0 (record tag): {}", error.message);
+        assert_eq!(error.message, "failed to decode record: InvalidTag");
+        assert!(reader.elements().is_empty());
+        assert_eq!(reader.log.records().len(), 0);
+
+        // Every single-byte change on the bare record path either errors or
+        // decodes as a visibly different record. None panics, none is absorbed
+        // as the original.
+        let original = SafeMeshStringOrSetReplica::try_inspect_record_bytes(&good).unwrap();
+        let (mut errored, mut decoded_differently) = (0usize, 0usize);
+        for position in 0..good.len() {
+            let mut bad = good.clone();
+            bad[position] ^= 0x01;
+            let mut reader = SafeMeshStringOrSetReplica::new(2);
+            match reader.try_merge_record_bytes(&bad) {
+                Err(error) => {
+                    errored += 1;
+                    assert!(reader.elements().is_empty());
+                    assert_eq!(reader.log.records().len(), 0);
+                    println!("C3 record byte {position}: {}", error.message);
+                }
+                Ok(verdict) => {
+                    decoded_differently += 1;
+                    let seen = SafeMeshStringOrSetReplica::try_inspect_record_bytes(&bad).unwrap();
+                    let seen_fields = (
+                        seen.replica(),
+                        seen.sequence(),
+                        seen.element(),
+                        seen.token(),
+                    );
+                    let original_fields = (
+                        original.replica(),
+                        original.sequence(),
+                        original.element(),
+                        original.token(),
+                    );
+                    assert_ne!(seen_fields, original_fields);
+                    println!(
+                        "C3 record byte {position}: {verdict} as a different record {seen_fields:?} (original {original_fields:?})"
+                    );
+                }
+            }
+        }
+        println!(
+            "C3 record sweep: {} bytes, {errored} errored, {decoded_differently} decoded as a different record",
+            good.len()
+        );
+        assert_eq!(errored + decoded_differently, good.len());
+        assert!(errored > 0);
+
+        // The event-log frame carries a CRC, so every single-byte change errors.
+        let log = author.log_bytes().unwrap();
+        let mut log_errors = 0usize;
+        for position in 0..log.len() {
+            let mut bad = log.clone();
+            bad[position] ^= 0x01;
+            let mut reader = SafeMeshStringOrSetReplica::new(2);
+            let error = reader.try_merge_log_bytes(&bad).unwrap_err();
+            assert!(reader.elements().is_empty());
+            log_errors += 1;
+            if position < 2 || position + 1 == log.len() {
+                println!("C3 log byte {position}: {}", error.message);
+            }
+        }
+        println!("C3 log sweep: {} bytes, {log_errors} errored", log.len());
+        assert_eq!(log_errors, log.len());
+        let mut reader = SafeMeshStringOrSetReplica::new(2);
+        reader.try_merge_log_bytes(&log).unwrap();
+        assert_eq!(reader.elements(), vec!["vaccine".to_string()]);
+    }
+
+    #[test]
+    fn wasm_string_orset_replica_keeps_core_token_semantics() {
+        // (a) A reused token keeps both pairs; the mirror overwrote to [b].
+        let mut replica = SafeMeshStringOrSetReplica::new(1);
+        replica.append_add("a".to_string(), 7).unwrap();
+        replica.append_add("b".to_string(), 7).unwrap();
+        let mut core = OrSet::<String, u64>::new();
+        core.add("a".to_string(), 7);
+        core.add("b".to_string(), 7);
+        println!(
+            "C4a reused token: binding.elements={:?} core.elements={:?} addEntries={:?}",
+            replica.elements(),
+            core.elements(),
+            string_orset_pairs(replica.add_entries())
+        );
+        assert_eq!(replica.elements(), vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            replica.elements(),
+            core.elements().into_iter().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            string_orset_pairs(replica.add_entries()),
+            vec![("a".to_string(), 7), ("b".to_string(), 7)]
+        );
+        // Tokens are global: removing what was observed for `a` tombstones 7 and
+        // takes `b` with it, as the core does.
+        replica.append_remove_observed("a".to_string()).unwrap();
+        core.apply_remove([7]);
+        println!(
+            "C4a then removeObserved(a): binding.elements={:?} core.elements={:?} tombstones={:?}",
+            replica.elements(),
+            core.elements(),
+            replica.tombstones()
+        );
+        assert!(replica.elements().is_empty());
+        assert!(core.elements().is_empty());
+
+        // (b) Observed tokens survive removal; the mirror returned [].
+        let mut replica = SafeMeshStringOrSetReplica::new(1);
+        replica.append_add("a".to_string(), 7).unwrap();
+        let remove = replica.append_remove_observed("a".to_string()).unwrap();
+        let mut core = OrSet::<String, u64>::new();
+        core.add("a".to_string(), 7);
+        core.apply_remove([7]);
+        println!(
+            "C4b observed after removal: binding.observedTokens(a)={:?} core.observed_tokens(a)={:?} elements={:?} tombstones={:?}",
+            replica.observed_tokens("a".to_string()),
+            core.observed_tokens(&"a".to_string()),
+            replica.elements(),
+            replica.tombstones()
+        );
+        assert_eq!(replica.observed_tokens("a".to_string()), vec![7]);
+        assert_eq!(
+            replica.observed_tokens("a".to_string()),
+            core.observed_tokens(&"a".to_string())
+                .into_iter()
+                .collect::<Vec<_>>()
+        );
+        assert!(replica.elements().is_empty());
+        assert_eq!(replica.tombstones(), vec![7]);
+        let record = SafeMeshStringOrSetReplica::try_inspect_record_bytes(&remove).unwrap();
+        assert_eq!(record.delta_kind(), "remove");
+        assert_eq!(record.tokens(), vec![7]);
+    }
+
+    #[test]
+    fn wasm_string_orset_record_inspector_reports_core_decoded_fields() {
+        let mut author = SafeMeshStringOrSetReplica::new(9);
+        let add = author.append_add("vaccine".to_string(), 11).unwrap();
+        let expected = Record {
+            id: RecordId {
+                replica: 9,
+                sequence: 1,
+            },
+            delta: OrSetDelta::Add {
+                element: "vaccine".to_string(),
+                token: 11,
+            },
+        }
+        .to_wire_bytes()
+        .unwrap();
+        assert_eq!(add, expected);
+
+        let view = SafeMeshStringOrSetReplica::try_inspect_record_bytes(&add).unwrap();
+        let fields = (
+            view.replica(),
+            view.sequence(),
+            view.delta_kind(),
+            view.element(),
+            view.token(),
+            view.tokens(),
+        );
+        println!("inspectRecordBytes(add)={fields:?}");
+        assert_eq!(
+            fields,
+            (
+                9,
+                1,
+                "add".to_string(),
+                Some("vaccine".to_string()),
+                Some(11),
+                vec![]
+            )
+        );
+
+        let remove = author
+            .append_remove_observed("vaccine".to_string())
+            .unwrap();
+        let view = SafeMeshStringOrSetReplica::try_inspect_record_bytes(&remove).unwrap();
+        let fields = (
+            view.replica(),
+            view.sequence(),
+            view.delta_kind(),
+            view.element(),
+            view.token(),
+            view.tokens(),
+        );
+        println!("inspectRecordBytes(remove)={fields:?}");
+        assert_eq!(fields, (9, 2, "remove".to_string(), None, None, vec![11]));
+
+        // Inspecting admits nothing: a reader still accepts the record afterwards.
+        let mut reader = SafeMeshStringOrSetReplica::new(2);
+        assert_eq!(reader.try_merge_record_bytes(&add).unwrap(), "accepted");
+
+        let mut bad = add.clone();
+        bad[0] ^= 0xff;
+        assert_eq!(
+            SafeMeshStringOrSetReplica::try_inspect_record_bytes(&bad)
+                .unwrap_err()
+                .message,
+            "failed to decode record: InvalidTag"
+        );
     }
 }
