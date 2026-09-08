@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readORSet } from '../crdt'
+import { readORSet } from './simulation'
 import { GUIDE_SCENARIOS, buildScenarioSimulation, createScenarioBaseline } from './guide'
 import { convergence } from './simulation'
 

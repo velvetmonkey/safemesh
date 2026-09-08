@@ -1,15 +1,4 @@
-import {
-  addDelta,
-  applyORSetDelta,
-  bottomORSet,
-  mergeORSet,
-  observedTokens,
-  readORSet,
-  sameORSet,
-  type ORSetDelta,
-  type ORSetState,
-} from '../crdt/orset'
-import { SafeMeshGCounterReplica } from '../../../rust/crates/safemesh-wasm/pkg/safemesh_wasm'
+import { SafeMeshGCounterReplica, SafeMeshStringOrSetReplica } from '../../../rust/crates/safemesh-wasm/pkg/safemesh_wasm'
 
 export type GCounterDelta = {
   kind: 'gcounter.bump'
@@ -19,6 +8,13 @@ export type GCounterDelta = {
   payload: 'record' | 'log'
 }
 
+// Labels are presentation metadata; only bytes are admitted to the core.
+export type ORSetDelta = (
+  | { kind: 'orset.add'; element: string; token: bigint }
+  | { kind: 'orset.remove'; tokens: bigint[] }
+  | { kind: 'orset.log' }
+) & { bytes: Uint8Array; payload: 'record' | 'log' }
+
 export type MeshDelta = GCounterDelta | ORSetDelta
 
 export type Peer = {
@@ -26,7 +22,8 @@ export type Peer = {
   // This is a read-only Rust-core snapshot for the UI; `gcounterLog` is the carrier.
   gcounter: number[]
   gcounterLog: Uint8Array
-  orset: ORSetState
+  // Immutable core log, reconstructed into a WASM handle for each operation.
+  orset: Uint8Array
   localTally: number
 }
 
@@ -69,7 +66,7 @@ export function createSimulation(peerCount = 4): Simulation {
     peers: Array.from({ length: peerCount }, (_, id) => ({
       id,
       ...emptyGCounterPeer(id, peerCount),
-      orset: bottomORSet(),
+      orset: new Uint8Array(),
       localTally: 0,
     })),
     queue: [],
@@ -142,11 +139,18 @@ export function addElement(sim: Simulation, peerId: number, element: string): Si
   const peer = sim.peers[peerId]
   const clean = element.trim()
   if (!peer || clean.length === 0) return sim
-  const token = `p${peerId}-${sim.nextId}`
+  const token = BigInt(sim.nextId)
+  const replica = orsetReplicaFor(peer)
+  let bytes: Uint8Array
+  try {
+    bytes = replica.appendAdd(clean, token)
+  } finally {
+    replica.free()
+  }
   return emitDelta(
     sim,
     peerId,
-    addDelta(clean, token),
+    { kind: 'orset.add', element: clean, token, bytes, payload: 'record' },
     `Camp ${peerId} added '${clean}' to the supply list`,
     `peer ${peerId} adds "${clean}" (${token})`,
   )
@@ -155,8 +159,10 @@ export function addElement(sim: Simulation, peerId: number, element: string): Si
 export function removeElement(sim: Simulation, peerId: number, element: string): Simulation {
   const peer = sim.peers[peerId]
   if (!peer) return sim
-  const tokens = observedTokens(peer.orset, element)
+  const replica = orsetReplicaFor(peer)
+  const tokens = Array.from(replica.observedTokens(element))
   if (tokens.length === 0) {
+    replica.free()
     return appendLog(
       sim,
       `Camp ${peerId} cannot remove '${element}' because it has not seen it`,
@@ -164,10 +170,16 @@ export function removeElement(sim: Simulation, peerId: number, element: string):
       `peer ${peerId} remove skipped; "${element}" is not observed`,
     )
   }
+  let bytes: Uint8Array
+  try {
+    bytes = replica.appendRemoveObserved(element)
+  } finally {
+    replica.free()
+  }
   return emitDelta(
     sim,
     peerId,
-    { kind: 'orset.remove', tokens },
+    { kind: 'orset.remove', tokens, bytes, payload: 'record' },
     `Camp ${peerId} removed the '${element}' supplies it had seen`,
     `peer ${peerId} removes observed "${element}" tokens [${tokens.join(', ')}]`,
   )
@@ -219,12 +231,12 @@ export function convergence(sim: Simulation): {
 
   const firstReplica = replicaFor(first, sim.peers.length)
   const sameRawState = sim.peers.every(
-    (peer) => replicaFor(peer, sim.peers.length).sameStateAs(firstReplica) && sameORSet(peer.orset, first.orset),
+    (peer) => replicaFor(peer, sim.peers.length).sameStateAs(firstReplica) && orsetStateKey(peer) === orsetStateKey(first),
   )
   const firstGRead = Number(firstReplica.value())
-  const firstORead = readORSet(first.orset).join('\u0000')
+  const firstORead = JSON.stringify(readORSet(first.orset))
   const sameReads = sim.peers.every(
-    (peer) => Number(replicaFor(peer, sim.peers.length).value()) === firstGRead && readORSet(peer.orset).join('\u0000') === firstORead,
+    (peer) => Number(replicaFor(peer, sim.peers.length).value()) === firstGRead && JSON.stringify(readORSet(peer.orset)) === firstORead,
   )
 
   return {
@@ -346,13 +358,7 @@ export function reorderQueue(sim: Simulation): Simulation {
 }
 
 export function wirePreview(delta: MeshDelta): string {
-  if (delta.kind === 'gcounter.bump') {
-    return `10 ${hex(delta.replica)} ${hex(delta.tally)}`
-  }
-  if (delta.kind === 'orset.add') {
-    return `20 ${asciiHex(delta.element)} ${asciiHex(delta.token)}`
-  }
-  return `21 ${delta.tokens.map(asciiHex).join(' ')}`
+  return Array.from(delta.bytes, (byte) => byte.toString(16).padStart(2, '0').toUpperCase()).join(' ')
 }
 
 function emitDelta(
@@ -412,7 +418,14 @@ function applyDeltaToPeer(peer: Peer, delta: MeshDelta): Peer {
     else counter.mergeLogBytes(delta.bytes)
     return snapshotGCounterPeer(peer, counter)
   }
-  return { ...peer, orset: applyORSetDelta(peer.orset, delta) }
+  const replica = orsetReplicaFor(peer)
+  try {
+    if (delta.payload === 'record') replica.mergeRecordBytes(delta.bytes)
+    else replica.mergeLogBytes(delta.bytes)
+    return { ...peer, orset: replica.logBytes() }
+  } finally {
+    replica.free()
+  }
 }
 
 function maybeRunAntiEntropy(sim: Simulation): Simulation {
@@ -442,10 +455,22 @@ function runAntiEntropy(sim: Simulation): Simulation {
       const rightCounter = replicaFor(right, peers.length)
       leftCounter.mergeLogBytes(rightCounter.logBytes())
       rightCounter.mergeLogBytes(leftCounter.logBytes())
-      const merged = { orset: mergeORSet(left.orset, right.orset) }
+      const leftSet = orsetReplicaFor(left)
+      const rightSet = orsetReplicaFor(right)
+      let leftLog: Uint8Array
+      let rightLog: Uint8Array
+      try {
+        leftSet.mergeLogBytes(rightSet.logBytes())
+        rightSet.mergeLogBytes(leftSet.logBytes())
+        leftLog = leftSet.logBytes()
+        rightLog = rightSet.logBytes()
+      } finally {
+        leftSet.free()
+        rightSet.free()
+      }
       peers = peers.map((peer) => {
-        if (peer.id === left.id) return normalizePeer({ ...snapshotGCounterPeer(left, leftCounter), ...merged })
-        if (peer.id === right.id) return normalizePeer({ ...snapshotGCounterPeer(right, rightCounter), ...merged })
+        if (peer.id === left.id) return normalizePeer({ ...snapshotGCounterPeer(left, leftCounter), orset: leftLog })
+        if (peer.id === right.id) return normalizePeer({ ...snapshotGCounterPeer(right, rightCounter), orset: rightLog })
         return peer
       })
 
@@ -488,10 +513,6 @@ function buildAntiEntropyPackets(sim: Simulation): { packets: Packet[]; nextId: 
   let nextId = sim.nextId
   let repairIndex = 0
   const packets: Packet[] = []
-  const union = sim.peers.reduce(
-    (merged, peer) => ({ orset: mergeORSet(merged.orset, peer.orset) }),
-    { orset: bottomORSet() },
-  )
 
   for (const target of sim.peers) {
     for (const source of sim.peers) {
@@ -521,32 +542,20 @@ function buildAntiEntropyPackets(sim: Simulation): { packets: Packet[]; nextId: 
       repairIndex += 1
     }
 
-    for (const [token, element] of Object.entries(union.orset.adds)) {
-      if (target.orset.adds[token]) continue
-      const source = sim.peers.find((peer) => peer.id !== target.id && peer.orset.adds[token] === element)
-      if (!source) continue
+    for (const source of sim.peers) {
+      if (source.id === target.id || !missingOrSetRecords(target, source, sim.peers.length)) continue
+      const replica = orsetReplicaFor(source)
+      let bytes: Uint8Array
+      try {
+        bytes = replica.logBytes()
+      } finally {
+        replica.free()
+      }
       packets.push({
         id: `r${nextId}-${repairIndex}`,
         from: source.id,
         to: target.id,
-        delta: addDelta(element, token),
-        sentAt: sim.now,
-        deliverAt: sim.now + sim.latencyMs + 160 + repairIndex * 210,
-        phase: 'repair',
-      })
-      nextId += 1
-      repairIndex += 1
-    }
-
-    for (const token of Object.keys(union.orset.tombstones)) {
-      if (target.orset.tombstones[token]) continue
-      const source = sim.peers.find((peer) => peer.id !== target.id && peer.orset.tombstones[token])
-      if (!source) continue
-      packets.push({
-        id: `r${nextId}-${repairIndex}`,
-        from: source.id,
-        to: target.id,
-        delta: { kind: 'orset.remove', tokens: [token] },
+        delta: { kind: 'orset.log', bytes, payload: 'log' },
         sentAt: sim.now,
         deliverAt: sim.now + sim.latencyMs + 160 + repairIndex * 210,
         phase: 'repair',
@@ -557,17 +566,6 @@ function buildAntiEntropyPackets(sim: Simulation): { packets: Packet[]; nextId: 
   }
 
   return { packets, nextId }
-}
-
-function hex(value: number): string {
-  return value.toString(16).padStart(2, '0').slice(-4).toUpperCase()
-}
-
-function asciiHex(value: string): string {
-  return [...value]
-    .slice(0, 10)
-    .map((char) => char.charCodeAt(0).toString(16).padStart(2, '0').toUpperCase())
-    .join('')
 }
 
 function backfillDescriptions(
@@ -584,19 +582,61 @@ function backfillDescriptions(
     }
   }
 
-  for (const [token, element] of Object.entries(source.orset.adds)) {
-    if (!target.orset.adds[token]) {
-      items.push({ plain: `'${element}'`, technical: `OR-add(${element}, ${token})` })
-    }
-  }
-
-  for (const token of Object.keys(source.orset.tombstones)) {
-    if (!target.orset.tombstones[token]) {
-      items.push({ plain: `a removal marker (${token})`, technical: `OR-remove-token(${token})` })
-    }
+  if (missingOrSetRecords(target, source, source.gcounter.length)) {
+    items.push({ plain: 'supply records', technical: 'OR(log)' })
   }
 
   return items
+}
+
+function orsetReplicaFor(peer: Pick<Peer, 'id' | 'orset'>): SafeMeshStringOrSetReplica {
+  const replica = new SafeMeshStringOrSetReplica(BigInt(peer.id))
+  try {
+    if (peer.orset.length > 0) replica.mergeLogBytes(peer.orset)
+    return replica
+  } catch (error) {
+    replica.free()
+    throw error
+  }
+}
+
+export function readORSet(log: Uint8Array): string[] {
+  const replica = orsetReplicaFor({ id: 0, orset: log })
+  try {
+    return replica.elements()
+  } finally {
+    replica.free()
+  }
+}
+
+// Compare the core's ordered raw snapshots, without deriving membership or merging.
+function orsetStateKey(peer: Peer): string {
+  const replica = orsetReplicaFor(peer)
+  try {
+    const entries = replica.addEntries().map((entry) => {
+      try {
+        return [entry.element(), entry.token().toString()]
+      } finally {
+        entry.free()
+      }
+    })
+    return JSON.stringify([entries, Array.from(replica.tombstones(), String)])
+  } finally {
+    replica.free()
+  }
+}
+
+function missingOrSetRecords(target: Peer, source: Peer, peerCount: number): boolean {
+  const sourceSet = orsetReplicaFor(source)
+  const targetSet = orsetReplicaFor(target)
+  try {
+    return Array.from({ length: peerCount }, (_, id) =>
+      sourceSet.versionFor(BigInt(id)) > targetSet.versionFor(BigInt(id)),
+    ).some(Boolean)
+  } finally {
+    sourceSet.free()
+    targetSet.free()
+  }
 }
 
 function normalizePeer(peer: Peer): Peer {
@@ -604,7 +644,7 @@ function normalizePeer(peer: Peer): Peer {
 }
 
 function emptyGCounterPeer(id: number, replicas: number): Pick<Peer, 'gcounter' | 'gcounterLog'> {
-  return snapshotGCounterPeer({ id, gcounter: [], gcounterLog: new Uint8Array(), orset: bottomORSet(), localTally: 0 }, new SafeMeshGCounterReplica(BigInt(id), replicas))
+  return snapshotGCounterPeer({ id, gcounter: [], gcounterLog: new Uint8Array(), orset: new Uint8Array(), localTally: 0 }, new SafeMeshGCounterReplica(BigInt(id), replicas))
 }
 
 function replicaFor(peer: Peer, replicas: number): SafeMeshGCounterReplica {
@@ -635,6 +675,7 @@ function appendLog(
 function describeDelta(delta: MeshDelta): string {
   if (delta.kind === 'gcounter.bump') return `G(${delta.replica}:=${delta.tally})`
   if (delta.kind === 'orset.add') return `OR-add(${delta.element}, ${delta.token})`
+  if (delta.kind === 'orset.log') return 'OR(log)'
   return `OR-remove(${delta.tokens.length} tokens)`
 }
 
@@ -645,6 +686,7 @@ function plainDeliver(packet: Packet): string {
   if (packet.delta.kind === 'orset.add') {
     return `Camp ${packet.to} received '${packet.delta.element}' from Camp ${packet.from}`
   }
+  if (packet.delta.kind === 'orset.log') return `Camp ${packet.to} received supply records from Camp ${packet.from}`
   return `Camp ${packet.to} received removal notes from Camp ${packet.from}`
 }
 
@@ -655,6 +697,7 @@ function plainRepair(packet: Packet): string {
   if (packet.delta.kind === 'orset.add') {
     return `Camp ${packet.to} recovered '${packet.delta.element}' from Camp ${packet.from}`
   }
+  if (packet.delta.kind === 'orset.log') return `Camp ${packet.to} recovered supply records from Camp ${packet.from}`
   return `Camp ${packet.to} recovered removal notes from Camp ${packet.from}`
 }
 
@@ -665,5 +708,6 @@ function plainDrop(packet: Packet): string {
   if (packet.delta.kind === 'orset.add') {
     return `Camp ${packet.to} missed '${packet.delta.element}' (signal dropped)`
   }
+  if (packet.delta.kind === 'orset.log') return `Camp ${packet.to} missed supply records (signal dropped)`
   return `Camp ${packet.to} missed removal notes (signal dropped)`
 }

@@ -18,9 +18,9 @@ import {
   Wifi,
 } from 'lucide-react'
 import './App.css'
-import { readORSet } from './crdt/orset'
 import {
   GUIDE_SCENARIOS,
+  readORSet,
   addElement,
   advanceScenarioSimulation,
   buildScenarioSimulation,
@@ -222,7 +222,7 @@ function App() {
                   key={packet.id}
                   className={`packet ${packet.delta.kind.replace('.', '-')} ${packet.phase ?? 'normal'} ${packet.duplicated ? 'duplicated' : ''}`}
                   style={{ left: `${point.x}%`, top: `${point.y}%` }}
-                  title={`demo wire sketch ${wirePreview(packet.delta)}`}
+                  title={`record / log bytes ${wirePreview(packet.delta)}`}
                 >
                   <span>{packetLabel(packet, sim.queue)}</span>
                   <code>{wirePreview(packet.delta)}</code>
@@ -250,7 +250,7 @@ function App() {
                   <span className="replica-kicker">Replica {peer.id}</span>
                   <span>G-Counter · Rust/WASM</span>
                   <strong>{status.gcounterValues[peer.id] ?? 0}</strong>
-                  <span>OR-Set · TypeScript</span>
+                  <span>OR-Set · Rust/WASM</span>
                   <span>{elements.length > 0 ? elements.join(', ') : 'no records yet'}</span>
                   <code>{digest(peer.gcounter, elements)}</code>
                 </button>
@@ -322,7 +322,7 @@ function App() {
                 </div>
               </>
             )}
-            <p className="claim-line">The G-Counter runs the Rust core through WASM; the OR-Set runs a TypeScript demo mirror. The Lean-backed Rust core is the proof-carrying surface for modeled CRDT semantics.</p>
+            <p className="claim-line">The G-Counter and OR-Set use Rust-core records, merges, and reads through WASM. The Lean-backed Rust core is the proof-carrying surface for modeled CRDT semantics.</p>
           </aside>
 
           <aside className="log-panel" aria-label={advancedOpen ? 'Story log' : 'Events in this step'}>
@@ -367,7 +367,7 @@ function App() {
             <ShieldCheck size={18} />
             <span>
               {technical
-                ? 'Lean backs the CRDT semantics; the G-Counter runs the Rust core through WASM, while the OR-Set runs a TypeScript demo mirror.'
+                ? 'Lean backs the CRDT semantics; the G-Counter and OR-Set use Rust-core records, merges, and reads through WASM.'
                 : 'Shown: modeled convergence after records meet. Not shown as proof: real network delivery, sensor truth, storage durability, or arbitrary reducers.'}
             </span>
           </div>
@@ -521,7 +521,7 @@ function storyState(sim: Simulation, status: ReturnType<typeof convergence>) {
 }
 
 function sameRead(peer: Simulation['peers'][number], status: ReturnType<typeof convergence>): boolean {
-  return (status.gcounterValues[peer.id] ?? 0) === status.gcounterValue && readORSet(peer.orset).join('\u0000') === status.orsetElements.join('\u0000')
+  return (status.gcounterValues[peer.id] ?? 0) === status.gcounterValue && JSON.stringify(readORSet(peer.orset)) === JSON.stringify(status.orsetElements)
 }
 
 function digest(counter: number[], elements: string[]): string {
@@ -591,7 +591,7 @@ function packetProgressStagger(packet: Packet): number {
 }
 
 function packetLabel(packet: Packet, queue: Packet[]): string {
-  const deltaLabel = packet.delta.kind === 'gcounter.bump' ? `G${packet.delta.replica}` : packet.delta.kind === 'orset.add' ? 'ADD' : 'REM'
+  const deltaLabel = packet.delta.kind === 'gcounter.bump' ? `G${packet.delta.replica}` : packet.delta.kind === 'orset.add' ? 'ADD' : packet.delta.kind === 'orset.log' ? 'OR' : 'REM'
   if (packet.phase === 'repair') return `SYNC ${deltaLabel}`
   const rank = packet.order ?? deliveryRank(packet, queue)
   if (packet.phase === 'reordered') return `REV ${rank} ${deltaLabel}`
