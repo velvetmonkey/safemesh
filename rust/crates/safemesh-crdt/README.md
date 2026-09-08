@@ -96,7 +96,7 @@ counter step=4 WORKS
 counter step=5 WORKS clean-bytes=true
 counter step=6 WORKS diverged=true
 counter step=7 WORKS
-counter step=8 WORKS records-per-replica=4 bytes-a=173 bytes-b=173 state=GCounter { counts: [11, 22] }
+counter step=8 WORKS records-per-replica=4 bytes-a=228 bytes-b=228 state=GCounter { counts: [11, 22] }
 utf8-orset step=1 WORKS
 utf8-orset step=2 WORKS
 utf8-orset step=3 WORKS
@@ -104,13 +104,13 @@ utf8-orset step=4 WORKS
 utf8-orset step=5 WORKS clean-bytes=true
 utf8-orset step=6 WORKS diverged=true
 utf8-orset step=7 WORKS
-utf8-orset step=8 WORKS records-per-replica=4 bytes-a=179 bytes-b=179 state=OrSet { adds: {("café☕", 100), ("café☕", 201), ("東京", 200)}, tombstones: {100} }
+utf8-orset step=8 WORKS records-per-replica=4 bytes-a=232 bytes-b=232 state=OrSet { adds: {("café☕", 100), ("café☕", 201), ("東京", 200)}, tombstones: {100} }
 counter corrupt-tag-detected=true error=InvalidTag
-counter corrupt-payload-offset=123 restart=Ok wrong-state=GCounter { counts: [10, 22] }
-counter corrupt-byte-detected=false
+counter corrupt-payload-offset=174 restart=Err(IntegrityMismatch)
+counter corrupt-byte-detected=true
 utf8-orset corrupt-tag-detected=true error=InvalidTag
-utf8-orset corrupt-payload-offset=163 restart=Ok wrong-state=OrSet { adds: {("bafé☕", 201), ("café☕", 100), ("東京", 200)}, tombstones: {100} }
-utf8-orset corrupt-byte-detected=false
+utf8-orset corrupt-payload-offset=212 restart=Err(IntegrityMismatch)
+utf8-orset corrupt-byte-detected=true
 ```
 
 ## Verify locally
