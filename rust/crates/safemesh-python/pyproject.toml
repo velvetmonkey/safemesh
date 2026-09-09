@@ -7,13 +7,14 @@ name = "safemesh-python"
 version = "0.1.0"
 description = "Python binding for the SafeMesh Rust core"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.11,<3.12"
 license = { text = "Apache-2.0" }
 keywords = ["crdt", "distributed-systems", "event-log", "safemesh"]
 classifiers = [
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
   "Programming Language :: Rust",
-  "Operating System :: OS Independent",
+  "Operating System :: POSIX :: Linux",
 ]
 
 [tool.maturin]

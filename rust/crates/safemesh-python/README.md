@@ -12,6 +12,10 @@ See the repository `CLAIMS.md` and `WHAT-IS-PROVEN.md` for the full wording rule
 
 Build a local wheel with maturin; v0.1 CI performs a wheel build and install smoke test but does not publish to PyPI.
 
+The checked distribution coordinate is CPython 3.11 on Linux x64. The wheel metadata deliberately
+limits installation to Python 3.11; macOS, Windows, ARM64, and other Python versions have not been
+validated by this package's CI job.
+
 ```sh
 cd rust/crates/safemesh-python
 maturin build --release --features extension-module --out dist
