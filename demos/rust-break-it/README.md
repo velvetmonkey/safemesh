@@ -19,27 +19,27 @@ Drop `NO_COLOR=1` for colored stage headers in a normal terminal.
 
 ## What You Should See
 
+Continuous stdout excerpt, from duplicate replay through healing and convergence:
+
 ```text
-SafeMesh for builders / Rust break-it
-A terminal fault campaign against the Lean-backed Rust CRDT carriers.
-Honest boundary: this proves the modeled merge behavior is exercised; it does not prove real transport delivery.
-
-[1/5] Append local records anywhere
-  A appends G-Counter bump replica=0 tally=1
-  B appends G-Counter bump replica=1 tally=2
-  C adds supply#42 with OR-Set token=200
-  C removes the supply#42 token it has observed
-  D concurrently adds supply#42 with OR-Set token=201
-
-[2/5] Cut the mesh
-  partition=A,B | C,D
-  delivery_order=reversed delivered_same_partition=8 dropped_cross_partition=16
-
 [3/5] Replay a duplicate
   duplicate=A -> B event=gcounter.bump(0,1) effect=idempotent
   converged_during_partition=false
+  partition_state
+    A counter=3 supplies={} text_positions={10}
+    B counter=3 supplies={} text_positions={10}
+    C counter=0 supplies={42} text_positions={30}
+    D counter=0 supplies={42} text_positions={30}
+
+[4/5] Heal with anti-entropy
+  anti_entropy=all_to_all_merge coverage=same_modeled_record_set_after_heal
 
 [5/5] Shared state
+  final_state
+    A counter=3 supplies={42} text_positions={10}
+    B counter=3 supplies={42} text_positions={10}
+    C counter=3 supplies={42} text_positions={10}
+    D counter=3 supplies={42} text_positions={10}
   CONVERGED=true counter=3 supplies={42} text_positions={10}
 ```
 
