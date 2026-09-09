@@ -8,6 +8,18 @@ This is the visual demo: replicas as live nodes, deltas moving across the wire, 
 
 ## 30-second run
 
+First complete [Before you run](../README.md#before-you-run), including the checkout and tools for
+this demo. The timing below excludes that setup and is an observation on the named machine, not a
+guarantee on other machines or networks.
+
+Runtime tested on Ubuntu 24.04.4 x86_64 (AMD EPYC-Genoa, Rust/Cargo 1.96.1, Node 22.22.3/npm 10.9.8,
+wasm-pack 0.15.0, Chromium 148.0.7778.96): the commands below through the first “Choose what can go
+wrong” screen took 14.44 seconds with an empty Cargo target directory, then 7.15 seconds reusing the
+build. The Cargo registry, `node_modules` (installed with `NODE_ENV` unset), npm cache, and
+downloaded browser were already present; each run used a fresh browser profile. Node emitted the
+engine warning described in the setup guide. These times cover startup, not playing through the
+scenarios.
+
 From the repository root:
 
 ```sh
