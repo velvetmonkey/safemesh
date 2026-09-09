@@ -22,6 +22,8 @@ with a counter and a UTF-8 OR-Set: write logs, restore replicas, make independen
 updates during a simulated partition, then exchange records and explain the result.
 This walk uses Rust. Python, WASM and the C FFI expose OR-Set too, as `OrSet`,
 `SafeMeshOrSet` and the `safemesh_orset_*` functions.
+The same four steps in TypeScript/Node, against the `wasm-pack` nodejs package, are in
+[`rust/crates/safemesh-wasm/PERSIST.md`](rust/crates/safemesh-wasm/PERSIST.md).
 
 ## Install matrix
 
