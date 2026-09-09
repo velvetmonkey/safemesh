@@ -134,6 +134,21 @@ describe('mesh simulation', () => {
     expect(status.orsetElements).toEqual(['medkit', 'water'])
   })
 
+  it('reports per-peer core-state matches separately from equal reads', () => {
+    let sim = setPartitioned(setDropRate(createSimulation(4), 0), true)
+    for (const id of [0, 1, 2, 3]) sim = bumpCounter(sim, id)
+    sim = tick(sim, 2000, () => 1)
+
+    const status = convergence(sim)
+    // Four carrier vectors that each sum to 1: every read is equal, no core state is.
+    expect(status.gcounterValues).toEqual([1, 1, 1, 1])
+    expect(status.readMatches).toEqual([true, true, true, true])
+    expect(status.rawStateMatches).toEqual([true, false, false, false])
+    expect(status.sameReads).toBe(true)
+    expect(status.sameRawState).toBe(false)
+    expect(status.converged).toBe(false)
+  })
+
   it('does not run anti-entropy while partitioned, then reconciles after reconnect', () => {
     let sim = setAntiEntropyMs(createSimulation(3), 5000)
     sim = setPartitioned(sim, true)
