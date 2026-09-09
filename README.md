@@ -6,6 +6,8 @@
 
 Lean-backed CRDT convergence for small, embeddable state sync.
 
+Read the [SafeMesh documentation](https://velvetmonkey.github.io/safemesh/) for guides and API reference.
+
 <p align="center"><img src="assets/safemesh-hero.png" alt="Five replicas each holding a version vector. A network partition splits them, deltas keep flowing on both sides, and the replicas merge back to the same state."></p>
 
 API present: SafeMesh v0.1 exposes one Rust core through Rust, C ABI, WASM/TypeScript, and Python interfaces. The verified claim is intentionally narrow: G-Set, G-Counter, PN-Counter, OR-Set, and RGA/Text are backed by Lean proofs and by Rust differential tests against a Lean-generated oracle corpus. `EventLog`, wire encoding, bindings, demos, LWW Register, Enable-wins Flag, and LWW Map are outside the separate Lean proof claim. The Status and Bindings sections below name their test evidence separately from API and artifact availability.
