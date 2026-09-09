@@ -11,6 +11,6 @@ This generated reference records **API present** in the source used for this bui
 The documentation build requires Linux. Cargo runs rustdoc during `npm --prefix docs run build`, using all features on Linux, including `local-writer` and `laws`.
 This is a view of main (unreleased), not a version-matched release manual or a portability claim.
 
-Rustdoc provides its own item search, navigation and source links. The “SafeMesh reference guide” link returns here; the site search covers this guide, while rustdoc search covers Rust items.
+Rustdoc provides its own item search, navigation and source links. The “SafeMesh reference guide” link returns here; the site search covers all guides and the generated Rust reference, including source pages. Rustdoc search remains available for Rust items.
 External Rust documentation references are displayed as text with their original URL in a tooltip, so browsing and checking this reference does not require a third-party documentation host.
 Rustdoc’s “Stable since Rust version” tooltips refer to standard-library API versions; they do not establish SafeMesh support.
