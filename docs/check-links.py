@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Crawl built HTML over HTTP; any error, including crawler errors, fails CI."""
 import argparse
+import json
 import os
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -10,6 +11,7 @@ from http.client import HTTPConnection
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import subprocess
 import threading
 import time
 from urllib.error import HTTPError
@@ -84,11 +86,43 @@ def fetch(url, *, opener=urlopen, site=''):
     raise RuntimeError(f'{url}: {failure}')
 
 
+def resolve_documents(documents):
+    """Resolve href/src and the first base with the browser's WHATWG URL rules.
+
+    Node is already required to build this site. Batch the complete crawl through
+    its URL implementation instead of maintaining a second URL parser in Python.
+    Invalid URLs remain errors; an invalid base falls back to the document URL
+    for other links, as in the browser, but is itself still checked.
+    """
+    result = subprocess.run(['node', '-e', r"""
+const fs = require('node:fs');
+const resolve = (raw, base) => {
+    try { return new URL(raw, base).href; }
+    catch { return null; }
+};
+const documents = JSON.parse(fs.readFileSync(0, 'utf8'));
+process.stdout.write(JSON.stringify(documents.map(({source, base, links}) => {
+    let documentBase = base === null ? source : resolve(base, source) ?? source;
+    // HTML's frozen-base rule uses the document URL for these schemes.
+    // This changes resolution only: every base/link is still returned below.
+    const protocol = new URL(documentBase).protocol;
+    if (protocol === 'data:' || protocol === 'javascript:') documentBase = source;
+    return links.map(([raw, asset, isBase]) =>
+        resolve(raw, isBase ? source : documentBase));
+})));
+"""], input=json.dumps([
+        dict(source=source, base=document.base, links=document.links)
+        for _, source, document in documents
+    ]), text=True, capture_output=True, check=True)
+    return json.loads(result.stdout)
+
+
 def crawl(root, base, fetcher=fetch):
     pages = sorted(root.rglob('*.html'))
     if not pages or not (root / 'index.html').is_file():
         raise RuntimeError(f'No built entry page in {root}')
     counts, errors, references, probes = Counter(), [], [], set()
+    parsed = []
     for page in pages:
         route = urlsplit(base).path + page.relative_to(root).as_posix()
         if route.endswith('index.html'):
@@ -97,11 +131,12 @@ def crawl(root, base, fetcher=fetch):
         status, body, _ = fetcher(source)
         if status != 200:
             errors.append(f'{route}: HTTP {status}')
-        document = Document(body)
-        document_base = urljoin(source, document.base) if document.base is not None else source
-        for raw, asset, is_base in document.links:
-            # The first base href changes browser resolution, including #anchors.
-            target = urljoin(source if is_base else document_base, raw)
+        parsed.append((route, source, Document(body)))
+    for (route, source, document), targets in zip(parsed, resolve_documents(parsed), strict=True):
+        for (raw, asset, is_base), target in zip(document.links, targets, strict=True):
+            if target is None:
+                errors.append(f'{route} -> {raw!r}: invalid browser URL')
+                continue
             parts = urlsplit(target)
             reference = urlsplit(raw.strip())
             # Explicit page names may deliberately link to the current page (for
@@ -120,12 +155,13 @@ def crawl(root, base, fetcher=fetch):
                 continue
             local = (parts.scheme, parts.netloc) == (urlsplit(base).scheme, urlsplit(base).netloc)
             fragment = unquote(parts.fragment)
-            url = urlunsplit(parts._replace(fragment=''))
+            # Preserve even an empty query delimiter in the browser's URL.
+            url = target.split('#', 1)[0]
             kind = ('EXTERNAL' if not local else 'INTERNAL-ASSET' if asset else
                     'ANCHOR-SAME-PAGE' if fragment and parts.path == urlsplit(source).path else
                     'ANCHOR-CROSS-PAGE' if fragment else 'INTERNAL-PAGE')
             counts[kind] += 1
-            references.append((route, raw, url, fragment, kind))
+            references.append((route, raw, url, fragment, kind, parts.fragment))
             if local and kind != 'INTERNAL-ASSET' and parts.path.upper() != parts.path:
                 probes.add(urlunsplit(parts._replace(path=parts.path.upper(), fragment='')))
                 # Also probe case within the mount: uppercasing only the mount
@@ -140,7 +176,7 @@ def crawl(root, base, fetcher=fetch):
         results = dict(zip(urls, pool.map(fetcher, urls)))
     # Parse each fetched document once, even when rustdoc links to many anchors.
     documents = {}
-    for route, raw, url, fragment, kind in references:
+    for route, raw, url, fragment, kind, literal_fragment in references:
         status, body, content_type = results[url]
         problem = None
         if status != 200:
@@ -151,7 +187,6 @@ def crawl(root, base, fetcher=fetch):
             ids = documents[url].ids
             # GitHub namespaces rendered Markdown headings with user-content-.
             # Browsers first match the literal fragment, then its decoded form.
-            literal_fragment = urlsplit(raw).fragment
             if literal_fragment not in ids and fragment not in ids and not (urlsplit(url).hostname == 'github.com' and 'user-content-' + fragment in ids):
                 problem = f'missing id #{fragment}'
         if problem:
