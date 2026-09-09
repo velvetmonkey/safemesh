@@ -103,6 +103,102 @@ and a UTF-8 set, using `local::DurableReplica`:
   restart requires the existing fence rather than creating a replacement.
   `counter-issued` and `set-issued` are audit copies, not recovery inputs.
 
+### Reopen the store after the walk (including an overwrite refusal)
+
+If you run the walk twice against the same directory, the second run refuses to
+overwrite the durable store. The current harness reports a child
+`RecoveryRequired` panic followed by `left: "101"` / `right: "77"`: 77 is the
+intentional exit after the child's ACK; 101 is its unexpected panic exit.
+Keep `walk-logs`, including every fence and transaction file. Use the recovery
+command below to reopen it. To start a separate new walk, choose a different,
+unused directory.
+
+From the same repository root, copy this entire shell command. It uses the same
+Linux/local-filesystem and Rust prerequisites as the walk, plus `mktemp` and
+`mkdir`. It creates a uniquely named small Cargo application beside
+`walk-logs` using the local crate. Run it with an absolute repository path
+that contains no double quote or backslash, as that path is placed in TOML.
+The walk's schema-display command above also needs `strings` (GNU binutils).
+
+```sh
+(
+  walk_reopen=$(mktemp -d ./walk-reopen.XXXXXX) || exit 1
+  mkdir "$walk_reopen/src" || exit 1
+  cat > "$walk_reopen/Cargo.toml" <<EOF
+[package]
+name = "walk-reopen"
+version = "0.0.0"
+edition = "2021"
+[workspace]
+[dependencies]
+safemesh-crdt = { path = "$(pwd)/rust/crates/safemesh-crdt", features = ["local-writer"] }
+EOF
+  cat > "$walk_reopen/src/main.rs" <<'EOF'
+use safemesh_crdt::{local::DurableReplica, ownership::WriterConfig};
+use std::{path::Path, process::ExitCode};
+
+fn reopen(root: &Path) -> Result<(), String> {
+    for writer in 0..2 {
+        let config = WriterConfig { writers: 2, writer };
+        let counter = root.join("joined/counter");
+        let set = root.join("joined/set");
+        let c = DurableReplica::restart_counter(&counter, config)
+            .map_err(|e| format!("{} writer {writer}: {e:?}", counter.display()))?;
+        println!("writer {writer} counter={:?}", c.state().state());
+        let s = DurableReplica::restart_utf8_set(&set, config)
+            .map_err(|e| format!("{} writer {writer}: {e:?}", set.display()))?;
+        println!("writer {writer} set={:?}", s.state());
+    }
+    Ok(())
+}
+fn main() -> ExitCode {
+    let root = std::env::args().nth(1).unwrap_or_else(|| "./walk-logs".into());
+    match reopen(Path::new(&root)) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("Reopen stopped: {e}\nKeep the store and fence files. Check the path, original writer configuration and CRDT type; see the recovery notes. Do not rerun the fresh constructor here.");
+            ExitCode::FAILURE
+        }
+    }
+}
+EOF
+  cargo run --quiet --manifest-path "$walk_reopen/Cargo.toml" -- ./walk-logs
+)
+```
+
+After a completed walk, both writers print counter `[12, 7]` and a set whose adds
+are `{("café☕", 2), ("naïve", 6), ("γειά", 3), ("東京", 4)}` with no
+tombstones. These are the durable stores under `joined/`; the separate
+`counter-a.log` / `utf8-orset-a.log` walkthrough finishes at `[11, 22]` and
+different set tokens. The command appends no edits, but successful restart
+acquires the writer lock and renews its fence generation; it is not a read-only
+filesystem inspection. Each handle is dropped on leaving its loop iteration.
+
+#### Recovery notes: which state is this directory in?
+
+The command uses the walk's original configuration: two writers, IDs 0 and 1,
+a counter under `joined/counter` and a UTF-8 OR-Set under `joined/set`.
+It stops with exit 1 at the first error and prints the path, writer and reason;
+earlier successful reopens may already have renewed their fences. It does not
+repair damaged files or create replacement stores.
+
+| State when you reach recovery | Result and next action |
+| --- | --- |
+| Completed walk, with or without a subsequent overwrite refusal | Both writers reopen with the values above; exit 0. Keep using restart for this store. |
+| Child ACK persisted, but the parent did not finish | The same command reopens committed progress, not necessarily the final values. In the ACK-only case writer 0 has counter `[9, 0]` and `café☕` / `東京`; writer 1 is empty. Exit 0 does not certify that reconciliation finished. |
+| Missing path, an existing empty `walk-logs`, only the earlier non-durable logs, or missing fence/transaction files | `Io(...NotFound...)`. Confirm the path to the original durable store. If nothing was ever persisted, start the original walk in a separate unused directory. Preserve incomplete stores for investigation; do not manufacture missing fences. |
+| Another writer's fence/transaction placed at writer 0's path, or a different writer configuration | `Configuration` in the tested writer swap. Use the original application's configuration and paths; do not rename another writer's files into place. |
+| A set transaction at the counter path | `History(DeltaTypeMismatch)`. Use the matching CRDT restart API and original store. A different application's store with the same schema and writer configuration may be accepted: these APIs do not establish application identity. Verify provenance before opening it. |
+| Transaction truncated part way through its final record | Removing 7 bytes from the 252-byte `joined/counter/writer-0.transaction` produced `History(UnexpectedEof)`. Other corruption may report integrity, history or allocation errors. Preserve the damaged store; recover from a known-good backup with its matching ownership files, or investigate the failure. Restart does not salvage a torn record. |
+| Another process holds the writer lock | `Refused`. Coordinate with that writer and retry after it releases the handle. Do not replace the fence or bypass its lock. |
+| Permissions/I/O failure, malformed ownership metadata, exhausted generation, unsupported platform/filesystem, or build failure | Recovery is not established. Retain the store, address the reported environment or metadata problem, and retry only with the original configuration. Do not treat an error as permission to initialize over existing data. |
+
+The wrong-type, wrong-writer, empty, missing-fence, lock and truncation cases above
+were exercised on disposable copies. Restoring the exact seven removed bytes
+from the original transaction made both writers recover the completed values
+again. This is a damage-detection control, not a power-loss or backup-restore
+guarantee.
+
 The example then runs the earlier `EventLog` walkthrough for both choices. Its
 `Replica<C>` wrapper and corresponding `journey` calls illustrate these lower-level
 APIs; use `DurableReplica` and `joined::run` for the durable embedding example:

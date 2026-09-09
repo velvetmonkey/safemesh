@@ -1,5 +1,21 @@
 # M2 public API journey
 
+## Durable walk: rerun refusal and recovery
+
+For the Linux `--features local-writer` journey, follow the
+[core walk and copyable recovery command](../../rust/crates/safemesh-crdt/README.md#reopen-the-store-after-the-walk-including-an-overwrite-refusal).
+A repeated fresh run against the same `walk-logs` correctly refuses with
+`RecoveryRequired`; the current harness then panics with `left: "101"` /
+`right: "77"`. Keep the store and reopen it with the linked command.
+Both named restart APIs recovered the durable counter `[12, 7]` and all four
+UTF-8 members for both writers. The recovery notes cover incomplete, empty,
+wrong-type, wrong-writer, locked and truncated stores. This adds a reader's
+next command without changing the harness or its overwrite guard.
+
+The reproduction commands below omit `local-writer` and exercise the earlier
+whole-log walkthrough; its historical results are separate from this durable
+recovery path.
+
 ## Current reproduction (2026-09-09)
 
 Re-ran `rust/crates/safemesh-crdt/examples/m2slice.rs` on main `88b9691`.
