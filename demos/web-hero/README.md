@@ -31,7 +31,7 @@ Open the local Vite URL. The first screen asks you to choose what can go wrong.
 
 ## Honest Claim Boundary
 
-The TypeScript app is a demo mirror. It is not the verified artifact.
+The G-Counter and OR-Set use the Rust core through WASM. The TypeScript UI and transport are not the verified artifact.
 
 The Lean-backed Rust core is the proof-carrying surface for the in-house CRDT semantics. The web demo makes the behavior inspectable and interactive; it does not prove browser code, real network delivery, storage durability, arbitrary reducers, or sensor truth.
 
