@@ -7,8 +7,9 @@ their event logs to real files, rebuild the replicas from those files in a fresh
 process, let the two sides edit offline until they disagree, then merge each
 side's log file into the other and watch them agree again.
 
-Everything on this page was run exactly as printed, on Node v22.22.3 and again on
-Node v24.20.0, with identical output. The root README does not name a Node
+The original persist/restore/partition/reconcile walk was run on Node v22.22.3
+and again on Node v24.20.0, with identical output. The peer-recovery additions
+in section 7 were measured on Node v22.22.3. The root README does not name a Node
 version; the Lab in `web/` asks for Node 24.x and the repository CI uses Node 24.
 The package was built with `wasm-pack 0.15.0` (the version `scripts/package-smoke.sh`
 installs when none is present) over `rustc 1.96.1`.
