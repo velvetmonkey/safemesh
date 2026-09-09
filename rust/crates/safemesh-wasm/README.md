@@ -15,7 +15,7 @@ The v0.1 distribution flow builds an npm package with `wasm-pack`; it does not p
 ```sh
 cd rust/crates/safemesh-wasm
 wasm-pack build . --target bundler --release
-npm pack --dry-run pkg
+npm pack --dry-run ./pkg
 ```
 
 ## Quickstart
@@ -57,8 +57,8 @@ Run `./scripts/package-smoke.sh` from the repository root to build the bundler p
 
 ## Checked coordinates and OR-Set
 
-`SafeMeshGCounter.tryApplyBump(replica, tally)` throws an `Error` with a message such as
-`ReplicaOutOfRange { replica: 2, replica_count: 2 }` for an invalid coordinate
+`SafeMeshGCounter.tryApplyBump(replica, tally)` throws an `Error` with the message
+`replica out of range` for an invalid coordinate
 without changing state. `applyBump` retains its silent behavior.
 
 ```js
