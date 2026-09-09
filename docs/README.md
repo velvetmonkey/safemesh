@@ -30,9 +30,11 @@ Building the Lab needs the [Lab's toolchain](../web/README.md#run): Node.js 24, 
 `npm --prefix docs ci` installs only the docs dependencies, and `dev`, `build` and `preview` use nothing else, independently of the Rust, WASM and web workflows.
 The documentation workflow performs the same clean installs, runs `build:site` and the link check, and deploys the output to GitHub Pages from `main`.
 
-The four content pages are original navigation prose linking to development-branch sources.
-They identify `main (unreleased)` in their titles so search results carry the same scope.
-Update source documents in their existing locations; do not reproduce their technical prose here.
+The documentation includes a first-result path, concepts, architecture, proof scope,
+integration guidance and limits, alongside the examples, claims guide and generated reference.
+The guides identify `main (unreleased)` in their titles so search results carry the same scope.
+Keep technical claims traceable to the linked source files, theorems, examples or tests.
+`src/content/docs/claims.md` and its linked claims document set the assurance ceiling.
 
 ## Built-output link check
 
