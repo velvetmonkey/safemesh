@@ -39,6 +39,8 @@ rustup target add thumbv7em-none-eabihf wasm32-unknown-unknown
   rm -f "$header"
 )
 
+"$repo_root/scripts/ffi-c-smoke.sh"
+
 (
   cd "$repo_root/web"
   npm ci
