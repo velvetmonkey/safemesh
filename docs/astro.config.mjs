@@ -11,6 +11,7 @@ export default defineConfig({
       { label: 'Architecture', slug: 'architecture' },
       { label: 'Claims and evidence', slug: 'claims' },
       { label: 'Examples', slug: 'examples' },
+      { label: 'API reference', slug: 'reference' },
     ],
     pagefind: true,
   })],

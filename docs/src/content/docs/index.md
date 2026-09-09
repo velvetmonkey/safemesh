@@ -12,6 +12,7 @@ The linked repository documents follow the development branch and remain the sou
 - [Architecture guide](/architecture/): locate the design overview.
 - [Claims and evidence guide](/claims/): locate the proof boundaries and evaluation account.
 - [Examples guide](/examples/): locate runnable demonstrations in their existing directories.
+- [Generated API reference](/reference/): inspect the Rust core API from this build’s source.
 
 ## Use this site
 

@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""Build the Rust surface with rustdoc into the already-built documentation site."""
+import os
+import re
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+from html import escape
+from html.parser import HTMLParser
+from urllib.parse import urlsplit
+
+
+class LocalReference(HTMLParser):
+    """Keep rustdoc markup, presenting external references as labelled text.
+
+    Local links, including source and anchor links, remain links for the site's
+    crawler. External URLs remain inspectable in title attributes.
+    """
+
+    def __init__(self, header):
+        super().__init__(convert_charrefs=False)
+        self.parts = []
+        self.anchors = []
+        self.root_page = False
+        self.header = header
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'main':
+            self.parts.extend([self.get_starttag_text(), self.header])
+            return
+        if tag == 'a':
+            url = dict(attrs).get('href', '')
+            external = bool(urlsplit(url).netloc)
+            self.anchors.append(external)
+            if not external and ('/src/' in url or url.startswith('src/')):
+                # Rustdoc highlights line ranges with JS; link to the actual first
+                # line ID so source navigation also works without JavaScript.
+                url = re.sub(r'#(\d+)-\d+$', r'#\1', url)
+            if self.root_page and url == './index.html':
+                url = './safemesh_crdt/index.html'
+            if not external and url != dict(attrs).get('href', ''):
+                self.parts.append('<a' + ''.join(
+                    f' {k}' if v is None else f' {k}="{escape(url if k == "href" else v, quote=True)}"'
+                    for k, v in attrs) + '>')
+                return
+            if external:
+                attrs = [(k, v) for k, v in attrs if k not in ('href', 'title', 'target', 'rel')]
+                attrs.append(('title', f'External reference: {url}'))
+                self.parts.append('<span' + ''.join(
+                    f' {k}' if v is None else f' {k}="{escape(v, quote=True)}"'
+                    for k, v in attrs) + '>')
+                return
+        self.parts.append(self.get_starttag_text())
+
+    def handle_endtag(self, tag):
+        if tag == 'a' and self.anchors.pop():
+            tag = 'span'
+        self.parts.append(f'</{tag}>')
+
+    def handle_startendtag(self, tag, attrs):
+        self.parts.append(self.get_starttag_text())
+
+    def handle_data(self, data):
+        self.parts.append(data)
+
+    def handle_entityref(self, name):
+        self.parts.append(f'&{name};')
+
+    def handle_charref(self, name):
+        self.parts.append(f'&#{name};')
+
+    def handle_comment(self, data):
+        self.parts.append(f'<!--{data}-->')
+
+    def handle_decl(self, decl):
+        self.parts.append(f'<!{decl}>')
+
+
+def main():
+    if sys.platform != "linux":
+        raise SystemExit("Build the Rust reference on Linux to include local-writer APIs.")
+    docs = Path(__file__).resolve().parent
+    target = Path(os.environ.get('CARGO_TARGET_DIR', docs / '.reference-target')).resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    destination = docs / 'dist/reference/rust'
+    # A fresh target prevents removed or renamed items surviving incremental docs.
+    # Each future surface can generate into its own dist/reference/<surface> path.
+    with tempfile.TemporaryDirectory(prefix='rustdoc-', dir=target) as build:
+        env = dict(os.environ, CARGO_TARGET_DIR=build)
+        subprocess.run([
+            'cargo', 'doc', '--manifest-path', str(docs.parent / 'rust/Cargo.toml'),
+            '-p', 'safemesh-crdt', '--all-features', '--no-deps',
+        ], env=env, check=True)
+        if destination.exists():
+            shutil.rmtree(destination)
+        shutil.copytree(Path(build) / 'doc', destination)
+    for page in destination.rglob('*.html'):
+        rendered = LocalReference((docs / 'reference-header.html').read_text())
+        rendered.root_page = page.parent == destination
+        rendered.feed(page.read_text())
+        rendered.close()
+        page.write_text(''.join(rendered.parts))
+    print(f'Generated Rust reference: {len(list(destination.rglob("*.html")))} HTML pages')
+
+
+if __name__ == '__main__':
+    main()
