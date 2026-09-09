@@ -400,8 +400,11 @@ h2 {
   outline: none;
 }
 
+/* Selected: a solid offset ring, so the state survives without colour (aria-pressed carries it to assistive tech). */
 .replica.selected {
   border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
   box-shadow:
     0 0 0 3px var(--accent-soft),
     0 14px 34px rgba(0, 0, 0, 0.22);
@@ -416,10 +419,33 @@ h2 {
 }
 
 .replica-kicker {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
   color: var(--muted);
   font-size: 11px;
   font-weight: 900;
   text-transform: uppercase;
+}
+
+/* Aligned / split is carried by an equal / not-equal glyph and hidden text; the border colour only reinforces it. */
+.replica-state {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .replica strong {
@@ -434,6 +460,14 @@ h2 {
   font-size: 12px;
   line-height: 1.25;
   overflow-wrap: anywhere;
+}
+
+/* The kicker's own children keep the kicker's face; placed after the generic span rule so it wins. */
+.replica .replica-kicker > span {
+  min-height: 0;
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
 }
 
 .replica code {
