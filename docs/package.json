@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "astro dev --host localhost --port 4321",
     "build": "astro build && python3 generate-reference.py && pagefind --site dist",
-    "preview": "astro preview --host localhost --port 4320"
+    "preview": "astro preview --host localhost --port 4320",
+    "build:site": "node build-site.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.42.0",

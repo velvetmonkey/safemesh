@@ -1,10 +1,13 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import { siteUrl } from './site-url.mjs';
+
+const site = siteUrl();
 
 export default defineConfig({
   outDir: './dist',
-  site: 'https://velvetmonkey.github.io',
-  base: '/safemesh',
+  site: site.origin,
+  base: site.pathname.replace(/\/$/, '') || '/',
   integrations: [starlight({
     title: 'SafeMesh documentation',
     components: { Header: './src/components/Header.astro' },

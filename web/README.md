@@ -18,6 +18,8 @@ npm run preview
 npm run test
 ```
 
+The documentation workflow also builds this Lab into the published documentation site under its `lab/` path with `npm --prefix docs run build:site`, passing `--base` so every asset, the service worker and the manifest resolve under that path; see the [docs README](../docs/README.md).
+
 The app is static and has no backend. On a first online visit to the Lab root (`/`) in the production build, the service worker precaches the app shell, including JavaScript, CSS, and WASM. Once installation completes, the Lab root can reopen offline.
 
 There is no in-page installation-complete indicator. For a local offline test:

@@ -2,14 +2,14 @@
   "name": "SafeMesh CRDT Convergence Lab",
   "short_name": "SafeMesh Lab",
   "description": "Offline-first demo of SafeMesh delta-state CRDT convergence under partition and reconnect.",
-  "start_url": "/",
-  "scope": "/",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "background_color": "#f7f7f4",
   "theme_color": "#f7f7f4",
   "icons": [
     {
-      "src": "/pwa-icon.svg",
+      "src": "pwa-icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any maskable"
