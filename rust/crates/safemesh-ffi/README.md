@@ -4,7 +4,7 @@
 
 ## Claim boundary
 
-This crate is engineered and tested glue. The verified claim belongs to the Lean-backed CRDT carriers in `safemesh-crdt`, and the Rust core must continue to pass the Lean-generated differential oracle corpus. The C ABI, generated header, and wrapper calls are covered by Rust tests and a committed-header drift check.
+API present: this crate exposes C ABI wrapper functions over the Rust core. The verified claim belongs to the Lean-backed CRDT carriers in `safemesh-crdt`, and the Rust core must continue to pass the Lean-generated differential oracle corpus. Runtime tested: Rust tests call the C ABI wrapper functions from Rust. Build checked: the committed-header drift check compares generated declarations with `include/safemesh.h`. Integration tested: these checks contain no external C compile/link/run test. Artifact available: the install command below builds a local library; these checks provide no external C distribution evidence.
 
 See the repository `CLAIMS.md` and `WHAT-IS-PROVEN.md` for the full wording rule.
 

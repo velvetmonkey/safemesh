@@ -33,12 +33,12 @@ The final projection must converge to one sample, lab custody, one active temper
 | 7. Can a builder rerun the evidence locally? | Yes. | `cargo run -p safemesh-crdt --example cold_chain_kill_test` and `cargo test -p safemesh-crdt --examples`. |
 | 8. Does the artifact exercise the event-log API, not just direct state merge? | Yes. | Replicas exchange `EventLog::since(remote_version)` record batches through the transport adapter. |
 | 9. Is the proof boundary visible to a stranger? | Yes. | README, `CLAIMS.md`, and `WHAT-IS-PROVEN.md` label examples, transport, and app-domain semantics as engineered/tested evidence. |
-| 10. Does this identify a plausible buyer wedge? | Yes, narrowly. Field-science/cold-chain users care about auditable convergence under intermittent connectivity, but SafeMesh v0 still needs real storage, product bindings, and domain integration before it is a finished application. | This file is an evaluation artifact, not a product claim. |
+| 10. Does this identify a plausible buyer wedge? | Yes, narrowly. Field-science/cold-chain users care about auditable convergence under intermittent connectivity, but API present: SafeMesh v0 exposes Rust durable storage and language bindings. A finished cold-chain application still needs domain integration and evaluation. | This file is an evaluation artifact, not a product claim. |
 
 ## Honest residuals
 
 - Sensor truth is outside SafeMesh. Bad temperature readings can still produce converged bad data.
 - Legal chain-of-custody is outside SafeMesh. The library preserves modeled state; it does not certify procedure.
 - Real network delivery is outside SafeMesh. Adapters can be tested against the coverage contract, but not proven by this repo.
-- Durable storage and compaction remain product work beyond this in-memory example.
+- This in-memory example does not exercise the shipped Rust durable store; compaction remains product work.
 - `LwwRegister` is not used in this vertical; the scenario stays on the current Lean-backed carrier set.

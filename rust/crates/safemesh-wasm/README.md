@@ -4,7 +4,7 @@
 
 ## Claim boundary
 
-This crate is engineered and tested binding glue. The G-Counter path reaches the Lean-backed Rust carrier; LWW Register, Enable-wins Flag, and LWW Map remain tested-not-proven. The binding itself is not a separate proof.
+Runtime tested: the crate has Rust-side host tests for its wrapper calls. Integration tested: the package smoke flow executes the generated Node package; the web README separately records a Chromium walkthrough. Browser/version/OS matrix coverage is not established by the Node test. Maintainer-supported status is unknown. The G-Counter path reaches the Lean-backed Rust carrier; LWW Register, Enable-wins Flag, and LWW Map remain tested-not-proven. The binding itself is not a separate proof.
 
 See the repository `CLAIMS.md` and `WHAT-IS-PROVEN.md` for the full wording rule.
 

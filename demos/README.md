@@ -22,6 +22,6 @@ That gate keeps the Lean oracle corpus differentials, Rust examples, web build, 
 
 ## Honest Language
 
-Use precise verbs: "provably converges" for the Lean-backed CRDT semantics, "differentially tested" for the Rust bridge to the Lean oracle corpus, and "engineered and tested" for bindings, demos, packaging, and transport adapters.
+Use "provably converges" for the Lean-backed CRDT semantics and "differentially tested" for the Rust bridge to the Lean oracle corpus. For bindings, demos, packaging, and transport adapters, state each applicable fact separately: API present, artifact available, build checked, runtime tested, integration tested, and maintainer-supported. Name the test and execution environment for runtime tested and integration tested claims. Maintainer-supported status for Rust, C ABI, WASM/TypeScript, and Python is unknown.
 
 Avoid extending the proof claim to sensors, real networks, storage durability, arbitrary user reducers, or demo UI code.

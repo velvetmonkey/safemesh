@@ -66,7 +66,7 @@ The full run also prints the audit labels and short SHA-256 evidence digests for
 
 ## Honest Claim Boundary
 
-The G-Counter audit path reaches the Lean-backed Rust carrier. The LWW Map custody path, Enable-wins Flag alert path, and the Python binding glue are engineered and tested product surfaces, not separate Lean proofs in v0.1.
+The G-Counter audit path reaches the Lean-backed Rust carrier. Runtime tested: the installed Python data-mule demo checks modeled LWW Map custody, Enable-wins Flag alerts, and matching log bytes through the Python binding. These paths are not separate Lean proofs in v0.1. Artifact available: the commands above create a local wheel. Maintainer-supported status for the Python binding is unknown.
 
 This demo does not prove the temperature sensor was truthful, that custody law was followed, that storage is durable, or that a real network delivered packets. It shows the modeled state and bytes converge once the logs are exchanged.
 

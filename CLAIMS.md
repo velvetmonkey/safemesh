@@ -17,7 +17,7 @@ SafeMesh's verified claim is deliberately narrow:
 
 - Rust code is checked against a finite Lean-generated corpus. Passing the corpus is strong conformance evidence, not a universal theorem about the Rust compiler or hardware.
 - Property tests and the `laws` feature harness test algebraic behavior over generated scenarios. They supplement the Lean-oracle differential test; they do not replace it.
-- Canonical wire encoding, binding glue, FFI, WASM, Python, demos, and storage or transport adapters are engineered and tested. Transport adapters can be tested against the coverage contract, but SafeMesh does not prove network delivery. Bindings and adapters must call the Rust core rather than reimplementing merge semantics.
+- Canonical wire encoding, binding glue, FFI, WASM, Python, demos, and storage or transport adapters are outside the Lean proof claim. For binding support facts, use the separate API present, artifact available, build checked, runtime tested, integration tested, and maintainer-supported statements in the root README; name the test environment rather than combining them into a single "tested" label. Transport adapters can be tested against the coverage contract, but SafeMesh does not prove network delivery. Bindings and adapters must call the Rust core rather than reimplementing merge semantics.
 - Integrity vertical examples, including the cold-chain kill-test, are engineered evaluation artifacts. They test modeled software convergence; they do not prove sensor truth, legal custody, storage durability, or real transport delivery.
 - User-defined types are tested by their authors against the merge laws. SafeMesh does not prove arbitrary user reducers.
 
