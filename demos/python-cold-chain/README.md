@@ -2,7 +2,15 @@
 
 This is the field-science story demo: a vaccine shipment leaves a clinic, a courier collects while offline, a freezer power blip is recorded, and a lab receives the shipment after a data-mule sync. The point is not the hardware. The point is that the same Rust core can sit under a Python workflow and make the modeled custody state converge after ugly delivery.
 
-![Captured Python cold-chain terminal run](../assets/python-cold-chain-terminal.png)
+## Historical capture
+
+This image was added in revision
+[`7795963`](https://github.com/velvetmonkey/safemesh/commit/77959639aac1ab67116a53c0d3487d2ef5e4ae2b).
+Its exact capture revision and date are unknown. The image's evidence digests
+are historical; the [current text transcript](#what-you-should-see) below shows
+the output of the current demo.
+
+![Historical Python cold-chain terminal run](../assets/python-cold-chain-terminal.png)
 
 ## 30-second run
 
