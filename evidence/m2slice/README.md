@@ -1,10 +1,49 @@
 # M2 public API journey
 
-Walked main `a77f1b47e2b2fb229aa2afa3ea34deaa9300cca3` using
-`rust/crates/safemesh-crdt/examples/m2slice.rs`. No product implementation changes.
+## Current reproduction (2026-09-09)
 
-**First wall: step 5's corruption control.** Clean persisted logs restart correctly,
-but a single valid payload-byte change is accepted and replays to a different state.
+Re-ran `rust/crates/safemesh-crdt/examples/m2slice.rs` on main `88b9691`.
+Clean persisted logs restart correctly, and the single payload-byte mutations
+are rejected as `IntegrityMismatch` for both GCounter and
+`OrSetDelta<String, u64>`. Both normal and `--require-integrity` runs exit 0:
+8 steps WORKS, 0 BLOCKED for each type, with both payload corruptions detected.
+
+Run from the repository root with your own scratch directory:
+
+```sh
+cargo run --manifest-path rust/Cargo.toml -p safemesh-crdt --example m2slice -- /home/monkey/scratch/falsefour/m2-normal
+cargo run --manifest-path rust/Cargo.toml -p safemesh-crdt --example m2slice -- /home/monkey/scratch/falsefour/m2-strict --require-integrity
+```
+
+Current corruption output (the example locates each payload in the current
+frame, flips one bit, writes it to disk, and uses the same restart function):
+
+```text
+counter corrupt-tag-detected=true error=InvalidTag
+counter corrupt-payload-offset=174 restart=Err(IntegrityMismatch)
+counter corrupt-byte-detected=true
+utf8-orset corrupt-tag-detected=true error=InvalidTag
+utf8-orset corrupt-payload-offset=212 restart=Err(IntegrityMismatch)
+utf8-orset corrupt-byte-detected=true
+```
+
+Each final log still holds 4 records: counter logs are now 228 bytes each and
+OR-Set logs 232 bytes each. The final counter state `[11, 22]` and OR-Set adds
+and tombstones match the historical walk below. See the
+[core README's persistence frame](../../rust/crates/safemesh-crdt/README.md#eventlog-persistence-frame)
+for the current format and its integrity boundary.
+
+## Historical walk at a77f1b4 (superseded)
+
+Everything below records the original walk of main
+`a77f1b47e2b2fb229aa2afa3ea34deaa9300cca3` using
+`rust/crates/safemesh-crdt/examples/m2slice.rs`, including its old byte offsets,
+validation counts and missing-integrity finding. These are historical results,
+not the behavior of the current revision. No product implementation changes
+were made for that walk.
+
+**First wall at a77f1b4: step 5's corruption control.** Clean persisted logs restarted correctly,
+but a single valid payload-byte change was accepted and replayed to a different state.
 The eight clean-log steps complete for both GCounter and `OrSetDelta<String, u64>`.
 This does **not** satisfy the corruption-aware release control.
 
@@ -17,7 +56,7 @@ cargo run --manifest-path rust/Cargo.toml -p safemesh-crdt --example m2slice -- 
 
 The first command completes the clean walk and reports corruption observations.
 The second also requires corruption detection and deliberately reproduces this
-current failure (exit 101):
+failure at a77f1b4 (exit 101):
 
 ```text
 step 5 integrity wall: persisted payload corruption silently loads a different state
@@ -40,7 +79,7 @@ The example's local functions only compose public APIs; they do not expose or
 replace a library-private capability. Counter arity (2), type schema and replica
 identities are application configuration; no pre-restart state or tally survives.
 
-## Results
+### Results
 
 Each replica finishes with 4 records. Counter logs are 173 bytes each, full state
 `[11, 22]`, value 33. OR-Set logs are 179 bytes each, adds
@@ -57,9 +96,9 @@ and passes that file through the same restart function. The harness detects a
 state difference using an external original-state oracle; the restart API does
 not detect the corruption. `corrupt-byte-detected no`.
 
-## Missing versus awkward
+### Missing versus awkward
 
-Missing: persisted-byte integrity validation. The current wire decoder checks
+Missing at a77f1b4: persisted-byte integrity validation. That revision's wire decoder checks
 structure, UTF-8 validity and record collisions; a different valid payload is
 indistinguishable from an intentional value. No checksum or integrity envelope
 is supplied by `EventLog`'s wire format. Building one is a second-round decision.
@@ -69,7 +108,7 @@ record-to-wire delivery, counter tally progression, and unique OR-Set tokens.
 The caller can do all of these with public Rust APIs today. There is no need to
 build UTF-8 delta encoding, event-log encoding or record admission for this slice.
 
-## Validation
+### Validation
 
 - `cargo test --workspace`: 70 passed, 0 failed.
 - `cargo test -p safemesh-crdt --no-default-features`: 39 passed, 0 failed.
@@ -82,7 +121,7 @@ These are overlapping suite runs, not 152 distinct tests. The strict probe is
 one separate expected failing assertion, not a Rust-suite failure. The example
 is exercised with `cargo run`; its assertions are not counted as test functions.
 
-## Unverified
+### Unverified
 
 No process kill, torn-write/power-loss recovery, filesystem atomic replacement,
 real network adapter, or application configuration recovery was tested. Files
@@ -90,7 +129,7 @@ are whole-log rewrites, not a transactional append journal. No Lean build,
 browser, distribution or cross-target build was run. CI is left to the draft PR
 gate; local results do not establish that gate's required-check verdict.
 
-## What I tried that did not work
+### What I tried that did not work
 
 Requiring the same public restart path to reject a one-byte valid payload
 mutation fails for both types. Rejecting a damaged outer tag alone gave an
