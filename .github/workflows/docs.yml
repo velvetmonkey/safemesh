@@ -24,4 +24,5 @@ jobs:
       - name: Build documentation and search
         run: npm --prefix docs run build
       - name: Crawl built pages, assets, anchors and external links
+        timeout-minutes: 3
         run: python3 docs/check-links.py

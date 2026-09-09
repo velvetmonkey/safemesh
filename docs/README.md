@@ -47,7 +47,7 @@ timeouts and up to three attempts for transport errors, HTTP 429 and server erro
 with one- and two-second backoffs. Persistent third-party outages still fail CI;
 they are reported as external failures and should be retried after recovery, not
 silently accepted as healthy links. No external success cache hides link rot.
-The elapsed crawl time is printed on every run.
+The elapsed crawl time is printed on every run; CI caps the crawl step at three minutes.
 
 The crawl does not execute JavaScript, inspect CSS URLs or JavaScript imports,
 exercise search interactions, validate non-HTTP schemes, or test production-host
