@@ -5,13 +5,15 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from html.parser import HTMLParser
+from http.client import HTTPConnection
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import threading
 import time
 from urllib.error import HTTPError
 from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPSHandler, Request, build_opener, urlopen
 
 
 class Document(HTMLParser):
@@ -34,12 +36,38 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def list_directory(self, path):
+        # Pages does not turn a missing entry page into a directory listing.
+        self.send_error(404)
+        return None
 
-def fetch(url):
-    external = urlsplit(url).hostname != '127.0.0.1'
+
+class SiteTransport(HTTPSHandler):
+    """Fetch this site's HTTPS URLs from the local deployment, without changing paths.
+
+    Other origins retain normal HTTPS transport. The request URL and Host header
+    stay intact, including on redirects; only this origin's connection is local.
+    """
+
+    def __init__(self, site, address):
+        super().__init__()
+        self.origin = urlsplit(site).netloc
+        self.address = address
+
+    def https_open(self, request):
+        if urlsplit(request.full_url).netloc == self.origin:
+            return self.do_open(
+                lambda host, **kwargs: HTTPConnection(*self.address, **kwargs), request)
+        return super().https_open(request)
+
+
+def fetch(url, *, opener=urlopen, site=''):
+    external = (urlsplit(url).hostname != '127.0.0.1' and
+                (urlsplit(url).scheme, urlsplit(url).netloc) !=
+                (urlsplit(site).scheme, urlsplit(site).netloc))
     for attempt in range(3 if external else 1):
         try:
-            with urlopen(Request(url, headers={'User-Agent': 'SafeMesh-docs-link-check/1.0'}), timeout=10) as response:
+            with opener(Request(url, headers={'User-Agent': 'SafeMesh-docs-link-check/1.0'}), timeout=10) as response:
                 return response.status, response.read().decode('utf-8', errors='replace'), response.headers.get('Content-Type', '')
         except HTTPError as error:
             if error.code < 500 and error.code != 429:
@@ -52,17 +80,17 @@ def fetch(url):
     raise RuntimeError(f'{url}: {failure}')
 
 
-def crawl(root, base):
+def crawl(root, base, fetcher=fetch):
     pages = sorted(root.rglob('*.html'))
     if not pages or not (root / 'index.html').is_file():
         raise RuntimeError(f'No built entry page in {root}')
     counts, errors, references, probes = Counter(), [], [], set()
     for page in pages:
-        route = '/' + page.relative_to(root).as_posix()
+        route = urlsplit(base).path + page.relative_to(root).as_posix()
         if route.endswith('index.html'):
             route = route[:-10]
         source = urljoin(base, route)
-        status, body, _ = fetch(source)
+        status, body, _ = fetcher(source)
         if status != 200:
             errors.append(f'{route}: HTTP {status}')
         for raw, asset in Document(body).links:
@@ -71,7 +99,7 @@ def crawl(root, base):
             if parts.scheme not in ('http', 'https'):
                 counts['OTHER-SCHEME (unchecked)'] += 1
                 continue
-            local = parts.netloc == urlsplit(base).netloc
+            local = (parts.scheme, parts.netloc) == (urlsplit(base).scheme, urlsplit(base).netloc)
             if not local and target == 'http://localhost:4173/':
                 # The documented separate local Lab is not a docs build artifact.
                 counts['EXTERNAL-LOCAL-LAB (unchecked)'] += 1
@@ -85,9 +113,16 @@ def crawl(root, base):
             references.append((route, raw, url, fragment, kind))
             if local and kind != 'INTERNAL-ASSET' and parts.path.upper() != parts.path:
                 probes.add(urlunsplit(parts._replace(path=parts.path.upper(), fragment='')))
+                # Also probe case within the mount: uppercasing only the mount
+                # would miss case-insensitive routes beneath a case-sensitive base.
+                prefix = urlsplit(base).path
+                if parts.path.startswith(prefix):
+                    case_path = prefix + parts.path[len(prefix):].upper()
+                    if case_path != parts.path:
+                        probes.add(urlunsplit(parts._replace(path=case_path, fragment='')))
     urls = sorted({r[2] for r in references} | probes)
     with ThreadPoolExecutor(max_workers=4) as pool:
-        results = dict(zip(urls, pool.map(fetch, urls)))
+        results = dict(zip(urls, pool.map(fetcher, urls)))
     # Parse each fetched document once, even when rustdoc links to many anchors.
     documents = {}
     for route, raw, url, fragment, kind in references:
@@ -122,20 +157,41 @@ def crawl(root, base):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=Path(__file__).parent / 'dist')
+    parser.add_argument('--site', default='https://velvetmonkey.github.io/safemesh/',
+                        help='Deployed HTTPS site URL, including its base path')
     args = parser.parse_args()
+    site = urlsplit(args.site)
+    if (site.scheme != 'https' or not site.netloc or site.query or site.fragment or
+            site.username or not site.path.endswith('/') or
+            any(part in ('.', '..') for part in site.path.split('/')) or
+            unquote(site.path) != site.path):
+        parser.error('--site must be an HTTPS site URL with a plain absolute base ending in /')
     root = args.root.resolve(strict=True)
     start = time.monotonic()
-    server = ThreadingHTTPServer(('127.0.0.1', 0), partial(Handler, directory=str(root)))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        print(f'Serving {root} on 127.0.0.1:{server.server_port}')
-        crawl(root, f'http://127.0.0.1:{server.server_port}/')
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
-        print(f'CRAWL SECONDS {time.monotonic() - start:.2f}')
+    # A real directory mount preserves /safemesh/ in every HTTP request.
+    # Keep temporary files beside the build, never in a system temporary directory.
+    with TemporaryDirectory(prefix='.crawl-', dir=root.parent) as staging:
+        document_root = Path(staging)
+        if site.path == '/':
+            document_root = root
+        else:
+            mount = document_root / site.path.lstrip('/')
+            mount.parent.mkdir(parents=True, exist_ok=True)
+            mount.symlink_to(root, target_is_directory=True)
+        server = ThreadingHTTPServer(('127.0.0.1', 0),
+                                     partial(Handler, directory=str(document_root)))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        opener = build_opener(SiteTransport(args.site, server.server_address))
+        fetcher = partial(fetch, opener=opener.open, site=args.site)
+        try:
+            print(f'Serving {root} at {args.site} via 127.0.0.1:{server.server_port}')
+            crawl(root, args.site, fetcher)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+            print(f'CRAWL SECONDS {time.monotonic() - start:.2f}')
 
 
 if __name__ == '__main__':

@@ -9,10 +9,10 @@ The linked repository documents follow the development branch and remain the sou
 ## Choose a starting point
 
 - [Project entrypoint](https://github.com/velvetmonkey/safemesh/blob/main/README.md): start with the repository's current status and package instructions.
-- [Architecture guide](/architecture/): locate the design overview.
-- [Claims and evidence guide](/claims/): locate the proof boundaries and evaluation account.
-- [Examples guide](/examples/): locate runnable demonstrations in their existing directories.
-- [Generated API reference](/reference/): inspect the Rust core API from this build’s source.
+- [Architecture guide](/safemesh/architecture/): locate the design overview.
+- [Claims and evidence guide](/safemesh/claims/): locate the proof boundaries and evaluation account.
+- [Examples guide](/safemesh/examples/): locate runnable demonstrations in their existing directories.
+- [Generated API reference](/safemesh/reference/): inspect the Rust core API from this build’s source.
 
 ## Use this site
 
