@@ -20,10 +20,14 @@ npm pack --dry-run ./pkg
 
 ## Quickstart
 
-```js
-import init, { SafeMeshGCounterReplica } from "./pkg/safemesh_wasm.js";
+The bundler package exports named classes and initializes WASM on import; it has
+no `init` export. Save this as `quickstart.mjs` in this crate directory. Use a
+bundler with WASM support, or run it on Node 22 with
+`node --experimental-wasm-modules quickstart.mjs`.
 
-await init();
+```js
+import { SafeMeshGCounterReplica } from "./pkg/safemesh_wasm.js";
+
 const left = new SafeMeshGCounterReplica(1n, 3);
 const right = new SafeMeshGCounterReplica(2n, 3);
 
@@ -31,6 +35,12 @@ right.mergeRecordBytes(left.appendBump(1, 5n));
 left.mergeLogBytes(right.logBytes());
 
 console.log(left.value(), right.value());
+```
+
+Stdout:
+
+```text
+5n 5n
 ```
 
 ## Demos
@@ -61,18 +71,30 @@ Run `./scripts/package-smoke.sh` from the repository root to build the bundler p
 `replica out of range` for an invalid coordinate
 without changing state. `applyBump` retains its silent behavior.
 
+Build a Node package from this crate directory with
+`wasm-pack build . --target nodejs --out-dir pkg-node --release`. Save this as
+`orset.mjs` here and run `node orset.mjs`.
+
 ```js
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const { SafeMeshOrSet } = require("./pkg-node/safemesh_wasm.js");
+
 const left = new SafeMeshOrSet(), right = new SafeMeshOrSet();
 left.add(10n, 101n);
 right.merge(left);
 left.applyRemove(left.observedTokens(10n));
 right.add(10n, 201n); // Concurrent add uses a fresh token.
 left.merge(right);
-console.log(left.elements()); // BigUint64Array [10n]
+console.log(left.elements());
 left.free(); right.free();
 ```
 
-Import `SafeMeshOrSet` from the generated package alongside the counter classes.
+Stdout:
+
+```text
+BigUint64Array(1) [ 10n ]
+```
 
 The set delegates to Rust `OrSet<u64, u64>`: elements and tokens are unsigned
 64-bit integers (JavaScript uses `bigint`). Tokens are global to the set; use a
@@ -89,17 +111,34 @@ core's token semantics, including token reuse; the binding does not allocate IDs
 the same way `SafeMeshGCounterReplica` does. It sits beside `SafeMeshOrSet`,
 which is unchanged and still exposes whole-state merge over `u64` elements.
 
+Using the same Node package, save this as `string-orset.mjs` in this crate
+directory and run `node string-orset.mjs`.
+
 ```js
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const { SafeMeshStringOrSetReplica } = require("./pkg-node/safemesh_wasm.js");
+
 const left = new SafeMeshStringOrSetReplica(1n);
 const right = new SafeMeshStringOrSetReplica(2n);
 const add = left.appendAdd("vaccine", 11n);
-right.mergeRecordBytes(add); // "accepted"
-right.mergeRecordBytes(add); // "duplicate": same record identity and payload, state unchanged
+console.log(right.mergeRecordBytes(add));
+console.log(right.mergeRecordBytes(add)); // Same identity and payload; state unchanged.
 right.mergeRecordBytes(left.appendRemoveObserved("vaccine"));
-console.log(right.elements()); // []
-console.log(right.observedTokens("vaccine")); // BigUint64Array [11n]
+console.log(right.elements());
+console.log(right.observedTokens("vaccine"));
 const view = SafeMeshStringOrSetReplica.inspectRecordBytes(add);
 console.log(view.replica(), view.sequence(), view.deltaKind(), view.element(), view.token());
+```
+
+Stdout:
+
+```text
+accepted
+duplicate
+[]
+BigUint64Array(1) [ 11n ]
+1n 1n add vaccine 11n
 ```
 
 `mergeRecordBytes` returns the core's admission verdict; a record whose
