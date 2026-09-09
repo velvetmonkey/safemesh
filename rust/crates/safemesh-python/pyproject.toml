@@ -12,8 +12,9 @@ license = { text = "Apache-2.0" }
 keywords = ["crdt", "distributed-systems", "event-log", "safemesh"]
 classifiers = [
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
   "Programming Language :: Rust",
-  "Operating System :: OS Independent",
+  "Operating System :: POSIX :: Linux",
 ]
 
 [tool.maturin]
