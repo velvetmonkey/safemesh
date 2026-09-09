@@ -1,0 +1,17 @@
+{
+  "name": "safemesh-docs",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "astro dev --host localhost --port 4321",
+    "build": "astro build",
+    "preview": "astro preview --host localhost --port 4320"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.42.0",
+    "astro": "^7.3.2"
+  }
+}
