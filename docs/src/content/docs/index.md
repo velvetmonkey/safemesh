@@ -1,9 +1,18 @@
 ---
-title: Orientation — main (unreleased)
-description: Find the source documents for SafeMesh development on main.
+title: SafeMesh — main (unreleased)
+description: Lean-backed CRDT convergence for small, embeddable state sync; try a runnable Rust example.
 ---
 
-This orientation is a reading map for **main (unreleased)**, rather than a release manual.
+SafeMesh provides **Lean-backed CRDT convergence for small, embeddable state sync**.
+It is for developers building state-sync systems who bring the transport and application schema.
+This page follows **main (unreleased)**, rather than a release manual.
+
+Try the [Rust break-it walkthrough](/safemesh/examples/): it partitions replicas, drops, duplicates,
+and reorders messages, heals with anti-entropy, and finishes with `CONVERGED=true`.
+
+## Orientation and source map
+
+This orientation is a reading map for the development branch.
 The linked repository documents follow the development branch and remain the source of the technical instructions.
 
 ## Choose a starting point
