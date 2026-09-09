@@ -4,7 +4,7 @@
 
 ## Claim boundary
 
-This package is engineered and tested binding glue. The G-Counter path reaches the Lean-backed Rust carrier; LWW Register, Enable-wins Flag, and LWW Map remain tested-not-proven. The binding itself is not a separate proof.
+This package provides binding glue with **API present** in `src/lib.rs`. **Artifact available** means a locally built wheel, not a PyPI release. **Build checked** and **runtime tested**: the local wheel was built with maturin 1.15.0, installed, and used to run `examples/data_mule_demo.py` on Ubuntu 24.04 x64 with CPython 3.12.3. **Integration tested** beyond that modeled local demo is unclaimed; **maintainer-supported** status is unknown. The G-Counter path reaches the Lean-backed Rust carrier; LWW Register, Enable-wins Flag, and LWW Map remain tested-not-proven. The binding itself is not a separate proof.
 
 See the repository `CLAIMS.md` and `WHAT-IS-PROVEN.md` for the full wording rule.
 
