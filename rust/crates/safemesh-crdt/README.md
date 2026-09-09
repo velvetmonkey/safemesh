@@ -263,6 +263,122 @@ The example also writes separate `counter-corrupt.log` and
 and payload mutations rejected by the frame CRC, as shown in the fresh walk
 transcript above.
 
+### Recover a corrupt whole log from the other replica
+
+`IntegrityMismatch` means the entire frame was refused before its records could
+be replayed. The [Node recovery walk](../safemesh-wasm/PERSIST.md#recover-from-a-healthy-peer-without-the-staged-backup)
+measured unchanged files and unchanged in-memory logs after that refusal. Keep
+the damaged files: refusal does not itself repair them or justify deleting them.
+
+For the earlier `EventLog` walk, a healthy B log can rebuild A without a pre-made
+backup. The completed walk has already delivered every A record to B. Stop writers
+and retain the original directory, including intact logs with any unsent edits.
+From the repository root after the walk above, run this entire command with the
+same Rust prerequisites and a path containing no double quote or backslash.
+`walk-recover` and `recovered-logs` must be unused directory names. It validates
+B's logs, replays them into fresh state, checks full state and log equality, writes
+new A files, reopens them, then reconciles both directions with B.
+
+This command is for `counter-b.log` and `utf8-orset-b.log`, **not** the
+`joined/` durable transactions. Do not replace or recreate a durable writer's
+fence or transaction from another writer's files. Recovery of a corrupt joined
+transaction from a peer is not established here; preserve its ownership files
+and use the durable recovery notes above.
+
+```sh
+(
+  mkdir walk-recover || exit 1
+  mkdir walk-recover/src || exit 1
+  cat > walk-recover/Cargo.toml <<EOF
+[package]
+name = "walk-recover"
+version = "0.0.0"
+edition = "2021"
+[workspace]
+[dependencies]
+safemesh-crdt = { path = "$(pwd)/rust/crates/safemesh-crdt" }
+EOF
+  cat > walk-recover/src/main.rs <<'RS'
+use safemesh_crdt::{Admission, Crdt, EventLog, GCounter, OrSet, WireDecode, WireEncode, WireSchema};
+use std::{fmt::Debug, fs, path::Path};
+
+fn recover<C: Crdt + Debug + PartialEq>(name: &str, empty: impl Fn() -> C)
+where C::Delta: Clone + PartialEq + WireDecode + WireEncode + WireSchema {
+    let mut peer = empty();
+    let source = fs::read(format!("walk-logs/{name}-b.log")).unwrap();
+    let mut peer_log = EventLog::<C::Delta>::from_wire_bytes_for(&source, &peer).unwrap();
+    for record in peer_log.records() { peer.apply_delta(record.delta.clone()); }
+    let mut recovered = empty();
+    let mut log = EventLog::for_crdt(&recovered);
+    for record in peer_log.records().iter().cloned() {
+        assert_eq!(log.admit_with(record, |d| recovered.apply_delta(d.clone())), Admission::Accepted);
+    }
+    assert_eq!(recovered, peer);
+    assert_eq!(log.version(), peer_log.version());
+    assert!(log == peer_log);
+    println!("{name} peer={peer:?}");
+    println!("{name} recovered={recovered:?}");
+    let path = format!("recovered-logs/{name}-a.log");
+    fs::write(&path, log.to_wire_bytes().unwrap()).unwrap();
+    // Next action: reopen the recovered file and reconcile in both directions.
+    log = EventLog::from_wire_bytes_for(&fs::read(&path).unwrap(), &empty()).unwrap();
+    recovered = empty();
+    for record in log.records() { recovered.apply_delta(record.delta.clone()); }
+    for record in peer_log.records().iter().cloned() {
+        assert_eq!(log.admit_with(record, |d| recovered.apply_delta(d.clone())), Admission::Duplicate);
+    }
+    for record in log.records().iter().cloned() {
+        assert_eq!(peer_log.admit_with(record, |d| peer.apply_delta(d.clone())), Admission::Duplicate);
+    }
+    assert_eq!(recovered, peer);
+    assert!(log == peer_log);
+    println!("{name} reconciled-peer={peer:?}");
+    println!("{name} reconciled-recovered={recovered:?}");
+}
+fn main() {
+    fs::create_dir(Path::new("recovered-logs")).unwrap();
+    recover("counter", || GCounter::new(2));
+    recover("utf8-orset", OrSet::<String, u64>::new);
+    println!("RECOVERED_AND_RECONCILED=true");
+}
+RS
+  cargo run --quiet --manifest-path walk-recover/Cargo.toml
+)
+```
+
+Stdout (exit 0):
+
+```text
+counter peer=GCounter { counts: [11, 22] }
+counter recovered=GCounter { counts: [11, 22] }
+counter reconciled-peer=GCounter { counts: [11, 22] }
+counter reconciled-recovered=GCounter { counts: [11, 22] }
+utf8-orset peer=OrSet { adds: {("café☕", 100), ("café☕", 201), ("東京", 200)}, tombstones: {100} }
+utf8-orset recovered=OrSet { adds: {("café☕", 100), ("café☕", 201), ("東京", 200)}, tombstones: {100} }
+utf8-orset reconciled-peer=OrSet { adds: {("café☕", 100), ("café☕", 201), ("東京", 200)}, tombstones: {100} }
+utf8-orset reconciled-recovered=OrSet { adds: {("café☕", 100), ("café☕", 201), ("東京", 200)}, tombstones: {100} }
+RECOVERED_AND_RECONCILED=true
+```
+
+Only `RECOVERED_AND_RECONCILED=true` certifies both types. A bad set peer
+produced `InvalidTag` after the counter had succeeded, leaving partial output;
+an error is not a completed recovery.
+
+The new whole-log files are recovery candidates, not replacements installed in
+`joined/`. Equality with B establishes what B holds, not whether B received every
+acknowledged edit. The Node control demonstrated that a left-only record absent
+from the peer is also absent after recovery. Retain any intact local histories;
+do not resume writes with an old identity if lost sequences or tokens could be
+reused.
+
+Without a healthy peer, backup, or independently retained valid records, a lone
+corrupt whole log cannot be recovered through the public APIs. There is no
+partial-prefix salvage call: `EventLog::from_wire_bytes_for` returns an error,
+not a valid prefix to replay. The individual `Record` decoder is not a salvage
+API for a damaged whole-log frame. Preserve the damaged files for investigation.
+
+Before a failure: keep verified backups with matching ownership metadata and replicate acknowledged records to another failure domain.
+
 ## Verify locally
 
 ```sh
