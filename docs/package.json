@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "astro dev --host localhost --port 4321",
-    "build": "astro build",
+    "build": "astro build && python3 generate-reference.py",
     "preview": "astro preview --host localhost --port 4320"
   },
   "dependencies": {

@@ -88,15 +88,21 @@ def crawl(root, base):
     urls = sorted({r[2] for r in references} | probes)
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = dict(zip(urls, pool.map(fetch, urls)))
+    # Parse each fetched document once, even when rustdoc links to many anchors.
+    documents = {}
     for route, raw, url, fragment, kind in references:
         status, body, content_type = results[url]
         problem = None
         if status != 200:
             problem = f'HTTP {status}'
         elif fragment and kind != 'INTERNAL-ASSET':
-            ids = Document(body).ids
+            if url not in documents:
+                documents[url] = Document(body)
+            ids = documents[url].ids
             # GitHub namespaces rendered Markdown headings with user-content-.
-            if fragment not in ids and not (urlsplit(url).hostname == 'github.com' and 'user-content-' + fragment in ids):
+            # Browsers first match the literal fragment, then its decoded form.
+            literal_fragment = urlsplit(raw).fragment
+            if literal_fragment not in ids and fragment not in ids and not (urlsplit(url).hostname == 'github.com' and 'user-content-' + fragment in ids):
                 problem = f'missing id #{fragment}'
         if problem:
             errors.append(f'{route} -> {raw} [{kind}] {problem}')
