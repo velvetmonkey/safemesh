@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0
+      - name: Set up Rust for the generated reference
+        uses: dtolnay/rust-toolchain@stable
       - name: Set up Node
         uses: actions/setup-node@v6.4.0
         with:
