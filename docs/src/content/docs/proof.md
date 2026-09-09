@@ -7,7 +7,7 @@ This is the proof story for **main (unreleased)**. **PROVED applies to the Lean 
 
 ## What you can rely on in the model
 
-Imagine two replicas receiving the same updates in different orders, one receiving some updates twice. `SafeMesh.delta_dissemination_sec` proves that their resulting states are equal. There is **no causal-delivery assumption** for this state-based join model. There is a crucial premise: the underlying sets of delivered deltas are equal. [Evidence: `Delta.lean`, theorem at line 70](https://github.com/velvetmonkey/safemesh/blob/main/lean/SafeMesh/Delta.lean).
+Imagine two replicas receiving the same updates in different orders, one receiving some updates twice. `SafeMesh.delta_dissemination_sec` proves that their resulting states are equal. There is **no causal-delivery assumption** for this state-based join model. There is a crucial premise: the underlying sets of delivered deltas are equal. [Evidence: `Delta.lean`, theorem at line 70](https://github.com/velvetmonkey/safemesh/blob/279926bbe05eb6cc592af54c1c4c28a9f21f84e9/lean/SafeMesh/Delta.lean).
 
 The statement uses a type `S` with a join-semilattice and bottom element: a lawful merge and an empty state. `deltaApply` folds a list of deltas from that empty state. In Lean notation, the premise and conclusion are:
 
