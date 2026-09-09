@@ -1,6 +1,6 @@
 # SafeMesh for builders: demos
 
-These are the v0.2 showcase demos. They are meant to be run, inspected, and used as evidence in CI, not treated as marketing mockups.
+These are the v0.1 showcase demos. They are meant to be run, inspected, and used as evidence in CI, not treated as marketing mockups.
 
 The committed images in `demos/assets/` were captured from the current app or from real command output on this branch.
 
