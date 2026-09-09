@@ -103,6 +103,21 @@ and a UTF-8 set, using `local::DurableReplica`:
   restart requires the existing fence rather than creating a replacement.
   `counter-issued` and `set-issued` are audit copies, not recovery inputs.
 
+Continuous stdout suffix of the fresh walk command above: corruption controls,
+child exit, and schema-display commands. The preceding journey stages are omitted.
+
+```text
+counter corrupt-tag-detected=true error=InvalidTag
+counter corrupt-payload-offset=174 restart=Err(IntegrityMismatch)
+counter corrupt-byte-detected=true
+utf8-orset corrupt-tag-detected=true error=InvalidTag
+utf8-orset corrupt-payload-offset=212 restart=Err(IntegrityMismatch)
+utf8-orset corrupt-byte-detected=true
+joined child exit=77
+counter delta schema=safemesh/gcounter-delta/v1
+UTF-8 set delta schema=safemesh/orset-delta-utf8-u64/v1
+```
+
 ### Reopen the store after the walk (including an overwrite refusal)
 
 If you run the walk twice against the same directory, the second run refuses to
@@ -164,6 +179,15 @@ fn main() -> ExitCode {
 EOF
   cargo run --quiet --manifest-path "$walk_reopen/Cargo.toml" -- ./walk-logs
 )
+```
+
+Stdout of the recovery command after a completed walk:
+
+```text
+writer 0 counter=[12, 7]
+writer 0 set=OrSet { adds: {("café☕", 2), ("naïve", 6), ("γειά", 3), ("東京", 4)}, tombstones: {} }
+writer 1 counter=[12, 7]
+writer 1 set=OrSet { adds: {("café☕", 2), ("naïve", 6), ("γειά", 3), ("東京", 4)}, tombstones: {} }
 ```
 
 After a completed walk, both writers print counter `[12, 7]` and a set whose adds
@@ -236,42 +260,8 @@ has four records. The files are under `walk-logs`: `counter-a.log`, `counter-b.l
 
 The example also writes separate `counter-corrupt.log` and
 `utf8-orset-corrupt.log` controls. Their output shows a rejected tag mutation
-and payload mutations rejected by the frame CRC. Captured output:
-
-```text
-joined ACK counter-successive-tallies=5,9 set=café☕,東京 loss=false
-
-counter IDs before=2 after=2 overlap=0 planted-duplicate=detected
-set IDs before=2 after=2 overlap=0 planted-duplicate=detected
-set tokens before=2 after=2 overlap=0 planted-duplicate=detected
-joined reconciled counter=[12, 7] set=OrSet { adds: {("café☕", 2), ("naïve", 6), ("γειά", 3), ("東京", 4)}, tombstones: {} }
-joined HAPPY: all acknowledged records survive; both exchange orders converge; second restart survives
-counter step=1 WORKS
-counter step=2 WORKS
-counter step=3 WORKS
-counter step=4 WORKS
-counter step=5 WORKS clean-bytes=true
-counter step=6 WORKS diverged=true
-counter step=7 WORKS
-counter step=8 WORKS records-per-replica=4 bytes-a=228 bytes-b=228 state=GCounter { counts: [11, 22] }
-utf8-orset step=1 WORKS
-utf8-orset step=2 WORKS
-utf8-orset step=3 WORKS
-utf8-orset step=4 WORKS
-utf8-orset step=5 WORKS clean-bytes=true
-utf8-orset step=6 WORKS diverged=true
-utf8-orset step=7 WORKS
-utf8-orset step=8 WORKS records-per-replica=4 bytes-a=232 bytes-b=232 state=OrSet { adds: {("café☕", 100), ("café☕", 201), ("東京", 200)}, tombstones: {100} }
-counter corrupt-tag-detected=true error=InvalidTag
-counter corrupt-payload-offset=174 restart=Err(IntegrityMismatch)
-counter corrupt-byte-detected=true
-utf8-orset corrupt-tag-detected=true error=InvalidTag
-utf8-orset corrupt-payload-offset=212 restart=Err(IntegrityMismatch)
-utf8-orset corrupt-byte-detected=true
-joined child exit=77
-counter delta schema=safemesh/gcounter-delta/v1
-UTF-8 set delta schema=safemesh/orset-delta-utf8-u64/v1
-```
+and payload mutations rejected by the frame CRC, as shown in the fresh walk
+transcript above.
 
 ## Verify locally
 

@@ -1,5 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -8,6 +10,43 @@ import { resolve } from 'node:path'
 export default defineConfig({
   plugins: [
     react(),
+    {
+      name: 'build-metadata',
+      apply: 'build',
+      transformIndexHtml() {
+        const packageManifest = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
+        const sourceManifest = fileURLToPath(new URL('../rust/crates/safemesh-crdt/Cargo.toml', import.meta.url))
+        // Ask Cargo to resolve the actual crate manifest, rather than a lockfile or WASM package copy.
+        const cargo = JSON.parse(execFileSync('cargo', [
+          'metadata', '--no-deps', '--format-version', '1', '--manifest-path', sourceManifest,
+        ], { encoding: 'utf8' }))
+        const source = cargo.packages.find((pkg: { manifest_path: string }) => pkg.manifest_path === sourceManifest)
+        if (typeof packageManifest.version !== 'string' || !packageManifest.version || !source?.version) {
+          throw new Error('Build metadata requires declared package and CRDT source versions')
+        }
+        const record = {
+          package: packageManifest.version,
+          source: source.version,
+          wire: 'NOT DECLARED',
+          scenario: 'NOT DECLARED',
+        }
+        const line = `Package ${record.package} · Source ${record.source} · Wire ${record.wire} · Scenario ${record.scenario}`
+        return [
+          {
+            tag: 'script',
+            attrs: { id: 'build-metadata', type: 'application/json' },
+            children: JSON.stringify(record).replace(/</g, '\\u003c'),
+            injectTo: 'body',
+          },
+          {
+            tag: 'footer',
+            attrs: { 'aria-label': 'Build versions', style: 'padding: 1rem; color: var(--muted); font-size: 0.75rem; text-align: center' },
+            children: line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+            injectTo: 'body',
+          },
+        ]
+      },
+    },
     {
       name: 'precache-lab',
       apply: 'build',

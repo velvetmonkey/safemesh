@@ -27,11 +27,11 @@ are rejected as `IntegrityMismatch` for both GCounter and
 Run from the repository root with your own scratch directory:
 
 ```sh
-cargo run --manifest-path rust/Cargo.toml -p safemesh-crdt --example m2slice -- /home/monkey/scratch/falsefour/m2-normal
-cargo run --manifest-path rust/Cargo.toml -p safemesh-crdt --example m2slice -- /home/monkey/scratch/falsefour/m2-strict --require-integrity
+cargo run --manifest-path rust/Cargo.toml -p safemesh-crdt --example m2slice -- /home/monkey/scratch/claimtrue/m2-normal
+cargo run --manifest-path rust/Cargo.toml -p safemesh-crdt --example m2slice -- /home/monkey/scratch/claimtrue/m2-strict --require-integrity
 ```
 
-Current corruption output (the example locates each payload in the current
+Continuous stdout suffix from each command (the example locates each payload in the current
 frame, flips one bit, writes it to disk, and uses the same restart function):
 
 ```text

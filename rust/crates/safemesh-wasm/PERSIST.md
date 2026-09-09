@@ -331,8 +331,15 @@ printf '\231' | dd of=logs/left-set.log bs=1 seek=40 count=1 conv=notrunc status
 node node-persist.mjs ./pkg ./logs restore
 ```
 
+Stdout:
+
 ```text
 restore: fresh process, replicas rebuilt from the log files alone
+```
+
+Stderr (`console.error`):
+
+```text
 RESTORE FAILED file=logs/left-set.log error=SafeMeshError: failed to decode event log: IntegrityMismatch
 ```
 
