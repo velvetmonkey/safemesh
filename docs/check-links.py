@@ -21,16 +21,19 @@ class Document(HTMLParser):
     def __init__(self, html):
         super().__init__(convert_charrefs=True)
         self.ids, self.links = set(), []
+        self.base = None
         self.feed(html)
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
         if 'id' in attrs:
             self.ids.add(attrs['id'])
+        if tag == 'base' and self.base is None and 'href' in attrs:
+            self.base = attrs['href']
         for attr in ('href', 'src'):
             if attrs.get(attr) is not None:
                 asset = attr == 'src' or tag == 'link' and attrs.get('rel') not in ('canonical', 'alternate')
-                self.links.append((attrs[attr], asset))
+                self.links.append((attrs[attr], asset, tag == 'base'))
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -94,9 +97,24 @@ def crawl(root, base, fetcher=fetch):
         status, body, _ = fetcher(source)
         if status != 200:
             errors.append(f'{route}: HTTP {status}')
-        for raw, asset in Document(body).links:
-            target = urljoin(source, raw)
+        document = Document(body)
+        document_base = urljoin(source, document.base) if document.base is not None else source
+        for raw, asset, is_base in document.links:
+            # The first base href changes browser resolution, including #anchors.
+            target = urljoin(source if is_base else document_base, raw)
             parts = urlsplit(target)
+            reference = urlsplit(raw.strip())
+            # Explicit page names may deliberately link to the current page (for
+            # example rustdoc type names). Empty destinations and dot-only paths
+            # supply no page name; reject those when they cannot navigate anywhere.
+            unnamed = (not reference.scheme and not reference.netloc and
+                       not reference.path.startswith('/') and
+                       all(part in ('', '.', '..') for part in reference.path.split('/')))
+            # A base element configures resolution; it is not a visitor link.
+            # Its HTTP destination is still checked below like every other href.
+            if not is_base and unnamed and not reference.fragment and not reference.query and (
+                    not reference.path or target == source):
+                errors.append(f'{route} -> {raw!r}: empty or degenerate target')
             if parts.scheme not in ('http', 'https'):
                 counts['OTHER-SCHEME (unchecked)'] += 1
                 continue

@@ -57,6 +57,11 @@ class LocalReference(HTMLParser):
             url = dict(attrs).get('href', '')
             external = bool(urlsplit(url).netloc)
             self.anchors.append(external)
+            # Give rustdoc's page-heading links a real destination. Tooltip
+            # handlers retain their classes and JS behavior, with the same useful
+            # content destination as a fallback when JavaScript is unavailable.
+            if url == '#':
+                url = '#main-content'
             if not external and ('/src/' in url or url.startswith('src/')):
                 # Rustdoc highlights line ranges with JS; link to the actual first
                 # line ID so source navigation also works without JavaScript.
