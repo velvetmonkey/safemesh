@@ -14,7 +14,7 @@ You bring the transport and application schema. SafeMesh gives you flat CRDT car
 
 Honest claim map: `CLAIMS.md`, `WHAT-IS-PROVEN.md`, and `ARCHITECTURE.md`.
 
-## Persist, restore, partition and reconcile (Rust)
+## Persist, restore, partition and reconcile (Rust and TypeScript/Node)
 
 Start with the [short Rust walkthrough](rust/crates/safemesh-crdt/README.md#persist-restore-partition-and-reconcile).
 It runs the small [`m2slice` application](rust/crates/safemesh-crdt/examples/m2slice.rs)
@@ -24,6 +24,10 @@ This walk uses Rust. Python, WASM and the C FFI expose OR-Set too, as `OrSet`,
 `SafeMeshOrSet` and the `safemesh_orset_*` functions.
 The same four steps in TypeScript/Node, against the `wasm-pack` nodejs package, are in
 [`rust/crates/safemesh-wasm/PERSIST.md`](rust/crates/safemesh-wasm/PERSIST.md).
+Python also exchanges replica and event-log bytes and runs an in-memory partition-and-heal
+[data-mule demo](demos/python-cold-chain/README.md), but has no documented disk or
+process restore walk. The C ABI exposes the types and a G-Counter delta-to-wire helper,
+with no replica or event-log surface.
 
 ## Install matrix
 
