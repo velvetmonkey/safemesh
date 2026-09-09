@@ -5,6 +5,8 @@ import {
   ChevronRight,
   CircleDot,
   Copy,
+  Equal,
+  EqualNot,
   Gauge,
   GitBranch,
   Pause,
@@ -239,15 +241,26 @@ function App() {
             {sim.peers.map((peer) => {
               const elements = readORSet(peer.orset)
               const position = positions[peer.id]
+              const isSelected = peer.id === selectedPeer
+              // Rust-core carrier comparison against Replica 0, the same fact the CONVERGED core aggregates.
+              const aligned = status.rawStateMatches[peer.id] ?? false
+              const StateIcon = aligned ? Equal : EqualNot
               return (
                 <button
                   type="button"
                   key={peer.id}
-                  className={`replica ${peer.id === selectedPeer ? 'selected' : ''} ${sameRead(peer, status) ? 'aligned' : 'split'}`}
+                  className={`replica ${isSelected ? 'selected' : ''} ${aligned ? 'aligned' : 'split'}`}
                   style={{ left: `${position.x}%`, top: `${position.y}%` }}
+                  aria-pressed={isSelected}
                   onClick={() => setSelectedPeer(peer.id)}
                 >
-                  <span className="replica-kicker">Replica {peer.id}</span>
+                  <span className="replica-kicker">
+                    <span>Replica {peer.id}</span>
+                    <span className="replica-state" title={aligned ? 'Core state matches Replica 0' : 'Core state differs from Replica 0'}>
+                      <StateIcon aria-hidden="true" size={13} />
+                      <span className="visually-hidden">{aligned ? 'aligned' : 'split'}</span>
+                    </span>
+                  </span>
                   <span>G-Counter · Rust/WASM</span>
                   <strong>{status.gcounterValues[peer.id] ?? 0}</strong>
                   <span>OR-Set · Rust/WASM</span>
@@ -518,10 +531,6 @@ function storyState(sim: Simulation, status: ReturnType<typeof convergence>) {
     detail: sim.antiEntropyMs > 0 ? 'Some records are missing in transit. Anti-entropy can recover them.' : 'Anti-entropy is off, so dropped packets can remain missing.',
     Icon: Wifi,
   }
-}
-
-function sameRead(peer: Simulation['peers'][number], status: ReturnType<typeof convergence>): boolean {
-  return (status.gcounterValues[peer.id] ?? 0) === status.gcounterValue && JSON.stringify(readORSet(peer.orset)) === JSON.stringify(status.orsetElements)
 }
 
 function digest(counter: number[], elements: string[]): string {

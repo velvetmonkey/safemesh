@@ -220,29 +220,36 @@ export function convergence(sim: Simulation): {
   converged: boolean
   sameRawState: boolean
   sameReads: boolean
+  // Per peer, against the first replica: the Rust-core carrier comparison, and the displayed-read comparison.
+  rawStateMatches: boolean[]
+  readMatches: boolean[]
   gcounterValue: number
   gcounterValues: number[]
   orsetElements: string[]
 } {
   const [first] = sim.peers
   if (!first) {
-    return { converged: true, sameRawState: true, sameReads: true, gcounterValue: 0, gcounterValues: [], orsetElements: [] }
+    return { converged: true, sameRawState: true, sameReads: true, rawStateMatches: [], readMatches: [], gcounterValue: 0, gcounterValues: [], orsetElements: [] }
   }
 
   const firstReplica = replicaFor(first, sim.peers.length)
-  const sameRawState = sim.peers.every(
+  const rawStateMatches = sim.peers.map(
     (peer) => replicaFor(peer, sim.peers.length).sameStateAs(firstReplica) && orsetStateKey(peer) === orsetStateKey(first),
   )
+  const sameRawState = rawStateMatches.every(Boolean)
   const firstGRead = Number(firstReplica.value())
   const firstORead = JSON.stringify(readORSet(first.orset))
-  const sameReads = sim.peers.every(
+  const readMatches = sim.peers.map(
     (peer) => Number(replicaFor(peer, sim.peers.length).value()) === firstGRead && JSON.stringify(readORSet(peer.orset)) === firstORead,
   )
+  const sameReads = readMatches.every(Boolean)
 
   return {
     converged: sameRawState && sim.queue.length === 0,
     sameRawState,
     sameReads,
+    rawStateMatches,
+    readMatches,
     gcounterValue: firstGRead,
     gcounterValues: sim.peers.map((peer) => Number(replicaFor(peer, sim.peers.length).value())),
     orsetElements: readORSet(first.orset),
