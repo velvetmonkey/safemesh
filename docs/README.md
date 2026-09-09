@@ -19,12 +19,16 @@ To inspect the built search, run `npm --prefix docs run preview` and open `http:
 Pagefind is built during the production build, so search verification uses preview.
 
 The global Lab link defaults to `http://localhost:4173/`, the separate Lab's default preview root.
-Start it using the existing [Lab instructions](../web/README.md#run); the docs commands never build or serve the Lab.
+Start it using the existing [Lab instructions](../web/README.md#run); the `dev`, `build` and `preview` commands never build or serve the Lab.
 Set `LAB_URL` to an absolute HTTP(S) address before developing or building to link to another existing Lab server, for example `LAB_URL=https://your-existing-lab.example/ npm --prefix docs run build`.
-A future hosted docs build must supply its actual Lab address; the local default is not a deployment configuration.
 
-These commands install only the docs dependencies, independently of the Rust, WASM and web workflows.
-The docs CI job performs the same clean install and production build without deploying its output.
+The hosted site is built by `npm --prefix docs run build:site` instead. It runs the same documentation build, then builds the Lab into `docs/dist/lab/` under the site's own base path and passes that address to the documentation build as `LAB_URL`, so the published Lab link is derived from the deployment rather than typed.
+`SITE_URL` is the one input: the site's public address including its base path, ending in `/`, defaulting to `https://velvetmonkey.github.io/safemesh/`. `docs/site-url.mjs` resolves it for the Astro config (`site` and `base`), for `build:site` and for the link check, so the same site can be built at another address with, for example, `SITE_URL=https://docs.example.test/preview/ npm --prefix docs run build:site`.
+The documentation workflow reads that address from the repository's existing GitHub Pages configuration; it never changes Pages settings.
+Building the Lab needs the [Lab's toolchain](../web/README.md#run): Node.js 24, Rust with the `wasm32-unknown-unknown` target, `wasm-pack`, and `npm --prefix web ci`.
+
+`npm --prefix docs ci` installs only the docs dependencies, and `dev`, `build` and `preview` use nothing else, independently of the Rust, WASM and web workflows.
+The documentation workflow performs the same clean installs, runs `build:site` and the link check, and deploys the output to GitHub Pages from `main`.
 
 The four content pages are original navigation prose linking to development-branch sources.
 They identify `main (unreleased)` in their titles so search results carry the same scope.
@@ -51,6 +55,9 @@ The elapsed crawl time is printed on every run; CI caps the crawl step at three 
 
 The crawl does not execute JavaScript, inspect CSS URLs or JavaScript imports,
 exercise search interactions, validate non-HTTP schemes, or test production-host
-routing; it also does not fetch the exact default `http://localhost:4173/` link to
-the separately started local Lab. Those Lab links and other schemes are counted explicitly as unchecked.
-A configured public Lab URL is fetched like every other external URL.
+routing. Other schemes are counted explicitly as unchecked. The Lab link has no
+exemption: it is fetched like every other link, so a build whose Lab link points
+at a server that is not running fails the check. Run the check against a
+`build:site` output, start the local Lab first, or set `LAB_URL` to a reachable
+address. `SITE_URL` sets the default `--site`, so the same command checks a site
+built at another address.

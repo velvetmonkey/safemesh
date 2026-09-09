@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Crawl built HTML over HTTP; any error, including crawler errors, fails CI."""
 import argparse
+import os
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -100,10 +101,6 @@ def crawl(root, base, fetcher=fetch):
                 counts['OTHER-SCHEME (unchecked)'] += 1
                 continue
             local = (parts.scheme, parts.netloc) == (urlsplit(base).scheme, urlsplit(base).netloc)
-            if not local and target == 'http://localhost:4173/':
-                # The documented separate local Lab is not a docs build artifact.
-                counts['EXTERNAL-LOCAL-LAB (unchecked)'] += 1
-                continue
             fragment = unquote(parts.fragment)
             url = urlunsplit(parts._replace(fragment=''))
             kind = ('EXTERNAL' if not local else 'INTERNAL-ASSET' if asset else
@@ -144,7 +141,7 @@ def crawl(root, base, fetcher=fetch):
     for url in sorted(probes):
         if results[url][0] != 404:
             errors.append(f'CASE-PROBE {url}: expected 404, got {results[url][0]}')
-    for kind in ('INTERNAL-PAGE', 'INTERNAL-ASSET', 'ANCHOR-SAME-PAGE', 'ANCHOR-CROSS-PAGE', 'EXTERNAL', 'EXTERNAL-LOCAL-LAB (unchecked)', 'OTHER-SCHEME (unchecked)'):
+    for kind in ('INTERNAL-PAGE', 'INTERNAL-ASSET', 'ANCHOR-SAME-PAGE', 'ANCHOR-CROSS-PAGE', 'EXTERNAL', 'OTHER-SCHEME (unchecked)'):
         print(f'{kind}: {counts[kind]}')
     print(f'ROUTES {len(pages)}, LINKS CHECKED {len(references)}, UNIQUE FETCHES {len(urls)}, CASE PROBES {len(probes)}, BROKEN {len(errors)}')
     for error in errors:
@@ -157,8 +154,8 @@ def crawl(root, base, fetcher=fetch):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=Path(__file__).parent / 'dist')
-    parser.add_argument('--site', default='https://velvetmonkey.github.io/safemesh/',
-                        help='Deployed HTTPS site URL, including its base path')
+    parser.add_argument('--site', default=os.environ.get('SITE_URL') or 'https://velvetmonkey.github.io/safemesh/',
+                        help='Deployed HTTPS site URL, including its base path (default: SITE_URL, else the production site)')
     args = parser.parse_args()
     site = urlsplit(args.site)
     if (site.scheme != 'https' or not site.netloc or site.query or site.fragment or
