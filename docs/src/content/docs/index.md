@@ -10,6 +10,14 @@ This page follows **main (unreleased)**, rather than a release manual.
 Try the [Rust break-it walkthrough](/safemesh/examples/): it partitions replicas, drops, duplicates,
 and reorders messages, heals with anti-entropy, and finishes with `CONVERGED=true`.
 
+## Start with a result
+
+1. [Get started](/safemesh/getting-started/): prepare a local experiment and recognize its first successful result.
+2. [Learn the concepts](/safemesh/concepts/): replicas, deltas, convergence and the five Lean-backed carriers.
+3. [Understand the proof](/safemesh/proof/): what Lean establishes and what remains tested or assumed.
+4. [Use SafeMesh in your code](/safemesh/using-safemesh/): Rust, C ABI, WASM/TypeScript and Python, with caller responsibilities.
+5. [Check the limits](/safemesh/limits/): decide whether the semantics and assurance fit your application.
+
 ## Orientation and source map
 
 This orientation is a reading map for the development branch.

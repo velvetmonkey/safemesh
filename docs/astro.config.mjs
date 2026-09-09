@@ -13,7 +13,12 @@ export default defineConfig({
     components: { Header: './src/components/Header.astro' },
     sidebar: [
       { label: 'Orientation', slug: '' },
+      { label: 'Getting started', slug: 'getting-started' },
+      { label: 'Concepts', slug: 'concepts' },
       { label: 'Architecture', slug: 'architecture' },
+      { label: 'The proof and its boundary', slug: 'proof' },
+      { label: 'Using SafeMesh', slug: 'using-safemesh' },
+      { label: 'When not to use it', slug: 'limits' },
       { label: 'Claims and evidence', slug: 'claims' },
       { label: 'Examples', slug: 'examples' },
       { label: 'API reference', slug: 'reference' },
