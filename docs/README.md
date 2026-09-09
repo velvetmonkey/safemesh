@@ -46,6 +46,11 @@ The summary counts link occurrences per class, including repeated references,
 separately from unique fetched URLs and case probes. An empty/missing build,
 HTTP failure, absent anchor, case-probe failure or crawler exception fails the job.
 
+The crawler also needs Node.js (already required for the build): it resolves
+`href`, `src`, and the first `<base href>` with Node’s browser-compatible WHATWG
+URL implementation. Invalid URLs fail the crawl, and resolved destinations retain
+their query strings and percent encoding for the HTTP request.
+
 External checks need the network. Four concurrent workers use ten-second request
 timeouts and up to three attempts for transport errors, HTTP 429 and server errors,
 with one- and two-second backoffs. Persistent third-party outages still fail CI;
