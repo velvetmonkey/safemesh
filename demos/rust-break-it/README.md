@@ -8,6 +8,14 @@ It is intentionally small enough to audit and dramatic enough to run in front of
 
 ## 30-second run
 
+First complete [Before you run](../README.md#before-you-run), including the checkout and tools for
+this demo. The timing below excludes that setup and is an observation on the named machine, not a
+guarantee on other machines or networks.
+
+Runtime tested on Ubuntu 24.04.4 x86_64 (AMD EPYC-Genoa, Rust/Cargo 1.96.1): the commands below
+completed in 2.50 seconds with an empty Cargo target directory and an already populated Cargo
+registry, then 0.03 seconds reusing that build. Both runs reached `CONVERGED=true`.
+
 From the repository root:
 
 ```sh

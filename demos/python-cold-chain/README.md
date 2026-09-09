@@ -14,6 +14,15 @@ the output of the current demo.
 
 ## 30-second run
 
+First complete [Before you run](../README.md#before-you-run), including the checkout and tools for
+this demo. The timing below excludes that setup and is an observation on the named machine, not a
+guarantee on other machines or networks.
+
+Runtime tested on Ubuntu 24.04.4 x86_64 (AMD EPYC-Genoa, Rust/Cargo 1.96.1, CPython 3.12.3, maturin
+1.14.1): the entire block below took 10.29 seconds with an empty Cargo target directory and an
+already populated Cargo registry, then 3.08 seconds reusing that build. Each run created a fresh
+virtualenv, installed a freshly packaged local wheel, and reached `CONVERGED=true`.
+
 Build and install the local wheel into a temporary virtualenv:
 
 ```sh
