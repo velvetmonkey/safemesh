@@ -15,6 +15,10 @@ export default defineConfig({
       { label: 'Examples', slug: 'examples' },
       { label: 'API reference', slug: 'reference' },
     ],
-    pagefind: true,
+    // Balance guide prose against long, repetitive generated API pages. Keep each
+    // heading searchable without a second metadata-title boost overwhelming prose.
+    pagefind: {
+      ranking: { pageLength: 0.5, metaWeights: { title: 0 } },
+    },
   })],
 });

@@ -28,11 +28,31 @@ class LocalReference(HTMLParser):
         self.header = header
 
     def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        classes = set(attributes.get('class', '').split())
         if tag == 'main':
-            # Pagefind ignores unmarked pages when Starlight content markers exist.
-            # Index rustdoc content without the surrounding sidebar navigation.
-            self.parts.extend([self.get_starttag_text()[:-1] + ' data-pagefind-body>', self.header])
+            self.parts.extend([self.get_starttag_text(), self.header])
             return
+        # Rustdoc's content section is the search body, not its surrounding UI.
+        if tag == 'section' and attributes.get('id') == 'main-content':
+            attrs.append(('data-pagefind-body', None))
+        # API signatures and implementation headings repeat identifiers heavily.
+        # Retain the content, with lower weight than authored guide prose.
+        if (tag in {'section', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre', 'p', 'li'}
+                or 'docblock' in classes):
+            attrs.append(('data-pagefind-weight', '0.1'))
+        # Exclude controls by element/role and rustdoc's structural chrome classes.
+        # Keep ordinary summary headings and field-name anchors: those are API text.
+        if (tag in {'button', 'input', 'select', 'textarea', 'form', 'nav'}
+                or attributes.get('role') == 'button'
+                or classes & {'rustdoc-breadcrumbs', 'out-of-band'}
+                or ('src' in classes and (tag == 'a' or 'rightside' in classes))
+                or (tag == 'a' and 'anchor' in classes and 'field' not in classes)
+                or (tag == 'summary' and 'hideme' in classes)):
+            attrs.append(('data-pagefind-ignore', 'all'))
+        start = '<' + tag + ''.join(
+            f' {k}' if v is None else f' {k}="{escape(v, quote=True)}"'
+            for k, v in attrs) + '>'
         if tag == 'a':
             url = dict(attrs).get('href', '')
             external = bool(urlsplit(url).netloc)
@@ -55,7 +75,7 @@ class LocalReference(HTMLParser):
                     f' {k}' if v is None else f' {k}="{escape(v, quote=True)}"'
                     for k, v in attrs) + '>')
                 return
-        self.parts.append(self.get_starttag_text())
+        self.parts.append(start)
 
     def handle_endtag(self, tag):
         if tag == 'a' and self.anchors.pop():
@@ -106,6 +126,8 @@ def main():
         rendered.close()
         page.write_text(''.join(rendered.parts))
     # The reference is public, navigable documentation, including linked source.
+    # Keep the linked rustdoc Help and Settings routes discoverable too; their
+    # explanatory text is public, while interactive controls are not search content.
     # Include it in the sitemap after generation; Astro only knows authored routes.
     namespace = 'http://www.sitemaps.org/schemas/sitemap/0.9'
     ET.register_namespace('', namespace)
