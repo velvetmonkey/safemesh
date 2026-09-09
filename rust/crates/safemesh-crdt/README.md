@@ -22,7 +22,7 @@ A registry release of `safemesh-crdt` has not yet been made.
 ## Quickstart
 
 ```rust
-use safemesh_crdt::{Crdt, GCounter, GCounterDelta, Mergeable};
+use safemesh_crdt::{Crdt, GCounter, GCounterDelta};
 
 let mut left = GCounter::new(2);
 let mut right = GCounter::new(2);
