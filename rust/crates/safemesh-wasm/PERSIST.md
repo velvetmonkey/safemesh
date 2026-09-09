@@ -15,10 +15,10 @@ installs when none is present) over `rustc 1.96.1`.
 
 ## Claim boundary
 
-`safemesh-wasm` is engineered and tested binding glue. Every value printed below
+Integration tested: this walkthrough exercises the generated `safemesh-wasm` Node package through disk persist, process restore, partition, and reconciliation. Browser/version/OS matrix coverage is not established by this Node walkthrough. Every value printed below
 is computed by the Rust core (`safemesh-crdt`): the G-Counter and OR-Set carriers
 it merges are the Lean-backed ones, while the event log, the wire bytes and this
-binding are engineered and tested, not separately proven. See the repository
+binding are outside the separate Lean proof claim. See the repository
 `CLAIMS.md` and `WHAT-IS-PROVEN.md`.
 
 ## What you need

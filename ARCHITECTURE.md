@@ -14,7 +14,7 @@ SafeMesh follows verification-guided development (VGD): the Lean proof comes fir
    `safemesh-crdt`: `no_std + alloc` G-Set, delta G-Counter, delta PN-Counter, delta OR-Set, and RGA/Text state (builds for `thumbv7em-none-eabihf`), mirroring the Lean models. G-Counter merge is pointwise max, PN value is ΣP − ΣN, OR-Set is observed-token add-wins, and RGA read is sorted live positions. The EventLog API is engineered append/merge/since/version infrastructure around those deltas. `LwwRegister`, `EnableWinsFlag`, and `LwwMap` are present as tested-not-proven flat types.
 
 4. **Bindings, demos, and adapters — engineered.**
-   Canonical wire encoding, C ABI, WASM, Python, web demos, storage adapters, and transport adapters call or mirror the core, but they are not theorem-proven. They must be tested and labelled as engineered glue. The verified claim stays with the Lean-backed in-house CRDT types and the Rust bodies that pass the Lean-generated oracle corpus.
+   Canonical wire encoding, C ABI, WASM, Python, web demos, storage adapters, and transport adapters call or mirror the core, but they are not theorem-proven. Their test evidence must name the execution environment; the root README separates API present, artifact available, build checked, runtime tested, integration tested, and maintainer-supported facts. The verified claim stays with the Lean-backed in-house CRDT types and the Rust bodies that pass the Lean-generated oracle corpus.
 
 ## Differential testing (the VGD bridge)
 
@@ -30,7 +30,7 @@ The canonical Rust wire format uses fixed one-byte tags, little-endian integer f
 
 ## Bindings
 
-`rust/crates/safemesh-wasm` and `rust/crates/safemesh-python` are the first language bindings. They expose G-Counter operations, G-Counter replica/event-log exchange, and canonical record/log bytes by calling the same Rust core. They do not reimplement merge logic, and they stay in the engineered/tested bucket.
+`rust/crates/safemesh-wasm` and `rust/crates/safemesh-python` are the first language bindings. They expose G-Counter operations, G-Counter replica/event-log exchange, and canonical record/log bytes by calling the same Rust core. They do not reimplement merge logic. Runtime tested: Rust-side binding tests exercise canonical record/log exchange. Integration tested: the Linux package smoke flow exercises the generated Node package and installed Python wheel. Maintainer-supported status for both bindings is unknown.
 
 ## Break-it demo
 

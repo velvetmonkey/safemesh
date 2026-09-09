@@ -40,7 +40,7 @@ The Lean-backed CRDT carriers are `no_std + alloc`, forbid `unsafe`, and are che
 
 The wire format and C ABI are also engineered infrastructure. They are covered by exact-byte, round-trip, malformed-input, FFI smoke, and header-drift tests, not by Lean theorems.
 
-WASM/TypeScript and Python bindings are engineered wrappers over the Rust core. Their tests show they call the core, preserve canonical record/log bytes, and converge by merging those bytes through the shared Rust implementation; they are not separate proofs. Binding exposure for `LwwRegister`, `EnableWinsFlag`, and `LwwMap` inherits those types' tested-not-proven labels.
+API present: WASM/TypeScript and Python expose wrappers over the Rust core. Runtime tested: their Rust-side tests check core calls, canonical record/log bytes, and convergence by merging those bytes. Integration tested: the Linux package smoke flow exercises a generated WASM package in Node and an installed Python wheel. Artifact available: these flows create local packages; registry availability is not established by them. Maintainer-supported status for both bindings is unknown. These binding tests are not separate Lean proofs. Binding exposure for `LwwRegister`, `EnableWinsFlag`, and `LwwMap` inherits those types' tested-not-proven labels.
 
 The break-it demo and cold-chain kill-test are also engineered evidence. They are useful because they are visible and re-runnable, but they are not substitutes for the Lean proof or differential corpus.
 
