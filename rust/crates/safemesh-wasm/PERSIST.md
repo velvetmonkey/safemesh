@@ -343,21 +343,123 @@ Stderr (`console.error`):
 RESTORE FAILED file=logs/left-set.log error=SafeMeshError: failed to decode event log: IntegrityMismatch
 ```
 
-The program exits 2. The core refused the file before applying any record; the
-message is the one thrown by `mergeLogBytes`. Put the good copy back and the
-restore works again:
+The program exits 2. The core refused this integrity-invalid file before applying
+any record from it. In this run, all four on-disk logs were byte-for-byte unchanged
+after refusal; merging the bad file into both an empty and a populated set also
+left their serialized logs unchanged. The counter loaded earlier in the process
+is separate; this is not a transaction across all four files.
+
+### Recover from a healthy peer, without the staged backup
+
+Keep `logs/` intact and stop local writers while taking a consistent copy of the
+healthy peer's logs. For this walk, that peer is `logs/right-counter.log` and
+`logs/right-set.log`, with replica ID 2 and counter width 3. Step 6 already sent
+all left-side records to it. No command below reads `left-set.log.good` or the
+corrupt left set log.
+
+From `walk`, with `pkg/` and `node-persist.mjs` from steps 1–2, run the following.
+It loads the healthy peer alone, merges its complete logs into fresh replica ID 1,
+compares counter slots, set adds, tombstones, both version vectors and log bytes,
+and writes a separate `recovered-logs/` directory. That directory must not already
+exist. Keep the originals, including any intact logs containing unsent edits.
 
 ```sh
-cp left-set.log.good logs/left-set.log
-node node-persist.mjs ./pkg ./logs restore
+node --input-type=commonjs <<'JS'
+const { readFileSync, writeFileSync, mkdirSync } = require('node:fs');
+const assert = require('node:assert/strict');
+const { SafeMeshGCounterReplica: Counter, SafeMeshStringOrSetReplica: SetReplica } = require('./pkg/safemesh_wasm.js');
+const peer = { counter: new Counter(2n, 3), set: new SetReplica(2n) };
+const recovered = { counter: new Counter(1n, 3), set: new SetReplica(1n) };
+function state(r) {
+  return {
+    counter: Array.from(r.counter.state(), String),
+    elements: r.set.elements(),
+    adds: r.set.addEntries().map(e => [e.element(), String(e.token())]),
+    tombstones: Array.from(r.set.tombstones(), String),
+    counterVersions: [String(r.counter.versionFor(1n)), String(r.counter.versionFor(2n))],
+    setVersions: [String(r.set.versionFor(1n)), String(r.set.versionFor(2n))],
+  };
+}
+try {
+  for (const kind of ['counter', 'set']) {
+    peer[kind].mergeLogBytes(readFileSync(`logs/right-${kind}.log`));
+    recovered[kind].mergeLogBytes(peer[kind].logBytes());
+  }
+  console.log('peer=' + JSON.stringify(state(peer)));
+  console.log('recovered=' + JSON.stringify(state(recovered)));
+  assert.deepStrictEqual(state(recovered), state(peer));
+  for (const kind of ['counter', 'set']) {
+    assert.deepStrictEqual(recovered[kind].logBytes(), peer[kind].logBytes());
+  }
+  mkdirSync('recovered-logs'); // Refuse to overwrite an earlier recovery.
+  for (const kind of ['counter', 'set']) {
+    writeFileSync(`recovered-logs/left-${kind}.log`, recovered[kind].logBytes());
+    writeFileSync(`recovered-logs/right-${kind}.log`, peer[kind].logBytes());
+  }
+  console.log('RECOVERED=true');
+} catch (error) {
+  console.error('RECOVERY FAILED: ' + error.message);
+  process.exitCode = 1;
+}
+JS
 ```
 
+Stdout (exit 0):
+
 ```text
+peer={"counter":["0","8","11"],"elements":["gauze","insulin","vaccine"],"adds":[["gauze","23"],["insulin","21"],["vaccine","11"],["vaccine","22"]],"tombstones":["11"],"counterVersions":["2","2"],"setVersions":["2","3"]}
+recovered={"counter":["0","8","11"],"elements":["gauze","insulin","vaccine"],"adds":[["gauze","23"],["insulin","21"],["vaccine","11"],["vaccine","22"]],"tombstones":["11"],"counterVersions":["2","2"],"setVersions":["2","3"]}
+RECOVERED=true
+```
+
+`RECOVERED=true` means equality with the supplied peer, not proof that the peer
+has every edit the damaged replica ever acknowledged. In an additional run, a
+left-only add of `unreplicated` with token 100 was absent after this recovery:
+left's set version was `(3,3)`, but the available peer and recovery had `(2,3)`.
+Do not resume writes under the old identity if lost record sequences or tokens
+could be reused; that requires the application's original allocation information.
+This recipe demonstrates recovery and reconciliation of the already-synced walk.
+
+Bring the rebuilt replica back together with its peer, then reopen the result:
+
+```sh
+node node-persist.mjs ./pkg ./recovered-logs reconcile
+node node-persist.mjs ./pkg ./recovered-logs restore
+```
+
+Stdout (each command exits 0):
+
+```text
+reconcile: each side merges the other's log file, then both are written back
+  left : counter=19 set=["gauze","insulin","vaccine"] (v1=2 v2=3)
+  right: counter=19 set=["gauze","insulin","vaccine"] (v1=2 v2=3)
+  wrote recovered-logs/left-counter.log (228 bytes)
+  wrote recovered-logs/left-set.log (274 bytes)
+  wrote recovered-logs/right-counter.log (228 bytes)
+  wrote recovered-logs/right-set.log (274 bytes)
+CONVERGED=true
 restore: fresh process, replicas rebuilt from the log files alone
   left : counter=19 set=["gauze","insulin","vaccine"] (v1=2 v2=3)
   right: counter=19 set=["gauze","insulin","vaccine"] (v1=2 v2=3)
 RESTORED=true
 ```
+
+### If there is no healthy peer
+
+There is no public core or binding call that salvages the prefix of an
+integrity-invalid whole log. Without a healthy peer, a backup, or independently
+retained valid records, the data in a lone corrupt log cannot be recovered through
+these APIs. Keep the damaged bytes for investigation; do not delete the store.
+A peer can restore only records it received. The staged `left-set.log.good` copy
+in this exercise is not something a real failure automatically provides.
+
+Deleting the left set log made this program exit 2 with `error=missing`, not
+restart successfully. A fresh empty replacement had no adds, no tombstones and
+versions `(0,0)`: it lacked the two initial adds, left's remove of token 11, and
+right's adds of tokens 22 and 23. In this already-reconciled walk all five records
+were available from the peer; unsent edits would not be.
+
+Before a failure: keep verified backups and replicate acknowledged records to another failure domain.
 
 ## 8. The errors you will meet
 
