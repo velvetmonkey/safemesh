@@ -40,5 +40,5 @@ The final projection must converge to one sample, lab custody, one active temper
 - Sensor truth is outside SafeMesh. Bad temperature readings can still produce converged bad data.
 - Legal chain-of-custody is outside SafeMesh. The library preserves modeled state; it does not certify procedure.
 - Real network delivery is outside SafeMesh. Adapters can be tested against the coverage contract, but not proven by this repo.
-- Durable storage and compaction remain product work beyond this in-memory example.
+- This in-memory example does not exercise the shipped Rust durable store; compaction remains product work.
 - `LwwRegister` is not used in this vertical; the scenario stays on the current Lean-backed carrier set.
