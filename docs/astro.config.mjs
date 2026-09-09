@@ -3,6 +3,8 @@ import starlight from '@astrojs/starlight';
 
 export default defineConfig({
   outDir: './dist',
+  site: 'https://velvetmonkey.github.io',
+  base: '/safemesh',
   integrations: [starlight({
     title: 'SafeMesh documentation',
     components: { Header: './src/components/Header.astro' },

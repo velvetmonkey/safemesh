@@ -1,9 +1,80 @@
 ---
 title: Examples — main (unreleased)
-description: Find executable demonstrations in the main branch source tree.
+description: Clone the source and run Rust, Python, and browser demonstrations.
 ---
 
-For demonstrations on **main (unreleased)**, open the [demo directory guide](https://github.com/velvetmonkey/safemesh/blob/main/demos/README.md) and choose a walkthrough there.
+These examples use **main (unreleased)** source. They exercise modeled convergence;
+they do not establish real transport delivery, storage durability, or maintainer support.
 
-The [repository entrypoint](https://github.com/velvetmonkey/safemesh/blob/main/README.md) connects those demonstrations to package setup.
-For the interactive browser experience, the [Lab run guide](https://github.com/velvetmonkey/safemesh/blob/main/web/README.md#run) explains how to start its independent server.
+## Before you start
+
+Use Linux with Git, internet access, Rust and Cargo installed through rustup, and a
+native C compiler/linker. For Python, install Python 3 with `venv` and pip. For the
+browser example, install Node.js 24.x with npm and a WebAssembly-capable browser.
+The first run downloads dependencies and compiles Rust; allow several minutes.
+No Lean build is needed.
+
+Start in an empty working directory. Clone the public repository without entering
+credentials, then stay in its root for the commands below. Stop if any command fails.
+Each example uses a subshell so you remain at the repository root afterwards.
+
+```sh
+git clone https://github.com/velvetmonkey/safemesh.git
+cd safemesh
+```
+
+These instructions build from source rather than installing a published SafeMesh
+package. Registry availability is not implied.
+
+## Rust: partition and heal
+
+```sh
+(cd rust && NO_COLOR=1 cargo run -p safemesh-crdt --example break_it)
+```
+
+The final stdout line is:
+
+```text
+  CONVERGED=true counter=3 supplies={42} text_positions={10}
+```
+
+The preceding stages show reversed delivery, duplicate replay, and anti-entropy heal.
+
+## Python: cold-chain data mule
+
+Create a virtual environment, install the build tool, build a local wheel, and run
+the demo with that environment's Python:
+
+```sh
+python3 -m venv .venv-examples
+.venv-examples/bin/python -m pip install 'maturin>=1.7,<2'
+(cd rust/crates/safemesh-python && ../../../.venv-examples/bin/maturin build --release --features extension-module --out ../../../.example-wheels)
+.venv-examples/bin/python -m pip install --no-index --find-links .example-wheels safemesh-python
+.venv-examples/bin/python rust/crates/safemesh-python/examples/data_mule_demo.py
+```
+
+The final stdout line is:
+
+```text
+  CONVERGED=true python_data_mule_sample=9001 holders=[300, 300, 300] audit_counts=[4, 4, 4] temperature_alerts=[True, True, True]
+```
+
+The preceding stages show modeled custody, audit counts, and temperature alerts.
+
+## Browser: interactive convergence
+
+Install the WASM build tool and target, then start the server. Leave this command
+running while you use the browser; press Ctrl+C when finished. Port 4387 must be free.
+
+```sh
+cargo install wasm-pack --version 0.15.0 --locked
+rustup target add wasm32-unknown-unknown
+(cd web && unset NODE_ENV && npm ci && npm run dev -- --host 127.0.0.1 --port 4387 --strictPort)
+```
+
+Open `http://127.0.0.1:4387/`. The page shows the heading
+“Same message. Five failures. Same finish.” and the prompt “CHOOSE WHAT CAN GO WRONG”.
+Use the scenario buttons and Previous / Replay / Next controls to explore the demo.
+The UI and modeled transport are outside the Lean proof claim.
+
+For longer walkthroughs, see the [demo directory guide](https://github.com/velvetmonkey/safemesh/blob/main/demos/README.md).
