@@ -1,7 +1,10 @@
+// The worker is served from the Lab's root, so its own location names the base path:
+// / on the local servers, the mount path when the documentation site bundles the Lab.
+const BASE = new URL('./', self.location.href).pathname
 // Production builds prepend BUILD with every emitted asset and a content-derived cache name.
 const CACHE_NAME = typeof BUILD === 'undefined' ? 'safemesh-pwa-dev' : BUILD.cacheName
 const APP_SHELL = typeof BUILD === 'undefined'
-  ? ['/', '/README.md', '/manifest.webmanifest', '/pwa-icon.svg', '/favicon.svg']
+  ? ['', 'README.md', 'manifest.webmanifest', 'pwa-icon.svg', 'favicon.svg'].map((name) => BASE + name)
   : BUILD.assets
 
 self.addEventListener('install', (event) => {
@@ -24,7 +27,7 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url)
   if (url.origin === self.location.origin && !url.search &&
-      url.pathname.startsWith('/assets/') && APP_SHELL.includes(url.pathname)) {
+      url.pathname.startsWith(BASE + 'assets/') && APP_SHELL.includes(url.pathname)) {
     // These build assets are identical static bytes. Vite's Vary: Origin must not
     // make module/CSS requests miss entries installed with cache.addAll().
     event.respondWith(
@@ -44,12 +47,12 @@ self.addEventListener('fetch', (event) => {
             const contentType = response.headers.get('content-type') || ''
             // The root key is the offline application fallback, so only an HTML
             // shell may replace it. Other navigation responses retain their own URL.
-            const cacheKey = contentType.includes('text/html') ? '/' : response.url
+            const cacheKey = contentType.includes('text/html') ? BASE : response.url
             caches.open(CACHE_NAME).then((cache) => cache.put(cacheKey, copy))
           }
           return response
         })
-        .catch(() => caches.match('/')),
+        .catch(() => caches.match(BASE)),
     )
     return
   }

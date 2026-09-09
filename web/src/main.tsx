@@ -11,7 +11,7 @@ createRoot(document.getElementById('root')!).render(
 
 if ('serviceWorker' in navigator) {
   const register = () => {
-    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch((error) => {
+    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, { updateViaCache: 'none' }).catch((error) => {
       console.error('SafeMesh service worker registration failed.', error)
     })
   }

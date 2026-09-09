@@ -17,4 +17,4 @@ The linked repository documents follow the development branch and remain the sou
 ## Use this site
 
 Search covers these navigation guides; it does not index the contents of the linked GitHub documents.
-The Lab entry opens a separate server whose address is chosen when this documentation site is built.
+The Lab entry opens the Lab at the address chosen when this documentation site is built; the hosted site includes the Lab under its own `lab/` path.

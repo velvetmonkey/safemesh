@@ -11,21 +11,54 @@ permissions:
 jobs:
   docs-build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0
-      - name: Set up Rust for the generated reference
+      - name: Read the Pages deployment address
+        # Reads the repository's existing Pages configuration; enablement stays off,
+        # so this never changes Pages settings.
+        id: pages
+        uses: actions/configure-pages@v6.0.0
+      - name: Derive the site address from the deployment
+        env:
+          PAGES_BASE_URL: ${{ steps.pages.outputs.base_url }}
+        run: echo "SITE_URL=${PAGES_BASE_URL}/" >> "$GITHUB_ENV"
+      - name: Set up Rust for the generated reference and the Lab
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Cache Rust artifacts
+        uses: actions/cache@v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/Cargo.lock', 'rust/**/*.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
       - name: Set up Node
         uses: actions/setup-node@v6.4.0
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: docs/package-lock.json
-      - name: Install documentation dependencies
-        run: npm --prefix docs ci
-      - name: Build documentation and search
-        run: npm --prefix docs run build
+          cache-dependency-path: |
+            docs/package-lock.json
+            web/package-lock.json
+      - name: Install wasm-pack for the Lab
+        run: |
+          if ! command -v wasm-pack >/dev/null 2>&1; then
+            cargo install wasm-pack --version 0.15.0 --locked
+          fi
+      - name: Install documentation and Lab dependencies
+        run: |
+          npm --prefix docs ci
+          npm --prefix web ci
+      - name: Build documentation, search and the Lab at the deployment address
+        run: npm --prefix docs run build:site
       - name: Crawl built pages, assets, anchors and external links
         timeout-minutes: 3
         run: python3 docs/check-links.py

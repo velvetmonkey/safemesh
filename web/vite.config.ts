@@ -6,6 +6,10 @@ import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
+// The Lab's public base path (`vite build --base`): / for local servers, the mount
+// path when the documentation site bundles the Lab under its own address.
+let base = '/'
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
@@ -50,15 +54,19 @@ export default defineConfig({
     {
       name: 'precache-lab',
       apply: 'build',
+      configResolved(config) {
+        base = config.base
+      },
       writeBundle(options, bundle) {
         const outDir = resolve(options.dir ?? 'dist')
         const worker = readFileSync(resolve(outDir, 'sw.js'), 'utf8')
-        const shell = ['/', '/manifest.webmanifest', '/pwa-icon.svg', '/favicon.svg']
-        const assets = [...new Set([...shell, ...Object.keys(bundle).map((name) => `/${name}`)])].sort()
+        // Every precached URL is absolute under the build's base, which is also the worker's scope.
+        const shell = ['', 'manifest.webmanifest', 'pwa-icon.svg', 'favicon.svg']
+        const assets = [...new Set([...shell, ...Object.keys(bundle)].map((name) => base + name))].sort()
         // Version the complete artifact, including public files, with the build's own bytes.
         const hash = createHash('sha256').update(worker)
         for (const asset of assets) {
-          hash.update(asset).update(readFileSync(resolve(outDir, asset === '/' ? 'index.html' : asset.slice(1))))
+          hash.update(asset).update(readFileSync(resolve(outDir, asset.slice(base.length) || 'index.html')))
         }
         const build = { cacheName: `safemesh-pwa-${hash.digest('hex')}`, assets }
         writeFileSync(resolve(outDir, 'sw.js'), `const BUILD = ${JSON.stringify(build)}\n${worker}`)
