@@ -9,6 +9,7 @@ import sys
 import tempfile
 from html import escape
 from html.parser import HTMLParser
+import xml.etree.ElementTree as ET
 from urllib.parse import urlsplit
 
 
@@ -28,7 +29,9 @@ class LocalReference(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         if tag == 'main':
-            self.parts.extend([self.get_starttag_text(), self.header])
+            # Pagefind ignores unmarked pages when Starlight content markers exist.
+            # Index rustdoc content without the surrounding sidebar navigation.
+            self.parts.extend([self.get_starttag_text()[:-1] + ' data-pagefind-body>', self.header])
             return
         if tag == 'a':
             url = dict(attrs).get('href', '')
@@ -102,6 +105,26 @@ def main():
         rendered.feed(page.read_text())
         rendered.close()
         page.write_text(''.join(rendered.parts))
+    # The reference is public, navigable documentation, including linked source.
+    # Include it in the sitemap after generation; Astro only knows authored routes.
+    namespace = 'http://www.sitemaps.org/schemas/sitemap/0.9'
+    ET.register_namespace('', namespace)
+    sitemap = docs / 'dist/sitemap-0.xml'
+    tree = ET.parse(sitemap)
+    root = tree.getroot()
+    site = root.find(f'{{{namespace}}}url/{{{namespace}}}loc').text
+    # Re-running this generator replaces reference entries, including removed items.
+    for entry in list(root):
+        location = entry.find(f'{{{namespace}}}loc')
+        if location is not None and location.text.startswith(site + 'reference/rust/'):
+            root.remove(entry)
+    for page in sorted(destination.rglob('*.html')):
+        route = page.relative_to(docs / 'dist').as_posix()
+        if route.endswith('index.html'):
+            route = route[:-10]
+        entry = ET.SubElement(root, f'{{{namespace}}}url')
+        ET.SubElement(entry, f'{{{namespace}}}loc').text = site + route
+    tree.write(sitemap, encoding='utf-8', xml_declaration=True)
     print(f'Generated Rust reference: {len(list(destination.rglob("*.html")))} HTML pages')
 
 
