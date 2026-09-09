@@ -1,0 +1,29 @@
+---
+import Search from '@astrojs/starlight/components/Search.astro';
+import ThemeSelect from '@astrojs/starlight/components/ThemeSelect.astro';
+const labUrl = import.meta.env.LAB_URL || 'http://localhost:4173/';
+const lab = new URL(labUrl);
+if (!['http:', 'https:'].includes(lab.protocol)) throw new Error('LAB_URL must use HTTP or HTTPS');
+---
+<div class="header">
+  <nav aria-label="Global">
+    <a href="/">Docs</a>
+    <a href={lab.href}>Lab</a>
+    <a href="/examples/">Examples</a>
+    <a href="https://github.com/velvetmonkey/safemesh">GitHub</a>
+  </nav>
+  <div class="tools"><Search /><ThemeSelect /></div>
+</div>
+<style>
+  .header, nav, .tools { display: flex; align-items: center; gap: 1rem; }
+  .header { justify-content: space-between; height: 100%; }
+  nav { flex-wrap: wrap; }
+  nav a { color: var(--sl-color-white); text-decoration: none; font-weight: 600; }
+  nav a:hover { text-decoration: underline; }
+  nav a:focus-visible { outline: 2px solid var(--sl-color-text-accent); outline-offset: 4px; }
+  @media (max-width: 49.99rem) {
+    .header { padding-inline-end: 2.5rem; gap: .5rem; }
+    nav { gap: .65rem; font-size: .875rem; }
+    .tools { gap: .25rem; }
+  }
+</style>

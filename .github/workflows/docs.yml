@@ -1,0 +1,28 @@
+name: Documentation
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  docs-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+      - name: Set up Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - name: Install documentation dependencies
+        run: npm --prefix docs ci
+      - name: Build documentation and search
+        run: npm --prefix docs run build
+      - name: Crawl built pages, assets, anchors and external links
+        timeout-minutes: 3
+        run: python3 docs/check-links.py
