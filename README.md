@@ -86,7 +86,14 @@ See `ARCHITECTURE.md`, `CLAIMS.md`, and `WHAT-IS-PROVEN.md`.
 
 ## CI Gate
 
-Run `./scripts/ci.sh` to execute the same full gate used by the repository workflow: Lean build, Rust formatting/tests/features/examples, the break-it and cold-chain demos, embedded and WASM target builds, and the web test/build pair.
+For the product-level Rust check, run:
+
+```sh
+cd rust
+cargo test -p safemesh-crdt --features laws
+```
+
+This Lean-free check runs the CRDT tests and laws harness. For the full-repository check, run `./scripts/ci.sh`; it requires the Lean toolchain (`lake`), Rust/rustup, cbindgen, maturin, and the web Node/npm toolchain, then runs the Lean build, Rust formatting/tests/features/examples, the break-it and cold-chain demos, embedded and WASM target builds, the FFI header check, and the web test/build pair.
 
 Run `./scripts/package-smoke.sh` to verify packaging basics: `safemesh-crdt` passes `cargo publish --dry-run`, the Python wheel builds through maturin, the installed wheel exchanges canonical record/log bytes and runs the data-mule demo, and the WASM binding builds into an npm-packable wasm-pack package with a Node convergence demo.
 
@@ -104,7 +111,7 @@ The FFI spine lives in `rust/crates/safemesh-ffi`. It exposes opaque G-Counter h
 
 The first bindings are thin wrappers over the same Rust core:
 
-- `rust/crates/safemesh-wasm` exposes `SafeMeshGCounter`, `SafeMeshGCounterReplica`, `SafeMeshLwwRegister`, `SafeMeshLwwRegisterReplica`, `SafeMeshEnableWinsFlag`, `SafeMeshEnableWinsFlagReplica`, `SafeMeshLwwMap`, `SafeMeshLwwMapReplica`, canonical record/log bytes, and merge-from-bytes through wasm-bindgen, with a committed TypeScript declaration file.
+- `rust/crates/safemesh-wasm` exposes `SafeMeshGCounter`, `SafeMeshGCounterReplica`, `SafeMeshLwwRegister`, `SafeMeshLwwRegisterReplica`, `SafeMeshEnableWinsFlag`, `SafeMeshEnableWinsFlagReplica`, `SafeMeshLwwMap`, `SafeMeshLwwMapReplica`, `SafeMeshOrSet`, `SafeMeshStringOrSetReplica`, `SafeMeshStringOrSetAddEntry`, `SafeMeshStringOrSetRecord`, canonical record/log bytes, and merge-from-bytes through wasm-bindgen, with a committed TypeScript declaration file.
 - `rust/crates/safemesh-python` exposes G-Counter, LWW Register, Enable-wins Flag, LWW Map, and their replica/event-log surfaces through PyO3, with `pyproject.toml` configured for maturin.
 
 Neither binding reimplements merge logic. Both are engineered/tested glue around the Rust core, and both have tests that exchange canonical record/log bytes and converge through that core. The G-Counter binding rides the Lean-backed surface; LWW Register, Enable-wins Flag, and LWW Map remain tested-not-proven.
