@@ -1,0 +1,4 @@
+[benchraw 9187ea2] bench(crdt): add opt-in serial envelope measurement instrument
+ 3 files changed, 535 insertions(+)
+ create mode 100755 rust/crates/safemesh-crdt/benches/bin/run.py
+ create mode 100644 rust/crates/safemesh-crdt/benches/envelope.rs

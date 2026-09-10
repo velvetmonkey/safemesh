@@ -1,0 +1,5 @@
+    Updating crates.io index
+     Locking 33 packages to latest compatible versions
+      Adding pyo3 v0.22.6 (available: v0.29.2)
+   Compiling safemesh-crdt v0.1.0 (/home/monkey/scratch/benchraw/negative/rust/crates/safemesh-crdt)
+    Finished `release` profile [optimized] target(s) in 5.85s

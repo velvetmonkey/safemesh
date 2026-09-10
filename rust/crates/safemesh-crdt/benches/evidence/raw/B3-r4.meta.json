@@ -1,0 +1,77 @@
+{
+  "name": "B3-r4",
+  "metadata": {
+    "source_sha": "9187ea22f232ce710082285b9b5c7d9fe92f7b5a",
+    "source_dirty": true,
+    "crate_version": "0.1.0",
+    "toolchain": "rustc 1.96.1 (31fca3adb 2026-06-26)\nbinary: rustc\ncommit-hash: 31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd\ncommit-date: 2026-06-26\nhost: x86_64-unknown-linux-gnu\nrelease: 1.96.1\nLLVM version: 22.1.2\n",
+    "os": "Linux ubuntu-8gb-fsn1-2 6.8.0-139-generic #139-Ubuntu SMP PREEMPT_DYNAMIC Sat Aug  1 03:52:05 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux\n",
+    "cpu_model": "model name\t: AMD EPYC-Genoa Processor",
+    "core_count": 12,
+    "affinity": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "filesystem": "SOURCE                  FSTYPE OPTIONS\n/dev/sda1[/home/monkey] ext4   rw,nosuid,relatime\n",
+    "seed": 42,
+    "repetitions": 7,
+    "condition": "warm except B3 explicit eviction request",
+    "memory_brake_bytes": 536870912,
+    "wall_time_brake_seconds": 20
+  },
+  "brakes": {
+    "time": "2026-09-10T11:21:10.451003+00:00",
+    "free_m": "               total        used        free      shared  buff/cache   available\nMem:           23456        4552        4626           4       14701       18904\nSwap:          16383        4245       12138\n",
+    "vmstat": "procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------\n r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu\n 0  0 4347648 4737424 1225432 13828880   30   59  1983 12015 12531   13 20  9 70  0  0  0\n 0  0 4347648 4737424 1225432 13828732    0    0     0     0 4073 5143  1  0 99  0  0  0\n 0  0 4347648 4737424 1225432 13828732   80    0    80     0 4180 5253  1  0 99  0  0  0\n",
+    "df_h": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1       451G  192G  241G  45% /\n",
+    "available_mb": 18904,
+    "idle": [
+      99,
+      99
+    ],
+    "si": [
+      0,
+      80
+    ],
+    "so": [
+      0,
+      0
+    ],
+    "root_free_bytes": 258306437120,
+    "stopped_by": []
+  },
+  "args": [
+    "B3",
+    2048,
+    512,
+    16,
+    16,
+    9216,
+    7,
+    42
+  ],
+  "command": [
+    "/home/monkey/scratch/benchraw/target/release/deps/envelope-5f6d1cb5eac13782",
+    "B3",
+    "2048",
+    "512",
+    "16",
+    "16",
+    "9216",
+    "7",
+    "42",
+    "/home/monkey/scratch/benchraw/raw/B3-r4.store"
+  ],
+  "exit_code": 0,
+  "result": "completion"
+}
