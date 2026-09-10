@@ -489,7 +489,7 @@ fn seqzero_two_replica_exchange_and_persisted_replay() {
     let bytes = source.to_wire_bytes().unwrap();
     let restored = EventLog::<GCounterDelta>::from_wire_bytes(&bytes).unwrap();
     // The raw record kernel admits zero. The separate owned-counter loader
-    // has always required positive sequences; this filter repair does not
+    // has always required positive sequences; this version repair does not
     // broaden that loader's admission contract.
     assert_eq!(
         EventLog::<GCounterDelta>::from_wire_bytes_for(&bytes, &GCounter::new(2)),
@@ -497,9 +497,9 @@ fn seqzero_two_replica_exchange_and_persisted_replay() {
     );
     assert_eq!(restored, source);
     assert_eq!(restored.since(&VersionVector::new()), source.records());
-    if let Some(path) = std::env::var_os("SEQZERO_OLD_LOG") {
-        let bytes = std::fs::read(path).unwrap();
-        let old = EventLog::<GCounterDelta>::from_wire_bytes(&bytes).unwrap();
+    {
+        let bytes = include_bytes!("fixtures/old-zero.bin");
+        let old = EventLog::<GCounterDelta>::from_wire_bytes(bytes).unwrap();
         let mut replay = GCounter::new(2);
         for r in old.records() {
             replay.apply_delta(r.delta.clone());
@@ -519,8 +519,11 @@ fn seqzero_two_replica_exchange_and_persisted_replay() {
     for round in 0..2 {
         anti_entropy(&mut transport, 0, 1, &restored, peer.version()).unwrap();
         let envelopes = transport.drain(1);
-        assert_eq!(envelopes.len(), 1);
-        assert_eq!(envelopes[0].records.len(), if round == 0 { 3 } else { 1 });
+        assert_eq!(envelopes.len(), if round == 0 { 1 } else { 0 });
+        assert_eq!(
+            envelopes.iter().map(|e| e.records.len()).sum::<usize>(),
+            if round == 0 { 3 } else { 0 }
+        );
         for envelope in envelopes {
             for r in envelope.records {
                 let bytes = r.to_wire_bytes().unwrap();
@@ -546,4 +549,125 @@ fn seqzero_two_replica_exchange_and_persisted_replay() {
         "TWO REPLICA EXCHANGE CONVERGES true tcp_rounds=2 value={}",
         peer_state.value()
     );
+}
+
+#[test]
+fn seqzero_converged_replicas_quiesce_at_scale() {
+    use safemesh_crdt::{anti_entropy, InMemoryTransport, TransportAdapter, VersionVector};
+    for (authors, positives) in [(1, true), (1, false), (10, false), (100, false)] {
+        let mut left = EventLog::with_replica_count(1);
+        let mut right = EventLog::with_replica_count(1);
+        for replica in 0..authors {
+            // Admit zero AFTER positives: a positive prefix must not imply zero.
+            let sequences = if positives { vec![1, 2, 0] } else { vec![0] };
+            for sequence in sequences {
+                let r = Record {
+                    id: RecordId { replica, sequence },
+                    delta: GCounterDelta {
+                        replica: 0,
+                        tally: 7,
+                    },
+                };
+                assert_eq!(left.insert_record(r), Admission::Accepted);
+            }
+        }
+        let mut transport = InMemoryTransport::new();
+        transport.subscribe(0);
+        transport.subscribe(1);
+        // First repair from an empty peer must recover every admitted record.
+        anti_entropy(&mut transport, 0, 1, &left, right.version()).unwrap();
+        let mut recovered = 0;
+        for envelope in transport.drain(1) {
+            for r in envelope.records {
+                let bytes = r.to_wire_bytes().unwrap();
+                let decoded = Record::<GCounterDelta>::from_wire_bytes(&bytes).unwrap();
+                assert_eq!(right.insert_record(decoded), Admission::Accepted);
+                recovered += 1;
+            }
+        }
+        assert_eq!(recovered, left.records().len());
+        assert_eq!(left, right);
+        let mut series = Vec::new();
+        for _ in 0..10 {
+            anti_entropy(&mut transport, 0, 1, &left, right.version()).unwrap();
+            anti_entropy(&mut transport, 1, 0, &right, left.version()).unwrap();
+            let mut sent = 0;
+            for (peer, log) in [(0, &mut left), (1, &mut right)] {
+                for envelope in transport.drain(peer) {
+                    sent += envelope.records.len();
+                    for r in envelope.records {
+                        assert_eq!(
+                            log.admit_with(r, |_| panic!("converged duplicate applied")),
+                            Admission::Duplicate
+                        );
+                    }
+                }
+            }
+            series.push(sent);
+        }
+        println!(
+            "QUIESCENCE N={authors} POSITIVES={positives} RECOVERED={recovered} SERIES {series:?}"
+        );
+        assert_eq!(series, vec![0; 10], "converged replicas must stay quiet");
+        // Rebuild versions through the legacy log format, not a cloned cache.
+        let restored =
+            EventLog::<GCounterDelta>::from_wire_bytes(&left.to_wire_bytes().unwrap()).unwrap();
+        assert_eq!(restored.version(), left.version());
+        assert!(left.since(restored.version()).is_empty());
+        assert_eq!(left.since(&VersionVector::new()).len(), recovered);
+    }
+}
+
+#[test]
+fn seqzero_acknowledgment_is_independent_of_positive_prefix() {
+    use safemesh_crdt::VersionVector;
+    let zero = RecordId {
+        replica: 42,
+        sequence: 0,
+    };
+    let mut version = VersionVector::new();
+    assert!(!version.includes(zero));
+    for sequence in 1..=3 {
+        version.observe(RecordId {
+            replica: 42,
+            sequence,
+        });
+    }
+    assert!(!version.includes(zero));
+    assert_eq!(version.get(42), 3);
+    let entries = version.entries().clone();
+    version.observe(zero);
+    assert!(version.includes(zero));
+    assert_eq!(version.entries(), &entries);
+    assert_eq!(
+        version.zero_replicas().iter().copied().collect::<Vec<_>>(),
+        vec![42]
+    );
+    assert!(!version.includes(RecordId {
+        replica: 43,
+        sequence: 0
+    }));
+    let snapshot = version.clone();
+    version.observe(zero);
+    assert_eq!(version, snapshot);
+    let mut log = EventLog::new();
+    for replica in [42, 43] {
+        for sequence in 0..=4 {
+            assert_eq!(
+                log.insert_record(Record {
+                    id: RecordId { replica, sequence },
+                    delta: 7u64
+                }),
+                Admission::Accepted
+            );
+        }
+    }
+    let ids: Vec<_> = log.since(&version).iter().map(|r| r.id).collect();
+    let expected: Vec<_> = log
+        .records()
+        .iter()
+        .filter(|r| r.id.replica == 43 || r.id.sequence == 4)
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(ids, expected);
 }
