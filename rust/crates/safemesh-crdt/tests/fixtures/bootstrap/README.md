@@ -222,3 +222,24 @@ update the tag diagnoses to structured version refusals once implemented.
 encountered frame/schema, readable identities and migration availability;
 package identity cannot be recovered when absent. Malformed wrapper/CRC cases
 should remain malformed/integrity diagnoses, not invented versions.
+
+## Measured negative controls
+
+On the candidate replay test, two independent corpus copies failed (cargo exit
+101 each). No retained byte or expectation was edited to clear either failure.
+
+- Copy A: `counter.transaction`, zero-based offset 167 (last CRC byte),
+  `0x4c` -> `0x4d`: `counter: durable restart disagreed: History(IntegrityMismatch)`.
+- Copy B: valid unchanged bytes, README JSON `counter.state[0]`, `5` -> `6`:
+  `counter: replay state disagreed`; actual `[5,7]`, expected `[6,7]`.
+
+Reproduce by copying this entire directory to two new scratch directories,
+applying each edit only in its copy, then running:
+
+```sh
+BOOTFIXTURE_DIR=<copy> cargo test --manifest-path rust/Cargo.toml -p safemesh-crdt --features local-writer --test bootstrap replay_bootstrap -- --exact --nocapture
+```
+
+Keep both red copies as evidence; do not edit them back into passing corpora.
+The unmodified corpus passed before these controls; its git status was clean
+afterward. These are single-run mutation controls, not a mutation coverage claim.
