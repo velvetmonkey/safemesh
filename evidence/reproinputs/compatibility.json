@@ -1,0 +1,133 @@
+{
+  "manifest_format": 1,
+  "identity_source_base_sha": "8911fc0f060a8e8db222243cf87694b8e79a0801",
+  "identities": [
+    {
+      "identity": "package safemesh-crdt",
+      "value": "0.1.0",
+      "source": "rust/crates/safemesh-crdt/Cargo.toml:6"
+    },
+    {
+      "identity": "package safemesh-ffi",
+      "value": "0.1.0",
+      "source": "rust/crates/safemesh-ffi/Cargo.toml:3"
+    },
+    {
+      "identity": "package safemesh-python",
+      "value": "0.1.0",
+      "source": "rust/crates/safemesh-python/Cargo.toml:3"
+    },
+    {
+      "identity": "package safemesh-wasm",
+      "value": "0.1.0",
+      "source": "rust/crates/safemesh-wasm/Cargo.toml:3"
+    },
+    {
+      "identity": "event-log frame tag",
+      "value": "0x03",
+      "source": "rust/crates/safemesh-crdt/src/lib.rs:1440"
+    },
+    {
+      "identity": "payload schema",
+      "value": "safemesh/gcounter-delta/v1",
+      "source": "rust/crates/safemesh-crdt/src/lib.rs:1500"
+    },
+    {
+      "identity": "payload schema",
+      "value": "safemesh/pncounter-delta/v1",
+      "source": "rust/crates/safemesh-crdt/src/lib.rs:1501"
+    },
+    {
+      "identity": "payload schema",
+      "value": "safemesh/gset-u64/v1",
+      "source": "rust/crates/safemesh-crdt/src/lib.rs:1502"
+    },
+    {
+      "identity": "payload schema",
+      "value": "safemesh/orset-delta-u64-u64/v1",
+      "source": "rust/crates/safemesh-crdt/src/lib.rs:1503"
+    },
+    {
+      "identity": "payload schema",
+      "value": "safemesh/orset-delta-utf8-u64/v1",
+      "source": "rust/crates/safemesh-crdt/src/lib.rs:1504"
+    },
+    {
+      "identity": "payload schema",
+      "value": "safemesh/orset-u64-u64/v1",
+      "source": "rust/crates/safemesh-crdt/src/lib.rs:1505"
+    },
+    {
+      "identity": "payload schema",
+      "value": "safemesh/rga-u64-u64/v1",
+      "source": "rust/crates/safemesh-crdt/src/lib.rs:1506"
+    },
+    {
+      "identity": "payload schema",
+      "value": "safemesh/lww-register-delta-u64/v1",
+      "source": "rust/crates/safemesh-crdt/src/lib.rs:1509"
+    },
+    {
+      "identity": "payload schema",
+      "value": "safemesh/lww-register-u64/v1",
+      "source": "rust/crates/safemesh-crdt/src/lib.rs:1512"
+    },
+    {
+      "identity": "payload schema",
+      "value": "safemesh/enable-wins-flag-delta-u64/v1",
+      "source": "rust/crates/safemesh-crdt/src/lib.rs:1515"
+    },
+    {
+      "identity": "payload schema",
+      "value": "safemesh/enable-wins-flag-u64/v1",
+      "source": "rust/crates/safemesh-crdt/src/lib.rs:1520"
+    },
+    {
+      "identity": "payload schema",
+      "value": "safemesh/lww-map-delta-u64-u64/v1",
+      "source": "rust/crates/safemesh-crdt/src/lib.rs:1523"
+    },
+    {
+      "identity": "payload schema",
+      "value": "safemesh/lww-map-u64-u64/v1",
+      "source": "rust/crates/safemesh-crdt/src/lib.rs:1524"
+    },
+    {
+      "identity": "record schema prefix",
+      "value": "safemesh/record/v1/",
+      "source": "rust/crates/safemesh-crdt/src/lib.rs:1528"
+    },
+    {
+      "identity": "event-log schema prefix",
+      "value": "safemesh/event-log/v2/",
+      "source": "rust/crates/safemesh-crdt/src/lib.rs:1536"
+    },
+    {
+      "identity": "durable transaction wrapper version",
+      "value": null,
+      "status": "unversioned: no explicit version field",
+      "layout": "three little-endian u64 values (writers, writer, last_sequence), then event-log bytes",
+      "source": "rust/crates/safemesh-crdt/src/local.rs:357",
+      "reader": "rust/crates/safemesh-crdt/src/local.rs:298"
+    }
+  ],
+  "bootstrap": [
+    {
+      "source_sha": "3a9179b0cd98ae7e5c6803a6de014416320929ba",
+      "kind": "bootstrap, not a release",
+      "compatibility_tested_this_lane": false
+    }
+  ],
+  "supported_releases": [],
+  "supported_set_note": "Empty: both GitHub queries returned []; bootstrap is not a supported release.",
+  "queries": [
+    {
+      "command": "gh api repos/velvetmonkey/safemesh/releases --paginate",
+      "result": []
+    },
+    {
+      "command": "gh api repos/velvetmonkey/safemesh/tags --paginate",
+      "result": []
+    }
+  ]
+}

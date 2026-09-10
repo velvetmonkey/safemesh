@@ -1,0 +1,6 @@
+wasm-bindgen 0.2.128
+dc9e4f1e03996c26fb8bfedfded73d81120a37251c3f19eb87bb460f1f89a5be  /home/monkey/.cache/.wasm-pack/wasm-bindgen-4f04094f43ba0220/wasm-bindgen
+wasm-bindgen 0.2.126
+d8d94635b40d1d8a93562fc7ced6093488252600dba39ce1dbab410b89157d8b  /home/monkey/.cache/.wasm-pack/wasm-bindgen-8b0e612a116397d6/wasm-bindgen
+wasm-opt version 117 (version_117)
+621b5a984f16d0323ea7aa8b389ac9ccda0950ddee5de0e99292970129f571ed  /home/monkey/.cache/.wasm-pack/wasm-opt-1ceaaea8b7b5f7e0/bin/wasm-opt

@@ -1,0 +1,2 @@
+   Compiling safemesh-crdt v0.1.0 (/home/monkey/scratch/reproinputs/work/rust/crates/safemesh-crdt)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.76s

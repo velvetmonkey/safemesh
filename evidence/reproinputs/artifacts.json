@@ -1,0 +1,246 @@
+{
+  "source_sha": "59413b1ec2dcb8ea9c3351eaf13a37e8970abb51",
+  "environments": "same machine, distinct initially clean source worktrees and target directories; different absolute path and build time; shared registry and distribution tool caches",
+  "suppression_used": "none: no SOURCE_DATE_EPOCH, path remapping, stripping or no-opt was introduced",
+  "artifacts": [
+    {
+      "name": "rust/safemesh-crdt-0.1.0.crate",
+      "a": {
+        "path": "/home/monkey/scratch/reproinputs/clean-a/rust/target/package/safemesh-crdt-0.1.0.crate",
+        "sha256": "618fffaf0040c3903960d6be09d45a3359da53d8ece00d3dd68668a588f697d9",
+        "bytes": 81118
+      },
+      "b": {
+        "path": "/home/monkey/scratch/reproinputs/clean-b/rust/target/package/safemesh-crdt-0.1.0.crate",
+        "sha256": "618fffaf0040c3903960d6be09d45a3359da53d8ece00d3dd68668a588f697d9",
+        "bytes": 81118
+      },
+      "identical": true
+    },
+    {
+      "name": "c/libsafemesh_ffi.a",
+      "a": {
+        "path": "/home/monkey/scratch/reproinputs/clean-a/rust/target/x86_64-unknown-linux-gnu/release/libsafemesh_ffi.a",
+        "sha256": "ae28e431d0ed24dd6c5afb70640af45af47a80497e985cf79077f6e1d36ccef0",
+        "bytes": 22251750
+      },
+      "b": {
+        "path": "/home/monkey/scratch/reproinputs/clean-b/rust/target/x86_64-unknown-linux-gnu/release/libsafemesh_ffi.a",
+        "sha256": "ae28e431d0ed24dd6c5afb70640af45af47a80497e985cf79077f6e1d36ccef0",
+        "bytes": 22251750
+      },
+      "identical": true
+    },
+    {
+      "name": "c/libsafemesh_ffi.so",
+      "a": {
+        "path": "/home/monkey/scratch/reproinputs/clean-a/rust/target/x86_64-unknown-linux-gnu/release/libsafemesh_ffi.so",
+        "sha256": "8edb4f8695d6d84098be359f76f854d0c7cc46bc007c22af730ff16fae0ceabd",
+        "bytes": 442648
+      },
+      "b": {
+        "path": "/home/monkey/scratch/reproinputs/clean-b/rust/target/x86_64-unknown-linux-gnu/release/libsafemesh_ffi.so",
+        "sha256": "8edb4f8695d6d84098be359f76f854d0c7cc46bc007c22af730ff16fae0ceabd",
+        "bytes": 442648
+      },
+      "identical": true
+    },
+    {
+      "name": "c/safemesh.h",
+      "a": {
+        "path": "/home/monkey/scratch/reproinputs/clean-a/rust/crates/safemesh-ffi/include/safemesh.h",
+        "sha256": "0091be47b2f1fb17e208afbd7f34906916479ff34f4a24e8356e98d82587af5e",
+        "bytes": 6910
+      },
+      "b": {
+        "path": "/home/monkey/scratch/reproinputs/clean-b/rust/crates/safemesh-ffi/include/safemesh.h",
+        "sha256": "0091be47b2f1fb17e208afbd7f34906916479ff34f4a24e8356e98d82587af5e",
+        "bytes": 6910
+      },
+      "identical": true
+    },
+    {
+      "name": "python/safemesh_python-0.1.0-cp38-abi3-manylinux_2_34_x86_64.whl",
+      "a": {
+        "path": "/home/monkey/scratch/reproinputs/artifacts-a/wheels/safemesh_python-0.1.0-cp38-abi3-manylinux_2_34_x86_64.whl",
+        "sha256": "2747f1625634ff041815b8025bcc55cd4ecaa500830c822e77f8d5efc8969839",
+        "bytes": 358438
+      },
+      "b": {
+        "path": "/home/monkey/scratch/reproinputs/artifacts-b/wheels/safemesh_python-0.1.0-cp38-abi3-manylinux_2_34_x86_64.whl",
+        "sha256": "451c81e2fe83769063c538102e632e21fc10f7bd5bc51a27da6280f732747d5d",
+        "bytes": 358441
+      },
+      "identical": false
+    },
+    {
+      "name": "js-bundler/safemesh-wasm-0.1.0.tgz",
+      "a": {
+        "path": "/home/monkey/scratch/reproinputs/artifacts-a/safemesh-wasm-0.1.0.tgz",
+        "sha256": "40d65bce0a4152be42e7b1214113b6645f8538d9a12673b0f709917da14e4342",
+        "bytes": 80827
+      },
+      "b": {
+        "path": "/home/monkey/scratch/reproinputs/artifacts-b/safemesh-wasm-0.1.0.tgz",
+        "sha256": "40d65bce0a4152be42e7b1214113b6645f8538d9a12673b0f709917da14e4342",
+        "bytes": 80827
+      },
+      "identical": true
+    },
+    {
+      "name": "js-node/safemesh-wasm-0.1.0.tgz",
+      "a": {
+        "path": "/home/monkey/scratch/reproinputs/artifacts-a/node-tar/safemesh-wasm-0.1.0.tgz",
+        "sha256": "d66107ed0ab7cd878592fe1ec779777f8d80614c97bcacca19e7dd27165f580a",
+        "bytes": 80772
+      },
+      "b": {
+        "path": "/home/monkey/scratch/reproinputs/artifacts-b/node-tar/safemesh-wasm-0.1.0.tgz",
+        "sha256": "d66107ed0ab7cd878592fe1ec779777f8d80614c97bcacca19e7dd27165f580a",
+        "bytes": 80772
+      },
+      "identical": true
+    }
+  ],
+  "identical": 6,
+  "differing": 1,
+  "diagnostics": [
+    {
+      "artifact": "c/libsafemesh_ffi.a",
+      "a_embeds_own_path": false,
+      "b_embeds_own_path": false
+    },
+    {
+      "artifact": "c/libsafemesh_ffi.so",
+      "a_embeds_own_path": false,
+      "b_embeds_own_path": false
+    },
+    {
+      "artifact": "python/safemesh_python-0.1.0-cp38-abi3-manylinux_2_34_x86_64.whl",
+      "zip_members": [
+        {
+          "member": "safemesh_python/__init__.py",
+          "content_identical": true,
+          "a_timestamp": [
+            1980,
+            1,
+            1,
+            0,
+            0,
+            0
+          ],
+          "b_timestamp": [
+            1980,
+            1,
+            1,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "member": "safemesh_python/safemesh_python.abi3.so",
+          "content_identical": true,
+          "a_timestamp": [
+            1980,
+            1,
+            1,
+            0,
+            0,
+            0
+          ],
+          "b_timestamp": [
+            1980,
+            1,
+            1,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "member": "safemesh_python-0.1.0.dist-info/METADATA",
+          "content_identical": true,
+          "a_timestamp": [
+            1980,
+            1,
+            1,
+            0,
+            0,
+            0
+          ],
+          "b_timestamp": [
+            1980,
+            1,
+            1,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "member": "safemesh_python-0.1.0.dist-info/WHEEL",
+          "content_identical": true,
+          "a_timestamp": [
+            1980,
+            1,
+            1,
+            0,
+            0,
+            0
+          ],
+          "b_timestamp": [
+            1980,
+            1,
+            1,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "member": "safemesh_python-0.1.0.dist-info/sboms/safemesh-python.cyclonedx.json",
+          "content_identical": false,
+          "a_timestamp": [
+            1980,
+            1,
+            1,
+            0,
+            0,
+            0
+          ],
+          "b_timestamp": [
+            1980,
+            1,
+            1,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "member": "safemesh_python-0.1.0.dist-info/RECORD",
+          "content_identical": false,
+          "a_timestamp": [
+            1980,
+            1,
+            1,
+            0,
+            0,
+            0
+          ],
+          "b_timestamp": [
+            1980,
+            1,
+            1,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    }
+  ],
+  "diagnosis": "The wheel SBOM embeds clean-a/clean-b absolute Cargo package paths, different metadata.timestamp values and different serialNumber UUIDs. These alter the SBOM and its RECORD hash; all other uncompressed wheel members, including the extension binary, match. ZIP timestamps are identical (1980-01-01).",
+  "reproducible": "no"
+}
