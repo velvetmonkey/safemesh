@@ -4,8 +4,22 @@
 
 use safemesh_ffi::{
     safemesh_bytes_free, safemesh_gcounter_apply_bump, safemesh_gcounter_delta_to_wire,
-    safemesh_gcounter_free, safemesh_gcounter_new, safemesh_gcounter_value,
+    safemesh_gcounter_free, safemesh_gcounter_new, safemesh_gcounter_try_value, SafeMeshGCounter,
+    SafeMeshStatus,
 };
+
+/// Read a total that is expected to fit; the status must be `Ok`.
+///
+/// # Safety
+/// `counter` must be a live handle with no write in progress.
+unsafe fn read_total(counter: *const SafeMeshGCounter) -> u64 {
+    let mut total = 0u64;
+    assert_eq!(
+        safemesh_gcounter_try_value(counter, &mut total),
+        SafeMeshStatus::Ok
+    );
+    total
+}
 
 #[test]
 fn c_abi_gcounter_smoke_test() {
@@ -16,7 +30,7 @@ fn c_abi_gcounter_smoke_test() {
     unsafe {
         assert!(safemesh_gcounter_apply_bump(counter, 1, 5));
         assert!(safemesh_gcounter_apply_bump(counter, 1, 2));
-        assert_eq!(safemesh_gcounter_value(counter), 5);
+        assert_eq!(read_total(counter), 5);
         safemesh_gcounter_free(counter);
     }
 }
@@ -34,23 +48,51 @@ fn c_abi_exports_wire_bytes() {
     }
 }
 
+/// F3 at the C boundary: a total past `UINT64_MAX` is reported, never written narrowed.
+#[test]
+fn c_abi_value_reports_overflow_instead_of_a_wrapped_total() {
+    let counter = safemesh_gcounter_new(2);
+    // SAFETY: live handle from `safemesh_gcounter_new`, one thread, freed once at the end.
+    unsafe {
+        assert!(safemesh_gcounter_apply_bump(counter, 0, u64::MAX));
+        assert_eq!(read_total(counter), u64::MAX);
+        assert!(safemesh_gcounter_apply_bump(counter, 1, 1));
+        let mut total = 7u64;
+        assert_eq!(
+            safemesh_gcounter_try_value(counter, &mut total),
+            SafeMeshStatus::ValueOverflow
+        );
+        assert_eq!(total, 7, "out must be untouched on overflow");
+        assert_eq!(
+            safemesh_gcounter_try_value(counter, core::ptr::null_mut()),
+            SafeMeshStatus::NullPointer
+        );
+        assert_eq!(
+            safemesh_gcounter_try_value(core::ptr::null(), &mut total),
+            SafeMeshStatus::NullPointer
+        );
+        assert_eq!(total, 7);
+        safemesh_gcounter_free(counter);
+    }
+}
+
 #[test]
 fn checked_coordinate_reports_error_and_retains_silent_path() {
-    use safemesh_ffi::{safemesh_gcounter_try_apply_bump, SafeMeshStatus};
+    use safemesh_ffi::safemesh_gcounter_try_apply_bump;
     unsafe {
         let counter = safemesh_gcounter_new(2);
         assert_eq!(
             safemesh_gcounter_try_apply_bump(counter, 2, 9),
             SafeMeshStatus::ReplicaOutOfRange
         );
-        assert_eq!(safemesh_gcounter_value(counter), 0);
+        assert_eq!(read_total(counter), 0);
         assert!(safemesh_gcounter_apply_bump(counter, 2, 9));
-        assert_eq!(safemesh_gcounter_value(counter), 0);
+        assert_eq!(read_total(counter), 0);
         assert_eq!(
             safemesh_gcounter_try_apply_bump(counter, 1, 9),
             SafeMeshStatus::Ok
         );
-        assert_eq!(safemesh_gcounter_value(counter), 9);
+        assert_eq!(read_total(counter), 9);
         assert_eq!(
             safemesh_gcounter_try_apply_bump(core::ptr::null_mut(), 2, 9),
             SafeMeshStatus::NullPointer

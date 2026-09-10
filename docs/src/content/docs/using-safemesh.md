@@ -64,16 +64,22 @@ Include `rust/crates/safemesh-ffi/include/safemesh.h` in your C project and link
 ```c
 #include "safemesh.h"
 
-uint64_t example_counter(void) {
+SafeMeshStatus example_counter(uint64_t *out) {
     SafeMeshGCounter *counter = safemesh_gcounter_new(2);
     SafeMeshStatus status = safemesh_gcounter_try_apply_bump(counter, 0, 3);
-    uint64_t value = status == 0 ? safemesh_gcounter_value(counter) : 0;
+    if (status == Ok) {
+        status = safemesh_gcounter_try_value(counter, out);
+    }
     safemesh_gcounter_free(counter);
-    return value;
+    return status;
 }
 ```
 
-Check status values: `Ok` is 0, `NullPointer` is 1, and `ReplicaOutOfRange` is 2 for this checked bump function. Release each owned handle once. OR-Set queries return owned `SafeMeshU64s` arrays, released with `safemesh_u64s_free`; sets use `safemesh_orset_free`. The caller supplies fresh set tokens. [Evidence: FFI contract](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-ffi/README.md) and [header](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-ffi/include/safemesh.h).
+Check status values: `Ok` is 0, `NullPointer` is 1, and `ReplicaOutOfRange` is 2 for this checked bump function. The checked read returns `ValueOverflow` (3) and leaves the output untouched when the true total does not fit `uint64_t`, so a C caller never receives a wrapped total.
+
+Only use the output when the returned status is `Ok`; on any other status, report the error and do not produce a number. Every `uint64_t` value, including zero and `UINT64_MAX`, is a legitimate total, so there is no numeric sentinel for failure. If you copied the earlier `example_counter(void)` snippet that returned zero on error, replace it with this status-returning version and update its callers to check the status before using the output.
+
+Release each owned handle once. OR-Set queries return owned `SafeMeshU64s` arrays, released with `safemesh_u64s_free`; sets use `safemesh_orset_free`. The caller supplies fresh set tokens. [Evidence: FFI contract](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-ffi/README.md) and [header](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-ffi/include/safemesh.h).
 
 The C ABI has carrier operations and a G-Counter delta-to-wire helper, **no replica/event-log surface**. Do not assume the Python or WASM record-exchange examples translate directly to C. The documented repository checks call ABI functions from Rust and check header drift; those checks do not contain an external C compile/link/run test. [Evidence: root surface description](https://github.com/velvetmonkey/safemesh/blob/main/README.md) and [FFI assurance scope](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-ffi/README.md#claim-boundary).
 
@@ -99,7 +105,8 @@ const left = new SafeMeshGCounterReplica(1n, 3);
 const right = new SafeMeshGCounterReplica(2n, 3);
 const bytes = left.appendBump(1, 5n);
 right.mergeRecordBytes(bytes); // Your transport carries these bytes.
-left.mergeLogBytes(right.logBytes());
+const admissions = left.mergeLogBytes(right.logBytes());
+console.assert(admissions.join() === "duplicate");
 console.log(left.value(), right.value()); // 5n 5n
 left.free();
 right.free();
@@ -119,9 +126,14 @@ import safemesh_python as sm
 left = sm.GCounterReplica(1, 3)
 right = sm.GCounterReplica(2, 3)
 right.merge_record_bytes(left.append_bump(1, 5))
-left.merge_log_bytes(right.log_bytes())
+admissions = left.merge_log_bytes(right.log_bytes())
+assert admissions == ["duplicate"]
 print(left.value(), right.value())  # 5 5
 ```
+
+The batch merge calls return one `accepted`, `duplicate`, or `collision`
+verdict per input record, in order, so a caller can identify every applied
+record even when a later record collides.
 
 Here the Python calls hand bytes directly between two in-process objects; your application must move those bytes across its actual transport. `GCounter.try_apply_bump` raises `IndexError` for an invalid coordinate without changing state. Numeric `OrSet` operations take unsigned 64-bit elements and tokens; allocate fresh replica-unique tokens for adds. [Evidence: Python quickstart and token contract](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-python/README.md).
 

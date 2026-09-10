@@ -23,6 +23,14 @@
 
       const output = document.querySelector("#output");
 
+      function mergeLog(replica, bytes) {
+        const admissions = replica.mergeLogBytes(bytes);
+        if (admissions.includes("collision")) {
+          throw new Error(`batch collision after admissions=${JSON.stringify(admissions)}`);
+        }
+        return admissions;
+      }
+
       try {
         await init();
 
@@ -34,8 +42,8 @@
 
         left.mergeRecordBytes(rightRecord);
         right.mergeRecordBytes(leftRecord);
-        left.mergeLogBytes(right.logBytes());
-        right.mergeLogBytes(left.logBytes());
+        mergeLog(left, right.logBytes());
+        mergeLog(right, left.logBytes());
 
         const converged = left.value() === 12n && right.value() === 12n;
         output.textContent = `CONVERGED=${converged} browser_wasm_counter=${left.value()} versions=${left.versionFor(1n)}/${right.versionFor(2n)}`;

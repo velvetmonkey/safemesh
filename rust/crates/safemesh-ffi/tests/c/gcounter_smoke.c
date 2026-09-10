@@ -6,6 +6,7 @@
  * Valid ownership only: every handle and buffer is released exactly once.
  * A non-zero exit names the first check that failed.
  */
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -29,9 +30,16 @@ int main(void) {
     if (safemesh_gcounter_try_apply_bump(counter, 0, 4) != Ok) {
         return 6;
     }
-    uint64_t value = safemesh_gcounter_value(counter);
-    if (value != 9) {
+    uint64_t value = 0;
+    if (safemesh_gcounter_try_value(counter, &value) != Ok || value != 9) {
         return 7;
+    }
+    /* A total past UINT64_MAX is reported as ValueOverflow and `value` is left alone. */
+    if (!safemesh_gcounter_apply_bump(counter, 2, UINT64_MAX)) {
+        return 9;
+    }
+    if (safemesh_gcounter_try_value(counter, &value) != ValueOverflow || value != 9) {
+        return 10;
     }
 
     SafeMeshBytes bytes = safemesh_gcounter_delta_to_wire(2, 7);

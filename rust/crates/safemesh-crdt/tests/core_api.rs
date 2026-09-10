@@ -38,6 +38,72 @@ fn counter_traits_preserve_existing_behavior() {
 // coordinates of a wider peer vector. Before the fix, `merge` zipped to the
 // shorter vector, so a 2-replica node merging a 3-replica peer lost replica 2's
 // tally with no signal.
+/// F3, half one: the G-Counter read is the model's unbounded sum, so tallies
+/// whose sum passes `u64::MAX` must read as their true total, never a wrapped
+/// or clamped one. Asserts on the number a caller reads.
+#[test]
+fn gcounter_read_is_exact_past_the_u64_boundary() {
+    let mut g = GCounter::new(2);
+    g.apply_bump(0, u64::MAX);
+    g.apply_bump(1, 1);
+    assert_eq!(g.value(), u128::from(u64::MAX) + 1);
+
+    let mut halves = GCounter::new(2);
+    halves.apply_bump(0, 1 << 63);
+    halves.apply_bump(1, 1 << 63);
+    assert_eq!(halves.value(), 1u128 << 64);
+
+    // Merge is pointwise max, so it cannot overflow; the merged read is still exact.
+    let mut left = GCounter::new(2);
+    left.apply_bump(0, u64::MAX);
+    let mut right = GCounter::new(2);
+    right.apply_bump(1, u64::MAX);
+    left.merge(&right);
+    assert_eq!(left.state(), &[u64::MAX, u64::MAX]);
+    assert_eq!(left.value(), 2 * u128::from(u64::MAX));
+
+    // The ordinary small counter reads exactly as before.
+    let mut small = GCounter::new(3);
+    small.apply_bump(0, 3);
+    small.apply_bump(2, 4);
+    assert_eq!(small.value(), 7);
+}
+
+/// F3, half two: the PN-Counter read is the model's integer difference, so a
+/// positive total must never read negative and a side whose sum passes
+/// `u64::MAX` must still read true. Asserts on the number a caller reads.
+#[test]
+fn pncounter_read_keeps_sign_and_width_past_the_i64_boundary() {
+    let mut pn = PnCounter::new(2);
+    pn.apply_inc(0, 1 << 63);
+    assert_eq!(pn.value(), 1i128 << 63);
+    assert!(
+        pn.value() > 0,
+        "a single tally of 2^63 must not read as i64::MIN"
+    );
+
+    let mut wide = PnCounter::new(2);
+    wide.apply_inc(0, u64::MAX);
+    wide.apply_dec(1, 1);
+    assert_eq!(wide.value(), i128::from(u64::MAX) - 1);
+
+    let mut summed = PnCounter::new(2);
+    summed.apply_inc(0, u64::MAX);
+    summed.apply_inc(1, 1);
+    assert_eq!(summed.value(), i128::from(u64::MAX) + 1);
+
+    let mut negative = PnCounter::new(2);
+    negative.apply_dec(0, u64::MAX);
+    negative.apply_dec(1, u64::MAX);
+    assert_eq!(negative.value(), -2 * i128::from(u64::MAX));
+
+    // The ordinary small counter reads exactly as before.
+    let mut small = PnCounter::new(3);
+    small.apply_inc(0, 3);
+    small.apply_dec(1, 7);
+    assert_eq!(small.value(), -4);
+}
+
 #[test]
 fn gcounter_try_merge_rejects_replica_count_mismatch() {
     let mut narrow = GCounter::new(2);

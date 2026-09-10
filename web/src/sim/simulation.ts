@@ -237,10 +237,10 @@ export function convergence(sim: Simulation): {
     (peer) => replicaFor(peer, sim.peers.length).sameStateAs(firstReplica) && orsetStateKey(peer) === orsetStateKey(first),
   )
   const sameRawState = rawStateMatches.every(Boolean)
-  const firstGRead = Number(firstReplica.value())
+  const firstGRead = counterNumber(firstReplica.value())
   const firstORead = JSON.stringify(readORSet(first.orset))
   const readMatches = sim.peers.map(
-    (peer) => Number(replicaFor(peer, sim.peers.length).value()) === firstGRead && JSON.stringify(readORSet(peer.orset)) === firstORead,
+    (peer) => counterNumber(replicaFor(peer, sim.peers.length).value()) === firstGRead && JSON.stringify(readORSet(peer.orset)) === firstORead,
   )
   const sameReads = readMatches.every(Boolean)
 
@@ -251,7 +251,7 @@ export function convergence(sim: Simulation): {
     rawStateMatches,
     readMatches,
     gcounterValue: firstGRead,
-    gcounterValues: sim.peers.map((peer) => Number(replicaFor(peer, sim.peers.length).value())),
+    gcounterValues: sim.peers.map((peer) => counterNumber(replicaFor(peer, sim.peers.length).value())),
     orsetElements: readORSet(first.orset),
   }
 }
@@ -422,13 +422,13 @@ function applyDeltaToPeer(peer: Peer, delta: MeshDelta): Peer {
   if (delta.kind === 'gcounter.bump') {
     const counter = replicaFor(peer, peer.gcounter.length)
     if (delta.payload === 'record') counter.mergeRecordBytes(delta.bytes)
-    else counter.mergeLogBytes(delta.bytes)
+    else mergeLogBytes(counter, delta.bytes)
     return snapshotGCounterPeer(peer, counter)
   }
   const replica = orsetReplicaFor(peer)
   try {
     if (delta.payload === 'record') replica.mergeRecordBytes(delta.bytes)
-    else replica.mergeLogBytes(delta.bytes)
+    else mergeLogBytes(replica, delta.bytes)
     return { ...peer, orset: replica.logBytes() }
   } finally {
     replica.free()
@@ -460,15 +460,15 @@ function runAntiEntropy(sim: Simulation): Simulation {
 
       const leftCounter = replicaFor(left, peers.length)
       const rightCounter = replicaFor(right, peers.length)
-      leftCounter.mergeLogBytes(rightCounter.logBytes())
-      rightCounter.mergeLogBytes(leftCounter.logBytes())
+      mergeLogBytes(leftCounter, rightCounter.logBytes())
+      mergeLogBytes(rightCounter, leftCounter.logBytes())
       const leftSet = orsetReplicaFor(left)
       const rightSet = orsetReplicaFor(right)
       let leftLog: Uint8Array
       let rightLog: Uint8Array
       try {
-        leftSet.mergeLogBytes(rightSet.logBytes())
-        rightSet.mergeLogBytes(leftSet.logBytes())
+        mergeLogBytes(leftSet, rightSet.logBytes())
+        mergeLogBytes(rightSet, leftSet.logBytes())
         leftLog = leftSet.logBytes()
         rightLog = rightSet.logBytes()
       } finally {
@@ -537,7 +537,7 @@ function buildAntiEntropyPackets(sim: Simulation): { packets: Packet[]; nextId: 
         delta: {
           kind: 'gcounter.bump',
           replica: source.id,
-          tally: Number(sourceCounter.value()),
+          tally: counterNumber(sourceCounter.value()),
           bytes: sourceCounter.logBytes(),
           payload: 'log',
         },
@@ -599,7 +599,7 @@ function backfillDescriptions(
 function orsetReplicaFor(peer: Pick<Peer, 'id' | 'orset'>): SafeMeshStringOrSetReplica {
   const replica = new SafeMeshStringOrSetReplica(BigInt(peer.id))
   try {
-    if (peer.orset.length > 0) replica.mergeLogBytes(peer.orset)
+    if (peer.orset.length > 0) mergeLogBytes(replica, peer.orset)
     return replica
   } catch (error) {
     replica.free()
@@ -656,16 +656,26 @@ function emptyGCounterPeer(id: number, replicas: number): Pick<Peer, 'gcounter' 
 
 function replicaFor(peer: Peer, replicas: number): SafeMeshGCounterReplica {
   const replica = new SafeMeshGCounterReplica(BigInt(peer.id), replicas)
-  if (peer.gcounterLog.length > 0) replica.mergeLogBytes(peer.gcounterLog)
+  if (peer.gcounterLog.length > 0) mergeLogBytes(replica, peer.gcounterLog)
   return replica
+}
+
+function mergeLogBytes(
+  replica: { mergeLogBytes(bytes: Uint8Array): Array<'accepted' | 'duplicate' | 'collision'> },
+  bytes: Uint8Array,
+): void {
+  const admissions = replica.mergeLogBytes(bytes)
+  if (admissions.includes('collision')) {
+    throw new Error(`batch collision after admissions=${JSON.stringify(admissions)}`)
+  }
 }
 
 function snapshotGCounterPeer(peer: Peer, counter: SafeMeshGCounterReplica): Peer {
   return {
     ...peer,
-    gcounter: Array.from(counter.state(), Number),
+    gcounter: Array.from(counter.state(), counterNumber),
     gcounterLog: counter.logBytes(),
-    localTally: Math.max(peer.localTally, Number(counter.state()[peer.id] ?? 0n)),
+    localTally: Math.max(peer.localTally, counterNumber(counter.state()[peer.id] ?? 0n)),
   }
 }
 
@@ -717,4 +727,13 @@ function plainDrop(packet: Packet): string {
   }
   if (packet.delta.kind === 'orset.log') return `Camp ${packet.to} missed supply records (signal dropped)`
   return `Camp ${packet.to} missed removal notes (signal dropped)`
+}
+
+// The UI uses numbers; refuse a counter read that cannot be represented safely.
+function counterNumber(total: bigint): number {
+  const value = Number(total)
+  if (!Number.isSafeInteger(value)) {
+    throw new RangeError('Counter value exceeds the safe integer range; no numeric read is available')
+  }
+  return value
 }

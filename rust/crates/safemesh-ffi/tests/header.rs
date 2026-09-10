@@ -20,6 +20,10 @@ typedef enum SafeMeshStatus {
   Ok = 0,
   NullPointer = 1,
   ReplicaOutOfRange = 2,
+  /**
+   * The true counter total does not fit the 64-bit output; nothing was written.
+   */
+  ValueOverflow = 3,
 } SafeMeshStatus;
 
 typedef struct SafeMeshGCounter SafeMeshGCounter;
@@ -76,16 +80,21 @@ void safemesh_gcounter_free(struct SafeMeshGCounter *counter);
 bool safemesh_gcounter_apply_bump(struct SafeMeshGCounter *counter, size_t replica, uint64_t tally);
 
 /**
- * Read the counter total. A null handle reads as 0.
+ * Read the counter total into `out`. Returns `Ok` after writing the true total;
+ * `NullPointer` for a null handle or a null `out`; `ValueOverflow` when the true total does
+ * not fit in `uint64_t`. On any status other than `Ok`, `out` is untouched, so a caller never
+ * receives a wrapped, truncated or clamped total in place of the real one.
  *
  * # Safety
  * `counter` must be null or a live handle returned by `safemesh_gcounter_new` that has not
  * been freed. Concurrent reads may overlap, but no write to the same counter may be in
  * progress during the call. The caller keeps ownership; the handle stays valid after the
- * call. The null check cannot detect a dangling or already-freed pointer; passing one is
- * undefined behaviour.
+ * call. `out` must be null or point to writable, properly aligned `uint64_t` storage that no
+ * other access overlaps during the call. The null checks cannot detect a dangling or
+ * already-freed pointer; passing one is undefined behaviour.
  */
-uint64_t safemesh_gcounter_value(const struct SafeMeshGCounter *counter);
+enum SafeMeshStatus safemesh_gcounter_try_value(const struct SafeMeshGCounter *counter,
+                                                uint64_t *out);
 
 struct SafeMeshBytes safemesh_gcounter_delta_to_wire(size_t replica, uint64_t tally);
 

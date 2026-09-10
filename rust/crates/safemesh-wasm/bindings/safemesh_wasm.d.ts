@@ -12,7 +12,7 @@ export class SafeMeshGCounterReplica {
   constructor(replicaId: bigint, replicas: number);
   appendBump(counterReplica: number, tally: bigint): Uint8Array;
   mergeRecordBytes(bytes: Uint8Array): void;
-  mergeLogBytes(bytes: Uint8Array): void;
+  mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate" | "collision")[];
   logBytes(): Uint8Array;
   versionFor(replica: bigint): bigint;
   value(): bigint;
@@ -57,7 +57,7 @@ export class SafeMeshLwwRegisterReplica {
   constructor(replicaId: bigint);
   appendSet(timestamp: bigint, writerReplica: bigint, value: bigint): Uint8Array;
   mergeRecordBytes(bytes: Uint8Array): void;
-  mergeLogBytes(bytes: Uint8Array): void;
+  mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate" | "collision")[];
   logBytes(): Uint8Array;
   versionFor(replica: bigint): bigint;
   hasValue(): boolean;
@@ -72,7 +72,7 @@ export class SafeMeshLwwMapReplica {
   appendSet(key: bigint, timestamp: bigint, writerReplica: bigint, value: bigint): Uint8Array;
   appendRemove(key: bigint, timestamp: bigint, writerReplica: bigint): Uint8Array;
   mergeRecordBytes(bytes: Uint8Array): void;
-  mergeLogBytes(bytes: Uint8Array): void;
+  mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate" | "collision")[];
   logBytes(): Uint8Array;
   versionFor(replica: bigint): bigint;
   hasKey(key: bigint): boolean;
@@ -88,7 +88,7 @@ export class SafeMeshEnableWinsFlagReplica {
   appendEnable(token: bigint): Uint8Array;
   appendDisableObserved(): Uint8Array;
   mergeRecordBytes(bytes: Uint8Array): void;
-  mergeLogBytes(bytes: Uint8Array): void;
+  mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate" | "collision")[];
   logBytes(): Uint8Array;
   versionFor(replica: bigint): bigint;
   value(): boolean;
@@ -102,7 +102,7 @@ export class SafeMeshStringOrSetReplica {
   appendAdd(element: string, token: bigint): Uint8Array;
   appendRemoveObserved(element: string): Uint8Array;
   mergeRecordBytes(bytes: Uint8Array): "accepted" | "duplicate";
-  mergeLogBytes(bytes: Uint8Array): void;
+  mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate" | "collision")[];
   logBytes(): Uint8Array;
   versionFor(replica: bigint): bigint;
   elements(): string[];

@@ -10,7 +10,8 @@ pub fn calls_with_unsafe() -> u64 {
     // SAFETY: fresh live handle and buffer, each used on this thread and released exactly once.
     unsafe {
         safemesh_ffi::safemesh_gcounter_apply_bump(counter, 0, 1);
-        let value = safemesh_ffi::safemesh_gcounter_value(counter);
+        let mut value = 0u64;
+        safemesh_ffi::safemesh_gcounter_try_value(counter, &mut value);
         safemesh_ffi::safemesh_bytes_free(bytes);
         safemesh_ffi::safemesh_gcounter_free(counter);
         value

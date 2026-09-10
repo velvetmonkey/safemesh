@@ -38,7 +38,7 @@ right = sm.GCounterReplica(2, 3)
 record = left.append_bump(1, 5)
 assert isinstance(record, bytes)
 right.merge_record_bytes(record)
-left.merge_log_bytes(right.log_bytes())
+assert left.merge_log_bytes(right.log_bytes()) == ["duplicate"]
 assert left.value() == right.value() == 5
 
 reg_left = sm.LwwRegisterReplica(1)
@@ -47,7 +47,7 @@ reg_record = reg_left.append_set(10, 1, 100)
 assert isinstance(reg_record, bytes)
 reg_right.merge_record_bytes(reg_record)
 reg_right.append_set(10, 2, 200)
-reg_left.merge_log_bytes(reg_right.log_bytes())
+assert reg_left.merge_log_bytes(reg_right.log_bytes()) == ["duplicate", "accepted"]
 assert reg_left.value_or(0) == reg_right.value_or(0) == 200
 
 flag_left = sm.EnableWinsFlagReplica(1)
@@ -58,7 +58,7 @@ flag_right.merge_record_bytes(flag_record)
 flag_remove = flag_right.append_disable_observed()
 flag_left.append_enable(11)
 flag_left.merge_record_bytes(flag_remove)
-flag_right.merge_log_bytes(flag_left.log_bytes())
+assert flag_right.merge_log_bytes(flag_left.log_bytes()) == ["duplicate", "accepted", "duplicate"]
 assert flag_left.value() == flag_right.value() is True
 
 map_left = sm.LwwMapReplica(1)
@@ -69,7 +69,7 @@ map_right.merge_record_bytes(map_record)
 map_remove = map_right.append_remove(7, 11, 2)
 map_left.append_set(7, 12, 1, 300)
 map_left.merge_record_bytes(map_remove)
-map_right.merge_log_bytes(map_left.log_bytes())
+assert map_right.merge_log_bytes(map_left.log_bytes()) == ["duplicate", "accepted", "duplicate"]
 assert map_left.value_or(7, 0) == map_right.value_or(7, 0) == 300
 
 print("PYTHON_INSTALL_SMOKE=true")
