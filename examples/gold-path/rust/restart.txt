@@ -1,0 +1,4 @@
+restored counter=3 members=[compass]
+synced counter=6 members=[compass,map,rope] records=3+3
+malformed record: UnexpectedEof
+cleaned exercise stores
