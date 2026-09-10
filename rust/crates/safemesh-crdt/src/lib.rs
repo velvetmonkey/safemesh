@@ -414,6 +414,11 @@ impl Mergeable for PnCounter {
 impl Crdt for PnCounter {
     type Delta = PnCounterDelta;
 
+    fn validate_record(&self, id: RecordId, delta: &Self::Delta) -> Result<(), WireError> {
+        ownership::check_counter_record(self.p.len(), id, delta)
+            .map_err(|_| WireError::OwnershipViolation)
+    }
+
     fn replica_count(&self) -> Option<usize> {
         Some(self.p.len())
     }

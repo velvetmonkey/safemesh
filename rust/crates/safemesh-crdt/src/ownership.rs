@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Transcription of SafeMesh.RecordKernel ownership rules. The existing Lean
 //! corpus binds these decisions to their specification; no Lean runtime is used.
-use crate::{GCounterDelta, OrSetDelta, RecordId};
+use crate::{GCounterDelta, OrSetDelta, PnCounterDelta, RecordId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WriterConfig {
@@ -84,6 +84,15 @@ impl OwnedDelta for GCounterDelta {
         OwnedPayload::Counter(self.replica as u64)
     }
 }
+impl OwnedDelta for PnCounterDelta {
+    fn owned_payload(&self) -> OwnedPayload {
+        match self {
+            Self::Inc { replica, .. } | Self::Dec { replica, .. } => {
+                OwnedPayload::Counter(*replica as u64)
+            }
+        }
+    }
+}
 impl<T> OwnedDelta for OrSetDelta<T, u64> {
     fn owned_payload(&self) -> OwnedPayload {
         match self {
@@ -95,10 +104,10 @@ impl<T> OwnedDelta for OrSetDelta<T, u64> {
 
 /// Checked counter boundary for existing, unfenced replica adapters. This does
 /// not grant fencing: it checks the record author's coordinate before admission.
-pub fn check_counter_record(
+pub fn check_counter_record<D: OwnedDelta>(
     writers: usize,
     id: RecordId,
-    delta: &GCounterDelta,
+    delta: &D,
 ) -> Result<(), Refused> {
     let ctx = WriteContext {
         config: WriterConfig {

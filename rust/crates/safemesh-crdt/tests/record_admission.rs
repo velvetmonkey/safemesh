@@ -1,6 +1,6 @@
 use safemesh_crdt::{
-    Admission, AppendError, Crdt, EventLog, GCounter, GCounterDelta, Record, RecordId, WireDecode,
-    WireEncode,
+    Admission, AppendError, Crdt, EventLog, GCounter, GCounterDelta, PnCounter, PnCounterDelta,
+    Record, RecordId, WireDecode, WireEncode,
 };
 fn record(sequence: u64, tally: u64) -> Record<GCounterDelta> {
     Record {
@@ -383,6 +383,57 @@ fn existing_counter_loader_refuses_foreign_coordinate_history() {
     );
     assert_eq!(state, GCounter::new(2));
     assert_eq!(log.to_wire_bytes().unwrap(), bytes);
+}
+
+#[test]
+fn pn_counter_loader_refuses_out_of_range_coordinate() {
+    let state = PnCounter::new(2);
+    let mut log = EventLog::for_crdt(&state);
+    let bad = Record {
+        id: RecordId {
+            replica: 0,
+            sequence: 1,
+        },
+        delta: PnCounterDelta::Inc {
+            replica: 2,
+            tally: 7,
+        },
+    };
+    assert_eq!(log.insert_record(bad), Admission::Accepted);
+    let bytes = log.to_wire_bytes().unwrap();
+    let loaded = EventLog::<PnCounterDelta>::from_wire_bytes_for(&bytes, &state);
+    let mut replay = PnCounter::new(2);
+    let before = replay.value();
+    if let Ok(loaded) = &loaded {
+        for record in loaded.records() {
+            replay.apply_delta(record.delta.clone());
+        }
+    }
+    let after = replay.value();
+    println!(
+        "LOADER NOW REFUSES {} ERROR {:?} VALUE BEFORE {} AFTER {}",
+        loaded.is_err(),
+        loaded.as_ref().err(),
+        before,
+        after
+    );
+    assert_eq!(loaded, Err(safemesh_crdt::WireError::OwnershipViolation));
+    assert_eq!(before, 0);
+    assert_eq!(after, 0);
+
+    let mut valid_log = EventLog::for_crdt(&state);
+    valid_log.insert_record(Record {
+        id: RecordId {
+            replica: 0,
+            sequence: 1,
+        },
+        delta: PnCounterDelta::Inc {
+            replica: 0,
+            tally: 7,
+        },
+    });
+    let valid_bytes = valid_log.to_wire_bytes().unwrap();
+    assert!(EventLog::<PnCounterDelta>::from_wire_bytes_for(&valid_bytes, &state).is_ok());
 }
 
 #[test]
