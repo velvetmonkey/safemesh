@@ -12,6 +12,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      - name: Install declared Rust floor
+        id: floor
+        run: |
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("rust/Cargo.toml", "rb"))["workspace"]["package"]["rust-version"])')"
+          rustup toolchain install "$version" --profile minimal
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Test workspace and laws at declared Rust floor
+        working-directory: rust
+        run: cargo "+${{ steps.floor.outputs.version }}" test --workspace --features safemesh-crdt/laws --locked
+
       - name: Cache Lean toolchain and build artifacts
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
