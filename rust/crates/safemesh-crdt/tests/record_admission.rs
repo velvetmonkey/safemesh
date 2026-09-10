@@ -384,3 +384,290 @@ fn existing_counter_loader_refuses_foreign_coordinate_history() {
     assert_eq!(state, GCounter::new(2));
     assert_eq!(log.to_wire_bytes().unwrap(), bytes);
 }
+
+#[test]
+fn seqzero_admission_since_population() {
+    use safemesh_crdt::VersionVector;
+    let mut cases = 0;
+    let mut records_tested = 0;
+    let mut missing = 0;
+    let mut refused_returned = 0;
+    let mut wrong_prefix = 0;
+    // Author identity is independent of the prefix comparison. Cover both word
+    // boundaries, positive contiguous histories, and an unacknowledged gap.
+    for author in [0, 1, u64::MAX] {
+        for sequence in [0, 1, 2, 3, u64::MAX - 1, u64::MAX] {
+            for history in [vec![], vec![1], vec![1, 2], vec![2]] {
+                let make = |sequence, tally| Record {
+                    id: RecordId {
+                        replica: author,
+                        sequence,
+                    },
+                    delta: GCounterDelta { replica: 1, tally },
+                };
+                let mut log = EventLog::new();
+                let mut accepted = Vec::new();
+                for seq in history {
+                    let r = make(seq, 5);
+                    assert_eq!(log.insert_record(r.clone()), Admission::Accepted);
+                    accepted.push(r);
+                    records_tested += 1;
+                }
+                let r = make(sequence, 5);
+                let first = log.insert_record(r.clone());
+                if first == Admission::Accepted {
+                    accepted.push(r.clone());
+                } else {
+                    assert_eq!(first, Admission::Duplicate);
+                }
+                assert_eq!(
+                    log.admit_with(r.clone(), |_| panic!("duplicate applied")),
+                    Admission::Duplicate
+                );
+                let refused = make(sequence, 99);
+                assert_eq!(
+                    log.admit_with(refused.clone(), |_| panic!("collision applied")),
+                    Admission::Collision
+                );
+                let all = log.since(&VersionVector::new());
+                missing += accepted.iter().filter(|r| !all.contains(r)).count();
+                refused_returned += all.iter().filter(|r| !accepted.contains(r)).count();
+                // Observe builds only legal prefixes. Another author's prefix
+                // stays nonempty even when this author's entry is absent.
+                for prefix in [0, 1, 2, 3] {
+                    let mut version = VersionVector::new();
+                    for seq in 1..=prefix {
+                        version.observe(RecordId {
+                            replica: author,
+                            sequence: seq,
+                        });
+                    }
+                    version.observe(RecordId {
+                        replica: author.wrapping_add(1),
+                        sequence: 1,
+                    });
+                    let expected: Vec<_> = accepted
+                        .iter()
+                        .filter(|r| r.id.sequence == 0 || r.id.sequence > prefix)
+                        .cloned()
+                        .collect();
+                    let actual = log.since(&version);
+                    wrong_prefix += usize::from(actual != expected);
+                    refused_returned += actual.iter().filter(|r| !accepted.contains(r)).count();
+                }
+                records_tested += 3;
+                cases += 1;
+            }
+        }
+    }
+    println!("RECORDS TESTED {records_tested} BOUNDARY CASES {cases} MISSING {missing} RETURNED BUT REFUSED {refused_returned} WRONG PREFIX {wrong_prefix}");
+    assert_eq!(
+        refused_returned, 0,
+        "since returned a record outside accepted history"
+    );
+    assert_eq!(
+        missing, 0,
+        "accepted records missing from empty-version pull"
+    );
+    assert_eq!(wrong_prefix, 0, "positive-prefix selection changed");
+}
+
+#[test]
+fn seqzero_two_replica_exchange_and_persisted_replay() {
+    use safemesh_crdt::{anti_entropy, InMemoryTransport, TransportAdapter, VersionVector};
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    let mut source = EventLog::with_replica_count(2);
+    let mut source_state = GCounter::new(2);
+    // A zero record has an effect that later positive records do not subsume.
+    for r in [record(0, 7), record(2, 5), record(1, 3)] {
+        assert_eq!(
+            source.admit_with(r, |d| source_state.apply_delta(d.clone())),
+            Admission::Accepted
+        );
+    }
+    let bytes = source.to_wire_bytes().unwrap();
+    let restored = EventLog::<GCounterDelta>::from_wire_bytes(&bytes).unwrap();
+    // The raw record kernel admits zero. The separate owned-counter loader
+    // has always required positive sequences; this version repair does not
+    // broaden that loader's admission contract.
+    assert_eq!(
+        EventLog::<GCounterDelta>::from_wire_bytes_for(&bytes, &GCounter::new(2)),
+        Err(safemesh_crdt::WireError::OwnershipViolation)
+    );
+    assert_eq!(restored, source);
+    assert_eq!(restored.since(&VersionVector::new()), source.records());
+    {
+        let bytes = include_bytes!("fixtures/old-zero.bin");
+        let old = EventLog::<GCounterDelta>::from_wire_bytes(bytes).unwrap();
+        let mut replay = GCounter::new(2);
+        for r in old.records() {
+            replay.apply_delta(r.delta.clone());
+        }
+        assert_eq!(replay.value(), 7);
+        assert_eq!(old.since(&VersionVector::new()), vec![record(0, 7)]);
+        println!("OLDER BUILD persisted zero: read=7 returned=1");
+    }
+    let mut peer = EventLog::with_replica_count(2);
+    let mut peer_state = GCounter::new(2);
+    let mut transport = InMemoryTransport::new();
+    transport.subscribe(0);
+    transport.subscribe(1);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut sender = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut receiver, _) = listener.accept().unwrap();
+    for round in 0..2 {
+        anti_entropy(&mut transport, 0, 1, &restored, peer.version()).unwrap();
+        let envelopes = transport.drain(1);
+        assert_eq!(envelopes.len(), if round == 0 { 1 } else { 0 });
+        assert_eq!(
+            envelopes.iter().map(|e| e.records.len()).sum::<usize>(),
+            if round == 0 { 3 } else { 0 }
+        );
+        for envelope in envelopes {
+            for r in envelope.records {
+                let bytes = r.to_wire_bytes().unwrap();
+                sender.write_all(&bytes).unwrap();
+                let mut received = vec![0; bytes.len()];
+                receiver.read_exact(&mut received).unwrap();
+                let r = Record::<GCounterDelta>::from_wire_bytes(&received).unwrap();
+                assert_eq!(
+                    peer.admit_with(r, |d| peer_state.apply_delta(d.clone())),
+                    if round == 0 {
+                        Admission::Accepted
+                    } else {
+                        Admission::Duplicate
+                    }
+                );
+            }
+        }
+        assert_eq!(peer_state, source_state);
+        assert_eq!(peer.records(), source.records());
+        assert_eq!(peer.version(), source.version());
+    }
+    println!(
+        "TWO REPLICA EXCHANGE CONVERGES true tcp_rounds=2 value={}",
+        peer_state.value()
+    );
+}
+
+#[test]
+fn seqzero_converged_replicas_quiesce_at_scale() {
+    use safemesh_crdt::{anti_entropy, InMemoryTransport, TransportAdapter, VersionVector};
+    for (authors, positives) in [(1, true), (1, false), (10, false), (100, false)] {
+        let mut left = EventLog::with_replica_count(1);
+        let mut right = EventLog::with_replica_count(1);
+        for replica in 0..authors {
+            // Admit zero AFTER positives: a positive prefix must not imply zero.
+            let sequences = if positives { vec![1, 2, 0] } else { vec![0] };
+            for sequence in sequences {
+                let r = Record {
+                    id: RecordId { replica, sequence },
+                    delta: GCounterDelta {
+                        replica: 0,
+                        tally: 7,
+                    },
+                };
+                assert_eq!(left.insert_record(r), Admission::Accepted);
+            }
+        }
+        let mut transport = InMemoryTransport::new();
+        transport.subscribe(0);
+        transport.subscribe(1);
+        // First repair from an empty peer must recover every admitted record.
+        anti_entropy(&mut transport, 0, 1, &left, right.version()).unwrap();
+        let mut recovered = 0;
+        for envelope in transport.drain(1) {
+            for r in envelope.records {
+                let bytes = r.to_wire_bytes().unwrap();
+                let decoded = Record::<GCounterDelta>::from_wire_bytes(&bytes).unwrap();
+                assert_eq!(right.insert_record(decoded), Admission::Accepted);
+                recovered += 1;
+            }
+        }
+        assert_eq!(recovered, left.records().len());
+        assert_eq!(left, right);
+        let mut series = Vec::new();
+        for _ in 0..10 {
+            anti_entropy(&mut transport, 0, 1, &left, right.version()).unwrap();
+            anti_entropy(&mut transport, 1, 0, &right, left.version()).unwrap();
+            let mut sent = 0;
+            for (peer, log) in [(0, &mut left), (1, &mut right)] {
+                for envelope in transport.drain(peer) {
+                    sent += envelope.records.len();
+                    for r in envelope.records {
+                        assert_eq!(
+                            log.admit_with(r, |_| panic!("converged duplicate applied")),
+                            Admission::Duplicate
+                        );
+                    }
+                }
+            }
+            series.push(sent);
+        }
+        println!(
+            "QUIESCENCE N={authors} POSITIVES={positives} RECOVERED={recovered} SERIES {series:?}"
+        );
+        assert_eq!(series, vec![0; 10], "converged replicas must stay quiet");
+        // Rebuild versions through the legacy log format, not a cloned cache.
+        let restored =
+            EventLog::<GCounterDelta>::from_wire_bytes(&left.to_wire_bytes().unwrap()).unwrap();
+        assert_eq!(restored.version(), left.version());
+        assert!(left.since(restored.version()).is_empty());
+        assert_eq!(left.since(&VersionVector::new()).len(), recovered);
+    }
+}
+
+#[test]
+fn seqzero_acknowledgment_is_independent_of_positive_prefix() {
+    use safemesh_crdt::VersionVector;
+    let zero = RecordId {
+        replica: 42,
+        sequence: 0,
+    };
+    let mut version = VersionVector::new();
+    assert!(!version.includes(zero));
+    for sequence in 1..=3 {
+        version.observe(RecordId {
+            replica: 42,
+            sequence,
+        });
+    }
+    assert!(!version.includes(zero));
+    assert_eq!(version.get(42), 3);
+    let entries = version.entries().clone();
+    version.observe(zero);
+    assert!(version.includes(zero));
+    assert_eq!(version.entries(), &entries);
+    assert_eq!(
+        version.zero_replicas().iter().copied().collect::<Vec<_>>(),
+        vec![42]
+    );
+    assert!(!version.includes(RecordId {
+        replica: 43,
+        sequence: 0
+    }));
+    let snapshot = version.clone();
+    version.observe(zero);
+    assert_eq!(version, snapshot);
+    let mut log = EventLog::new();
+    for replica in [42, 43] {
+        for sequence in 0..=4 {
+            assert_eq!(
+                log.insert_record(Record {
+                    id: RecordId { replica, sequence },
+                    delta: 7u64
+                }),
+                Admission::Accepted
+            );
+        }
+    }
+    let ids: Vec<_> = log.since(&version).iter().map(|r| r.id).collect();
+    let expected: Vec<_> = log
+        .records()
+        .iter()
+        .filter(|r| r.id.replica == 43 || r.id.sequence == 4)
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(ids, expected);
+}
