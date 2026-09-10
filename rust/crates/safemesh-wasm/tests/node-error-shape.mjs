@@ -30,7 +30,7 @@ const replica = new wasm.SafeMeshGCounterReplica(1n, 2);
 assertSafeMeshError(
   () => replica.appendBump(2, 1n),
   2,
-  "counter replica out of range",
+  "counter coordinate out of range or not owned by record author",
 );
 assertSafeMeshError(
   () => replica.mergeRecordBytes(new Uint8Array([0])),
