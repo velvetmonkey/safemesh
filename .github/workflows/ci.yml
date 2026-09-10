@@ -94,4 +94,5 @@ jobs:
         run: rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
 
       - name: Test at declared MSRV
+        working-directory: rust
         run: cargo "+${{ steps.msrv.outputs.version }}" test --workspace --locked
