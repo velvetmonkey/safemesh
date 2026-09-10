@@ -1,0 +1,52 @@
+{
+  "rows": [
+    {
+      "row": 1,
+      "requirement": "Generated Rust workspace lock; release builds enforce it; retain JS/Lean locks",
+      "result": "measured",
+      "evidence": [
+        "../../rust/Cargo.lock",
+        "dependencies.json",
+        "known-bad.txt",
+        "release-commands.json"
+      ],
+      "note": "37 total packages; known-bad refusal rc101; scoped pre-existing locks unchanged. CI scripts still do not universally pass --locked."
+    },
+    {
+      "row": 2,
+      "requirement": "Record exact toolchains, targets and distribution tools; declare tested Rust floor",
+      "result": "measured",
+      "evidence": [
+        "versions.txt",
+        "node24-versions.txt",
+        "wasm-tool-versions.txt",
+        "tool-binary-hashes.txt",
+        "msrv-1.88.txt",
+        "msrv-1.89.txt",
+        "msrv-test.txt"
+      ],
+      "note": "1.88 fails and 1.89 passes with laws; declared 1.89. Local environment differs from hosted CI."
+    },
+    {
+      "row": 3,
+      "requirement": "Build from clean SHA with recorded inputs, packaging commands, artifact hashes and compatibility manifest",
+      "result": "measured",
+      "evidence": [
+        "release-commands.json",
+        "artifacts.json",
+        "compatibility.json"
+      ],
+      "note": "Two initially clean detached worktrees at 59413b1ec2dcb8ea9c3351eaf13a37e8970abb51; supported release set empty."
+    },
+    {
+      "row": 4,
+      "requirement": "Compare two clean environments and record remaining nondeterminism",
+      "result": "measured, not byte-reproducible",
+      "evidence": [
+        "artifacts.json",
+        "wheel-sbom.diff"
+      ],
+      "note": "Same machine/shared tool caches, different worktree paths and time; 6 of 7 deliverable files match. Python wheel SBOM embeds paths, timestamp and UUID; no suppression."
+    }
+  ]
+}
