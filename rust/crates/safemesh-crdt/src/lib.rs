@@ -1161,10 +1161,14 @@ impl<D> EventLog<D> {
 }
 
 impl<D: Clone> EventLog<D> {
+    /// Return admitted records outside the peer's positive contiguous prefixes.
+    /// Sequence zero is valid at admission but cannot be acknowledged by a
+    /// `VersionVector` (which tracks `1..=n`), so it is always retransmitted.
+    /// The receiving log deduplicates these retransmissions by full record identity.
     pub fn since(&self, version: &VersionVector) -> Vec<Record<D>> {
         self.records
             .iter()
-            .filter(|record| !version.includes(record.id))
+            .filter(|record| record.id.sequence == 0 || !version.includes(record.id))
             .cloned()
             .collect()
     }
@@ -2409,6 +2413,41 @@ pub mod laws {
 #[cfg(test)]
 mod frame_tests {
     use super::*;
+
+    #[test]
+    fn seqzero_saturated_prefixes() {
+        extern crate std;
+        let mut cases = 0;
+        let mut mismatches = 0;
+        for author in [0, 1, u64::MAX] {
+            for sequence in [0, 1, 2, 3, u64::MAX - 1, u64::MAX] {
+                for prefix in [u64::MAX - 1, u64::MAX] {
+                    let mut log = EventLog::new();
+                    let r = Record {
+                        id: RecordId {
+                            replica: author,
+                            sequence,
+                        },
+                        delta: 7u64,
+                    };
+                    assert_eq!(log.insert_record(r.clone()), Admission::Accepted);
+                    let mut version = VersionVector::new();
+                    // Exercise saturated prefixes without allocating 2^64 records.
+                    version.set(author, prefix);
+                    let expected = if sequence == 0 || sequence > prefix {
+                        vec![r]
+                    } else {
+                        vec![]
+                    };
+                    mismatches += usize::from(log.since(&version) != expected);
+                    cases += 1;
+                }
+            }
+        }
+        std::println!("SATURATED CASES {cases} DISAGREE {mismatches}");
+        assert_eq!(mismatches, 0);
+    }
+
     use alloc::vec;
 
     #[test]
