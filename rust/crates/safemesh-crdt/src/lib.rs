@@ -1485,9 +1485,7 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
 
 /// Encode a payload using the canonical wire primitives.
 ///
-/// Use [`write_u8`], [`write_u32`], [`write_u64`], [`write_len`] and
-/// [`write_bytes`] to share framing with the built-in encoders. Custom payloads
-/// choose their own layout and, for persistence, a unique [`WireSchema`].
+/// Custom payloads choose their own layout and, for persistence, a unique [`WireSchema`].
 pub trait WireEncode {
     fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError>;
 
@@ -1502,12 +1500,12 @@ pub trait WireEncode {
 /// [`Self::from_wire_bytes`] additionally rejects trailing bytes.
 ///
 /// ```
-/// use safemesh_crdt::{write_u64, WireCursor, WireDecode, WireEncode, WireError};
+/// use safemesh_crdt::{WireCursor, WireDecode, WireEncode, WireError};
 /// #[derive(Debug, PartialEq)]
 /// struct Reading(u64);
 /// impl WireEncode for Reading {
 ///     fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
-///         write_u64(out, self.0);
+///         out.extend_from_slice(&self.0.to_le_bytes());
 ///         Ok(())
 ///     }
 /// }
@@ -1541,7 +1539,7 @@ pub trait WireDecode: Sized {
 /// public compatibility commitments. Storage and bounds-checking internals
 /// remain private; custom payload schemas define their own interpretation.
 /// Failed byte reads leave the cursor unchanged. Conversion failures in
-/// [`Self::read_len`] consume the length field; [`read_tag`] consumes a mismatched tag.
+/// [`Self::read_len`] consume the length field.
 pub struct WireCursor<'a> {
     bytes: &'a [u8],
     offset: usize,
@@ -1606,23 +1604,23 @@ impl<'a> WireCursor<'a> {
 }
 
 /// Append one byte.
-pub fn write_u8(out: &mut Vec<u8>, value: u8) {
+fn write_u8(out: &mut Vec<u8>, value: u8) {
     out.push(value);
 }
 
 /// Append a `u32` as four little-endian bytes.
-pub fn write_u32(out: &mut Vec<u8>, value: u32) {
+fn write_u32(out: &mut Vec<u8>, value: u32) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
 /// Append a `u64` as eight little-endian bytes.
-pub fn write_u64(out: &mut Vec<u8>, value: u64) {
+fn write_u64(out: &mut Vec<u8>, value: u64) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
 /// Append `len` as a four-byte little-endian `u32`.
 /// Returns `LengthOverflow` without changing `out` if `len` exceeds `u32::MAX`.
-pub fn write_len(out: &mut Vec<u8>, len: usize) -> Result<(), WireError> {
+fn write_len(out: &mut Vec<u8>, len: usize) -> Result<(), WireError> {
     let len = u32::try_from(len).map_err(|_| WireError::LengthOverflow)?;
     write_u32(out, len);
     Ok(())
@@ -1630,7 +1628,7 @@ pub fn write_len(out: &mut Vec<u8>, len: usize) -> Result<(), WireError> {
 
 /// Append a `u32` length prefix followed by the bytes verbatim.
 /// Returns `LengthOverflow` without changing `out` if the slice length exceeds `u32::MAX`.
-pub fn write_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), WireError> {
+fn write_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), WireError> {
     write_len(out, bytes.len())?;
     out.extend_from_slice(bytes);
     Ok(())
@@ -1639,7 +1637,7 @@ pub fn write_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), WireError> {
 /// Consume one byte and check it against `expected`.
 /// A mismatch returns `InvalidTag` after consuming the byte; an empty input
 /// returns `UnexpectedEof` without advancing.
-pub fn read_tag(cursor: &mut WireCursor<'_>, expected: u8) -> Result<(), WireError> {
+fn read_tag(cursor: &mut WireCursor<'_>, expected: u8) -> Result<(), WireError> {
     match cursor.read_u8()? {
         tag if tag == expected => Ok(()),
         _ => Err(WireError::InvalidTag),
@@ -2609,5 +2607,66 @@ mod frame_tests {
             EventLog::<GCounterDelta>::from_wire_bytes(&wire_log(&[record(1, 5), record(1, 5)]))
                 .unwrap();
         assert_eq!(decoded.records(), &[record(1, 5)]);
+    }
+}
+
+#[cfg(test)]
+mod wire_helper_tests {
+    use super::*;
+    #[derive(Debug, PartialEq)]
+    struct Stranger {
+        replica: u64,
+        tally: u64,
+    }
+    impl WireDecode for Stranger {
+        fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+            if cursor.read_u8()? != 0x10 {
+                return Err(WireError::InvalidTag);
+            }
+            Ok(Self {
+                replica: cursor.read_u64()?,
+                tally: cursor.read_u64()?,
+            })
+        }
+    }
+
+    #[test]
+    fn external_length_extremes_are_checked() {
+        for len in [0, 1, u32::MAX] {
+            let mut bytes = Vec::new();
+            write_u32(&mut bytes, len);
+            let mut cursor = WireCursor::new(&bytes);
+            let expected = usize::try_from(len).map_err(|_| WireError::LengthOverflow);
+            assert_eq!(cursor.read_len(), expected);
+            assert!(cursor.is_empty());
+        }
+        if let Ok(too_large) = usize::try_from(u64::from(u32::MAX) + 1) {
+            let mut bytes = vec![99];
+            assert_eq!(
+                write_len(&mut bytes, too_large),
+                Err(WireError::LengthOverflow)
+            );
+            assert_eq!(bytes, vec![99]);
+        }
+    }
+
+    #[test]
+    fn external_tag_and_trailing_bytes_are_checked() {
+        let mut cursor = WireCursor::new(&[3, 4]);
+        assert_eq!(read_tag(&mut cursor, 2), Err(WireError::InvalidTag));
+        assert_eq!(read_tag(&mut cursor, 4), Ok(()));
+        assert_eq!(read_tag(&mut cursor, 4), Err(WireError::UnexpectedEof));
+        assert!(cursor.is_empty());
+        let mut bytes = GCounterDelta {
+            replica: 2,
+            tally: 7,
+        }
+        .to_wire_bytes()
+        .unwrap();
+        bytes.push(0);
+        assert_eq!(
+            Stranger::from_wire_bytes(&bytes),
+            Err(WireError::TrailingBytes)
+        );
     }
 }

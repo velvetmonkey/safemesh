@@ -31,9 +31,7 @@ fn external_decoder_reads_library_value() {
     );
 }
 
-use safemesh_crdt::{
-    read_tag, write_bytes, write_len, write_u32, write_u64, write_u8, EventLog, GSet, WireSchema,
-};
+use safemesh_crdt::{EventLog, GSet, WireSchema};
 
 #[derive(Clone, Debug, PartialEq)]
 struct Custom {
@@ -44,10 +42,13 @@ struct Custom {
 }
 impl WireEncode for Custom {
     fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
-        write_u8(out, self.version);
-        write_u32(out, self.count);
-        write_u64(out, self.value);
-        write_bytes(out, &self.name)
+        out.push(self.version);
+        out.extend_from_slice(&self.count.to_le_bytes());
+        out.extend_from_slice(&self.value.to_le_bytes());
+        let len = u32::try_from(self.name.len()).map_err(|_| WireError::LengthOverflow)?;
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&self.name);
+        Ok(())
     }
 }
 impl WireDecode for Custom {
@@ -90,10 +91,11 @@ fn external_encoder_matches_library_set_framing() {
     struct ExternalSet(Vec<u64>);
     impl WireEncode for ExternalSet {
         fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
-            write_u8(out, 0x20);
-            write_len(out, self.0.len())?;
+            out.push(0x20);
+            let len = u32::try_from(self.0.len()).map_err(|_| WireError::LengthOverflow)?;
+            out.extend_from_slice(&len.to_le_bytes());
             for value in &self.0 {
-                write_u64(out, *value);
+                out.extend_from_slice(&value.to_le_bytes());
             }
             Ok(())
         }
@@ -142,46 +144,6 @@ fn external_reader_rejects_every_truncated_integer() {
             assert_eq!(cursor.read_exact(len).unwrap(), &bytes[..len]);
         }
     }
-}
-
-#[test]
-fn external_length_extremes_are_checked() {
-    for len in [0, 1, u32::MAX] {
-        let mut bytes = Vec::new();
-        write_u32(&mut bytes, len);
-        let mut cursor = WireCursor::new(&bytes);
-        let expected = usize::try_from(len).map_err(|_| WireError::LengthOverflow);
-        assert_eq!(cursor.read_len(), expected);
-        assert!(cursor.is_empty());
-    }
-    if let Ok(too_large) = usize::try_from(u64::from(u32::MAX) + 1) {
-        let mut bytes = vec![99];
-        assert_eq!(
-            write_len(&mut bytes, too_large),
-            Err(WireError::LengthOverflow)
-        );
-        assert_eq!(bytes, vec![99]);
-    }
-}
-
-#[test]
-fn external_tag_and_trailing_bytes_are_checked() {
-    let mut cursor = WireCursor::new(&[3, 4]);
-    assert_eq!(read_tag(&mut cursor, 2), Err(WireError::InvalidTag));
-    assert_eq!(read_tag(&mut cursor, 4), Ok(()));
-    assert_eq!(read_tag(&mut cursor, 4), Err(WireError::UnexpectedEof));
-    assert!(cursor.is_empty());
-    let mut bytes = GCounterDelta {
-        replica: 2,
-        tally: 7,
-    }
-    .to_wire_bytes()
-    .unwrap();
-    bytes.push(0);
-    assert_eq!(
-        Stranger::from_wire_bytes(&bytes),
-        Err(WireError::TrailingBytes)
-    );
 }
 
 #[test]
