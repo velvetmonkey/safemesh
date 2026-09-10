@@ -767,3 +767,392 @@ fn event_log_shape_distinguishes_unbounded_from_fixed_zero() {
         Ok(log)
     );
 }
+
+mod resource_limits {
+    use safemesh_crdt::{
+        Admission, AppendError, ExportCursor, GSet, LimitedEventLog, OrSetDelta, Record, RecordId,
+        ResourceDimension as Dim, ResourceLimit, ResourceLimits, WireDecode, WireEncode, WireError,
+    };
+
+    fn record(value: u64, sequence: u64) -> Vec<u8> {
+        let mut delta = GSet::new();
+        delta.insert(value);
+        Record {
+            id: RecordId {
+                replica: 7,
+                sequence,
+            },
+            delta,
+        }
+        .to_wire_bytes()
+        .unwrap()
+    }
+    fn refusal(dimension: Dim, limit: usize, requested: usize) -> WireError {
+        WireError::ResourceLimit(ResourceLimit {
+            dimension,
+            limit,
+            requested,
+        })
+    }
+    fn set(limits: &mut ResourceLimits, dimension: Dim, n: usize) {
+        match dimension {
+            Dim::HistoryRecordCount => limits.history_record_count = n,
+            Dim::HistoryEncodedBytes => limits.history_encoded_bytes = n,
+            Dim::WriterReplicaCount => limits.writer_replica_count = n,
+            Dim::PerRecordPayloadBytes => limits.per_record_payload_bytes = n,
+            Dim::RecordsPerSyncBatch => limits.records_per_sync_batch = n,
+            Dim::BytesPerSyncBatch => limits.bytes_per_sync_batch = n,
+            Dim::LiveCarrierEntries => limits.live_carrier_entries = n,
+            Dim::RetainedTombstoneCount => limits.retained_tombstone_count = n,
+        }
+    }
+    fn admission_boundary(dimension: Dim, requested: usize, batch: bool) {
+        let bytes = record(42, 1);
+        for limit in [requested - 1, requested, requested + 1] {
+            let mut limits = ResourceLimits::default();
+            set(&mut limits, dimension, limit);
+            let mut log = LimitedEventLog::<GSet<u64>>::new(None, limits).unwrap();
+            let result = if batch {
+                log.import_batch(&[&bytes]).map(|r| r[0])
+            } else {
+                log.admit_wire(&bytes)
+            };
+            if limit < requested {
+                assert_eq!(result, Err(refusal(dimension, limit, requested)));
+                assert!(log.log().records().is_empty());
+            } else {
+                assert_eq!(result, Ok(Admission::Accepted));
+                assert_eq!(log.log().records().len(), 1);
+            }
+        }
+    }
+    #[test]
+    fn history_record_boundary_and_inversion() {
+        admission_boundary(Dim::HistoryRecordCount, 1, false);
+    }
+    #[test]
+    fn history_bytes_boundary_and_inversion() {
+        let empty = LimitedEventLog::<GSet<u64>>::new(None, ResourceLimits::default()).unwrap();
+        admission_boundary(
+            Dim::HistoryEncodedBytes,
+            empty.history_encoded_bytes() + 4 + record(42, 1).len(),
+            false,
+        );
+    }
+    #[test]
+    fn writers_boundary_and_inversion() {
+        admission_boundary(Dim::WriterReplicaCount, 1, false);
+    }
+    #[test]
+    fn payload_boundary_and_inversion() {
+        admission_boundary(Dim::PerRecordPayloadBytes, 13, false);
+    }
+    #[test]
+    fn batch_records_boundary_and_inversion() {
+        admission_boundary(Dim::RecordsPerSyncBatch, 1, true);
+    }
+    #[test]
+    fn batch_bytes_boundary_and_inversion() {
+        admission_boundary(Dim::BytesPerSyncBatch, record(42, 1).len(), true);
+    }
+    #[test]
+    fn live_entries_boundary_and_inversion() {
+        let mut delta = GSet::new();
+        delta.insert(42u64);
+        let bytes = delta.to_wire_bytes().unwrap();
+        for limit in [0, 1, 2] {
+            let limits = ResourceLimits {
+                live_carrier_entries: limit,
+                ..ResourceLimits::default()
+            };
+            let result = GSet::<u64>::from_wire_bytes_with_limits(&bytes, limits);
+            if limit == 0 {
+                assert_eq!(result, Err(refusal(Dim::LiveCarrierEntries, 0, 1)));
+            } else {
+                assert_eq!(result, Ok(delta.clone()));
+            }
+        }
+    }
+    #[test]
+    fn tombstones_boundary_and_inversion() {
+        let delta = OrSetDelta::<u64, u64>::Remove { tokens: vec![42] };
+        let bytes = delta.to_wire_bytes().unwrap();
+        for limit in [0, 1, 2] {
+            let limits = ResourceLimits {
+                retained_tombstone_count: limit,
+                ..ResourceLimits::default()
+            };
+            let result = OrSetDelta::<u64, u64>::from_wire_bytes_with_limits(&bytes, limits);
+            if limit == 0 {
+                assert_eq!(result, Err(refusal(Dim::RetainedTombstoneCount, 0, 1)));
+            } else {
+                assert_eq!(result, Ok(delta.clone()));
+            }
+        }
+    }
+    fn full_log() -> LimitedEventLog<GSet<u64>> {
+        let mut log = LimitedEventLog::new(
+            None,
+            ResourceLimits {
+                history_record_count: 1,
+                ..ResourceLimits::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(log.admit_wire(&record(42, 1)), Ok(Admission::Accepted));
+        log
+    }
+    #[test]
+    fn duplicate_fits_after_growth_refusal() {
+        let mut log = full_log();
+        assert_eq!(
+            log.admit_wire(&record(43, 2)),
+            Err(refusal(Dim::HistoryRecordCount, 1, 2))
+        );
+        assert_eq!(
+            log.import_batch(&[&record(42, 1)]),
+            Ok(vec![Admission::Duplicate])
+        );
+        assert_eq!(log.log().records().len(), 1);
+    }
+    #[test]
+    fn clone_budget_refuses_before_duplicate_classification() {
+        let mut log = full_log();
+        let bytes = log.history_encoded_bytes();
+        log.set_limits(ResourceLimits {
+            history_encoded_bytes: bytes - 1,
+            ..log.limits()
+        });
+        assert_eq!(
+            log.import_batch(&[&record(42, 1)]),
+            Err(refusal(Dim::HistoryEncodedBytes, bytes - 1, bytes))
+        );
+        assert_eq!(log.log().records().len(), 1);
+    }
+    #[test]
+    fn hidden_collision_and_false_conflict_are_unclassified() {
+        let mut log = full_log();
+        log.set_limits(ResourceLimits {
+            per_record_payload_bytes: 12,
+            ..log.limits()
+        });
+        for value in [42, 43] {
+            assert_eq!(
+                log.admit_wire(&record(value, 1)),
+                Err(refusal(Dim::PerRecordPayloadBytes, 12, 13))
+            );
+            assert_eq!(log.log().records().len(), 1);
+        }
+        log.set_limits(ResourceLimits {
+            per_record_payload_bytes: 13,
+            ..log.limits()
+        });
+        assert_eq!(log.admit_wire(&record(42, 1)), Ok(Admission::Duplicate));
+        assert_eq!(log.admit_wire(&record(43, 1)), Ok(Admission::Collision));
+        assert_eq!(
+            log.log().records()[0].delta,
+            Record::<GSet<u64>>::from_wire_bytes(&record(42, 1))
+                .unwrap()
+                .delta
+        );
+    }
+    #[test]
+    fn batch_refusal_is_atomic_and_next_append_and_export_work() {
+        let mut log = LimitedEventLog::<GSet<u64>>::new(
+            None,
+            ResourceLimits {
+                history_record_count: 1,
+                ..ResourceLimits::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            log.import_batch(&[&record(42, 1), &record(43, 2)]),
+            Err(refusal(Dim::HistoryRecordCount, 1, 2))
+        );
+        assert!(log.log().records().is_empty());
+        assert_eq!(log.admit_wire(&record(42, 1)), Ok(Admission::Accepted));
+        log.set_limits(ResourceLimits {
+            history_encoded_bytes: 0,
+            per_record_payload_bytes: 0,
+            history_record_count: 0,
+            bytes_per_sync_batch: 3,
+            ..log.limits()
+        });
+        let mut cursor = ExportCursor::default();
+        let mut recovered = Vec::new();
+        while let Some(chunk) = log.export_chunk(cursor).unwrap() {
+            assert!(chunk.bytes.len() <= 3);
+            assert_ne!(chunk.next, cursor);
+            recovered.extend_from_slice(chunk.bytes);
+            cursor = chunk.next;
+        }
+        assert_eq!(recovered, record(42, 1));
+        assert_eq!(
+            Record::<GSet<u64>>::from_wire_bytes(&recovered).unwrap(),
+            log.log().records()[0]
+        );
+        assert!(log.log().to_wire_bytes().is_ok());
+    }
+    #[test]
+    fn append_typed_refusal_does_not_consume_id() {
+        let mut log = LimitedEventLog::<GSet<u64>>::new(
+            None,
+            ResourceLimits {
+                history_record_count: 0,
+                ..ResourceLimits::default()
+            },
+        )
+        .unwrap();
+        let bytes = record(42, 1);
+        let payload = &bytes[21..];
+        assert_eq!(
+            log.append_wire(7, payload),
+            Err(AppendError::ResourceLimit(ResourceLimit {
+                dimension: Dim::HistoryRecordCount,
+                limit: 0,
+                requested: 1
+            }))
+        );
+        log.set_limits(ResourceLimits::default());
+        assert_eq!(
+            log.append_wire(7, payload),
+            Ok(RecordId {
+                replica: 7,
+                sequence: 1
+            })
+        );
+    }
+    #[test]
+    fn nested_decoder_inherits_limits_and_frame_is_unchanged() {
+        let log = full_log();
+        let bytes = log.log().to_wire_bytes().unwrap();
+        assert_eq!(bytes.len(), log.history_encoded_bytes());
+        let limits = ResourceLimits {
+            live_carrier_entries: 0,
+            ..ResourceLimits::default()
+        };
+        assert_eq!(
+            safemesh_crdt::EventLog::<GSet<u64>>::from_wire_bytes_with_limits(&bytes, limits),
+            Err(refusal(Dim::LiveCarrierEntries, 0, 1))
+        );
+        let restored = safemesh_crdt::EventLog::<GSet<u64>>::from_wire_bytes_with_limits(
+            &bytes,
+            ResourceLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(restored.to_wire_bytes().unwrap(), bytes);
+    }
+    #[test]
+    fn advertised_counts_refuse_before_reading_missing_elements() {
+        let mut bytes = GSet::<u64>::new().to_wire_bytes().unwrap();
+        bytes[1..5].copy_from_slice(&100u32.to_le_bytes());
+        let limits = ResourceLimits {
+            live_carrier_entries: 1,
+            ..ResourceLimits::default()
+        };
+        assert_eq!(
+            GSet::<u64>::from_wire_bytes_with_limits(&bytes, limits),
+            Err(refusal(Dim::LiveCarrierEntries, 1, 100))
+        );
+    }
+    #[test]
+    fn export_zero_budget_can_resume_after_policy_change() {
+        let mut log = full_log();
+        log.set_limits(ResourceLimits {
+            bytes_per_sync_batch: 0,
+            ..log.limits()
+        });
+        assert_eq!(
+            log.export_chunk(ExportCursor::default()),
+            Err(refusal(Dim::BytesPerSyncBatch, 0, 1))
+        );
+        log.set_limits(ResourceLimits {
+            bytes_per_sync_batch: 1,
+            ..log.limits()
+        });
+        assert_eq!(
+            log.export_chunk(ExportCursor::default())
+                .unwrap()
+                .unwrap()
+                .bytes
+                .len(),
+            1
+        );
+        assert_eq!(
+            log.export_chunk(ExportCursor {
+                record: 9,
+                offset: 0
+            }),
+            Err(WireError::UnexpectedEof)
+        );
+    }
+    #[test]
+    fn malformed_or_colliding_batch_preserves_history() {
+        let mut log = full_log();
+        let saved = log.log().clone();
+        assert_eq!(
+            log.import_batch(&[&record(42, 1), &record(43, 1)]),
+            Err(WireError::RecordCollision)
+        );
+        assert_eq!(log.log(), &saved);
+        assert!(log.import_batch(&[&record(42, 1), &[0]]).is_err());
+        assert_eq!(log.log(), &saved);
+        assert_eq!(
+            log.import_batch(&[&record(42, 1)]),
+            Ok(vec![Admission::Duplicate])
+        );
+    }
+    #[test]
+    fn retained_operand_is_checked_before_equality() {
+        let mut repeated = record(42, 1);
+        repeated[17..21].copy_from_slice(&21u32.to_le_bytes());
+        repeated[22..26].copy_from_slice(&2u32.to_le_bytes());
+        repeated.extend_from_slice(&42u64.to_le_bytes());
+        let mut log = LimitedEventLog::<GSet<u64>>::new(None, ResourceLimits::default()).unwrap();
+        assert_eq!(log.admit_wire(&repeated), Ok(Admission::Accepted));
+        log.set_limits(ResourceLimits {
+            per_record_payload_bytes: 13,
+            ..log.limits()
+        });
+        assert_eq!(
+            log.admit_wire(&record(42, 1)),
+            Err(refusal(Dim::PerRecordPayloadBytes, 13, 21))
+        );
+        log.set_limits(ResourceLimits::default());
+        assert_eq!(log.admit_wire(&record(42, 1)), Ok(Admission::Duplicate));
+    }
+    #[test]
+    fn configured_decode_enforces_history_and_writer_boundaries() {
+        let log = full_log();
+        let bytes = log.log().to_wire_bytes().unwrap();
+        for (dimension, requested) in [
+            (Dim::HistoryRecordCount, 1),
+            (Dim::HistoryEncodedBytes, bytes.len()),
+            (Dim::WriterReplicaCount, 1),
+        ] {
+            for limit in [requested - 1, requested, requested + 1] {
+                let mut limits = ResourceLimits::default();
+                set(&mut limits, dimension, limit);
+                let result = safemesh_crdt::EventLog::<GSet<u64>>::from_wire_bytes_with_limits(
+                    &bytes, limits,
+                );
+                if limit < requested {
+                    assert_eq!(result, Err(refusal(dimension, limit, requested)));
+                } else {
+                    assert_eq!(result.unwrap(), *log.log());
+                }
+            }
+        }
+    }
+    #[test]
+    fn duplicate_uses_work_budgets_after_collection_growth_ceiling() {
+        let mut log = full_log();
+        log.set_limits(ResourceLimits {
+            live_carrier_entries: 0,
+            ..log.limits()
+        });
+        assert_eq!(log.admit_wire(&record(42, 1)), Ok(Admission::Duplicate));
+        assert_eq!(log.admit_wire(&record(43, 1)), Ok(Admission::Collision));
+    }
+}

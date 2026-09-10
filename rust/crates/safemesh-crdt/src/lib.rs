@@ -1079,6 +1079,91 @@ impl VersionVector {
     }
 }
 
+/// The eight configurable resource dimensions. Peak memory is a measured output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResourceDimension {
+    HistoryRecordCount,
+    HistoryEncodedBytes,
+    WriterReplicaCount,
+    PerRecordPayloadBytes,
+    RecordsPerSyncBatch,
+    BytesPerSyncBatch,
+    LiveCarrierEntries,
+    RetainedTombstoneCount,
+}
+
+/// A policy refusal, distinct from wire arithmetic overflow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResourceLimit {
+    pub dimension: ResourceDimension,
+    pub limit: usize,
+    pub requested: usize,
+}
+
+/// Configured policy values. Defaults are development placeholders, not an envelope.
+/// OR-4 is outstanding; Ben owns the envelope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResourceLimits {
+    pub history_record_count: usize,
+    pub history_encoded_bytes: usize,
+    pub writer_replica_count: usize,
+    pub per_record_payload_bytes: usize,
+    pub records_per_sync_batch: usize,
+    pub bytes_per_sync_batch: usize,
+    pub live_carrier_entries: usize,
+    pub retained_tombstone_count: usize,
+}
+
+impl Default for ResourceLimits {
+    fn default() -> Self {
+        Self {
+            history_record_count: 100_000,
+            history_encoded_bytes: 64 * 1024 * 1024,
+            writer_replica_count: 1024,
+            per_record_payload_bytes: 1024 * 1024,
+            records_per_sync_batch: 1024,
+            bytes_per_sync_batch: 4 * 1024 * 1024,
+            live_carrier_entries: 100_000,
+            retained_tombstone_count: 100_000,
+        }
+    }
+}
+
+impl ResourceLimits {
+    pub fn check(
+        &self,
+        dimension: ResourceDimension,
+        requested: usize,
+    ) -> Result<(), ResourceLimit> {
+        use ResourceDimension::*;
+        let limit = match dimension {
+            HistoryRecordCount => self.history_record_count,
+            HistoryEncodedBytes => self.history_encoded_bytes,
+            WriterReplicaCount => self.writer_replica_count,
+            PerRecordPayloadBytes => self.per_record_payload_bytes,
+            RecordsPerSyncBatch => self.records_per_sync_batch,
+            BytesPerSyncBatch => self.bytes_per_sync_batch,
+            LiveCarrierEntries => self.live_carrier_entries,
+            RetainedTombstoneCount => self.retained_tombstone_count,
+        };
+        if requested > limit {
+            Err(ResourceLimit {
+                dimension,
+                limit,
+                requested,
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl From<ResourceLimit> for WireError {
+    fn from(value: ResourceLimit) -> Self {
+        Self::ResourceLimit(value)
+    }
+}
+
 /// Full decoded payload equality distinguishes redelivery from an ID collision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Admission {
@@ -1090,6 +1175,258 @@ pub enum Admission {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AppendError {
     SequenceExhausted,
+    ResourceLimit(ResourceLimit),
+    InvalidPayload(WireError),
+}
+
+/// Policy-controlled wire admission. The inner log is read-only to callers, so
+/// every growth operation on this type passes through the configured checks.
+/// Legacy `EventLog` APIs retain their existing unconfigured semantics.
+/// Collection limits govern decoded wire collections, not replayed carrier state.
+#[derive(Clone, Debug)]
+pub struct LimitedEventLog<D> {
+    log: EventLog<D>,
+    limits: ResourceLimits,
+    wire_records: Vec<Vec<u8>>,
+    encoded_bytes: usize,
+    writers: BTreeSet<u64>,
+}
+
+/// Position in the retained record byte stream. A record can span several pages.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExportCursor {
+    pub record: usize,
+    pub offset: usize,
+}
+
+/// Borrowed export fragment; no cloning or encoding is needed after refusal.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ExportChunk<'a> {
+    pub bytes: &'a [u8],
+    pub next: ExportCursor,
+}
+
+impl<D: WireDecode + WireSchema + PartialEq> LimitedEventLog<D> {
+    pub fn new(replica_count: Option<usize>, limits: ResourceLimits) -> Result<Self, WireError> {
+        if let Some(count) = replica_count {
+            limits.check(ResourceDimension::WriterReplicaCount, count)?;
+        }
+        if D::REQUIRES_ARITY && replica_count.is_none() {
+            return Err(WireError::MissingShape);
+        }
+        // Canonical frame header, shape, count and checksum; records add 4 + len.
+        let encoded_bytes = 26usize
+            .checked_add(D::wire_schema().len())
+            .and_then(|n| n.checked_add(if replica_count.is_some() { 8 } else { 0 }))
+            .ok_or(WireError::LengthOverflow)?;
+        limits.check(ResourceDimension::HistoryEncodedBytes, encoded_bytes)?;
+        Ok(Self {
+            log: EventLog {
+                replica_count,
+                ..EventLog::new()
+            },
+            limits,
+            wire_records: Vec::new(),
+            encoded_bytes,
+            writers: BTreeSet::new(),
+        })
+    }
+
+    pub fn log(&self) -> &EventLog<D> {
+        &self.log
+    }
+    pub fn limits(&self) -> ResourceLimits {
+        self.limits
+    }
+    pub fn history_encoded_bytes(&self) -> usize {
+        self.encoded_bytes
+    }
+
+    /// A tighter policy affects future work; retained history remains accessible.
+    pub fn set_limits(&mut self, limits: ResourceLimits) {
+        self.limits = limits;
+    }
+
+    fn payload<'a>(&self, bytes: &'a [u8]) -> Result<(RecordId, &'a [u8]), WireError> {
+        let mut cursor = WireCursor::with_limits(bytes, self.limits);
+        read_tag(&mut cursor, TAG_RECORD)?;
+        let id = RecordId {
+            replica: cursor.read_u64()?,
+            sequence: cursor.read_u64()?,
+        };
+        let len = cursor.read_limited_len(ResourceDimension::PerRecordPayloadBytes)?;
+        let payload = cursor.read_exact(len)?;
+        if !cursor.is_empty() {
+            return Err(WireError::TrailingBytes);
+        }
+        Ok((id, payload))
+    }
+
+    /// Reject before payload decoding, equality, or retained-history growth.
+    pub fn admit_wire(&mut self, bytes: &[u8]) -> Result<Admission, WireError> {
+        let (id, payload) = self.payload(bytes)?;
+        self.limits
+            .check(ResourceDimension::HistoryEncodedBytes, self.encoded_bytes)?;
+        if let Some(&index) = self.log.seen.get(&id) {
+            // Check BOTH operands before beginning equality, even for a collision.
+            self.payload(&self.wire_records[index])?;
+            // Equality work is charged to payload bytes, not growth dimensions.
+            // Built-in decoders consume bounded input without reserving declared counts.
+            let delta = D::from_wire_bytes(payload)?;
+            return Ok(if self.log.records[index].delta == delta {
+                Admission::Duplicate
+            } else {
+                Admission::Collision
+            });
+        }
+        self.limits.check(
+            ResourceDimension::HistoryRecordCount,
+            self.log.records.len().saturating_add(1),
+        )?;
+        let writers = self
+            .writers
+            .len()
+            .saturating_add(usize::from(!self.writers.contains(&id.replica)));
+        self.limits.check(
+            ResourceDimension::WriterReplicaCount,
+            writers.max(self.log.replica_count.unwrap_or(0)),
+        )?;
+        let encoded_bytes = self
+            .encoded_bytes
+            .checked_add(4)
+            .and_then(|n| n.checked_add(bytes.len()))
+            .ok_or(WireError::LengthOverflow)?;
+        self.limits
+            .check(ResourceDimension::HistoryEncodedBytes, encoded_bytes)?;
+        let delta = D::from_wire_bytes_with_limits(payload, self.limits)?;
+        let outcome = self.log.insert_record(Record { id, delta });
+        debug_assert_eq!(outcome, Admission::Accepted);
+        self.wire_records.push(bytes.to_vec());
+        self.writers.insert(id.replica);
+        self.encoded_bytes = encoded_bytes;
+        Ok(outcome)
+    }
+
+    /// Allocate an ID only on successful admission. Payload is already encoded,
+    /// letting the policy check its length before allocating a record buffer.
+    pub fn append_wire(&mut self, replica: u64, payload: &[u8]) -> Result<RecordId, AppendError> {
+        if self.log.seen.contains_key(&RecordId {
+            replica,
+            sequence: u64::MAX,
+        }) {
+            return Err(AppendError::SequenceExhausted);
+        }
+        self.append_wire_inner(replica, payload)
+            .map_err(|error| match error {
+                WireError::ResourceLimit(limit) => AppendError::ResourceLimit(limit),
+                error => AppendError::InvalidPayload(error),
+            })
+    }
+
+    fn append_wire_inner(&mut self, replica: u64, payload: &[u8]) -> Result<RecordId, WireError> {
+        self.limits
+            .check(ResourceDimension::PerRecordPayloadBytes, payload.len())?;
+        // No reserved IDs on refusal. The public entry point checks exhaustion.
+        let sequence = self
+            .log
+            .seen
+            .range(
+                RecordId {
+                    replica,
+                    sequence: 0,
+                }..=RecordId {
+                    replica,
+                    sequence: u64::MAX,
+                },
+            )
+            .next_back()
+            .map(|(id, _)| id.sequence)
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or(WireError::LengthOverflow)?;
+        let id = RecordId { replica, sequence };
+        let mut bytes = Vec::new();
+        write_u8(&mut bytes, TAG_RECORD);
+        write_u64(&mut bytes, replica);
+        write_u64(&mut bytes, sequence);
+        write_bytes(&mut bytes, payload)?;
+        self.admit_wire(&bytes)?;
+        Ok(id)
+    }
+
+    /// Atomic import: no prefix becomes visible on a limit, malformed record,
+    /// or collision. Charge the clone before cloning and payloads before comparing.
+    pub fn import_batch(&mut self, records: &[&[u8]]) -> Result<Vec<Admission>, WireError>
+    where
+        D: Clone,
+    {
+        self.limits
+            .check(ResourceDimension::RecordsPerSyncBatch, records.len())?;
+        let bytes = records.iter().try_fold(0usize, |sum, record| {
+            sum.checked_add(record.len())
+                .ok_or(WireError::LengthOverflow)
+        })?;
+        self.limits
+            .check(ResourceDimension::BytesPerSyncBatch, bytes)?;
+        if records.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.limits
+            .check(ResourceDimension::HistoryEncodedBytes, self.encoded_bytes)?;
+        for record in records {
+            self.payload(record)?;
+        }
+        let mut candidate = self.clone();
+        let mut outcomes = Vec::new();
+        for record in records {
+            let outcome = candidate.admit_wire(record)?;
+            if outcome == Admission::Collision {
+                return Err(WireError::RecordCollision);
+            }
+            outcomes.push(outcome);
+        }
+        *self = candidate;
+        Ok(outcomes)
+    }
+
+    /// Export one borrowed fragment, bounded by the current batch byte policy.
+    /// Follow `next` until None, concatenating fragments with the same record index.
+    /// Even a record larger than the batch budget remains recoverable. A zero
+    /// budget returns a typed refusal; raise it and resume from the same cursor.
+    pub fn export_chunk(&self, cursor: ExportCursor) -> Result<Option<ExportChunk<'_>>, WireError> {
+        if cursor.record == self.wire_records.len() && cursor.offset == 0 {
+            return Ok(None);
+        }
+        let bytes = self
+            .wire_records
+            .get(cursor.record)
+            .ok_or(WireError::UnexpectedEof)?;
+        if cursor.offset >= bytes.len() {
+            return Err(WireError::UnexpectedEof);
+        }
+        self.limits
+            .check(ResourceDimension::RecordsPerSyncBatch, 1)?;
+        self.limits.check(ResourceDimension::BytesPerSyncBatch, 1)?;
+        let end = cursor
+            .offset
+            .saturating_add(self.limits.bytes_per_sync_batch)
+            .min(bytes.len());
+        let next = if end == bytes.len() {
+            ExportCursor {
+                record: cursor.record + 1,
+                offset: 0,
+            }
+        } else {
+            ExportCursor {
+                record: cursor.record,
+                offset: end,
+            }
+        };
+        Ok(Some(ExportChunk {
+            bytes: &bytes[cursor.offset..end],
+            next,
+        }))
+    }
 }
 
 /// Append-only, deduplicating event log for CRDT deltas.
@@ -1459,6 +1796,7 @@ const TAG_LWW_MAP_U64: u8 = 0x72;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WireError {
+    ResourceLimit(ResourceLimit),
     OwnershipViolation,
     UnexpectedEof,
     InvalidTag,
@@ -1600,6 +1938,20 @@ pub trait WireEncode {
 pub trait WireDecode: Sized {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError>;
 
+    /// Reject policy excess before built-in collection allocations. Custom decoders
+    /// must use the cursor's dimension checks before their own allocations.
+    fn from_wire_bytes_with_limits(
+        bytes: &[u8],
+        limits: ResourceLimits,
+    ) -> Result<Self, WireError> {
+        let mut cursor = WireCursor::with_limits(bytes, limits);
+        let value = Self::decode_wire(&mut cursor)?;
+        if !cursor.is_empty() {
+            return Err(WireError::TrailingBytes);
+        }
+        Ok(value)
+    }
+
     fn from_wire_bytes(bytes: &[u8]) -> Result<Self, WireError> {
         let mut cursor = WireCursor::new(bytes);
         let value = Self::decode_wire(&mut cursor)?;
@@ -1622,11 +1974,58 @@ pub trait WireDecode: Sized {
 pub struct WireCursor<'a> {
     bytes: &'a [u8],
     offset: usize,
+    limits: Option<ResourceLimits>,
 }
 
 impl<'a> WireCursor<'a> {
     pub fn new(bytes: &'a [u8]) -> Self {
-        WireCursor { bytes, offset: 0 }
+        WireCursor {
+            bytes,
+            offset: 0,
+            limits: None,
+        }
+    }
+
+    /// Decode with a caller-selected policy; nested built-in decoders inherit it.
+    pub fn with_limits(bytes: &'a [u8], limits: ResourceLimits) -> Self {
+        Self {
+            bytes,
+            offset: 0,
+            limits: Some(limits),
+        }
+    }
+
+    pub fn check_limit(
+        &self,
+        dimension: ResourceDimension,
+        requested: usize,
+    ) -> Result<(), WireError> {
+        if let Some(limits) = self.limits {
+            limits.check(dimension, requested)?;
+        }
+        Ok(())
+    }
+
+    pub fn read_limited_len(&mut self, dimension: ResourceDimension) -> Result<usize, WireError> {
+        let len = self.read_len()?;
+        self.check_limit(dimension, len)?;
+        Ok(len)
+    }
+
+    fn decode_nested<T: WireDecode>(&self, bytes: &[u8]) -> Result<T, WireError> {
+        if self.limits.is_none() {
+            return T::from_wire_bytes(bytes);
+        }
+        let mut cursor = WireCursor {
+            bytes,
+            offset: 0,
+            limits: self.limits,
+        };
+        let value = T::decode_wire(&mut cursor)?;
+        if !cursor.is_empty() {
+            return Err(WireError::TrailingBytes);
+        }
+        Ok(value)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1796,7 +2195,7 @@ impl WireDecode for GSet<u64> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
         read_tag(cursor, TAG_GSET_U64)?;
         let mut set = GSet::new();
-        for _ in 0..cursor.read_len()? {
+        for _ in 0..cursor.read_limited_len(ResourceDimension::LiveCarrierEntries)? {
             set.insert(cursor.read_u64()?);
         }
         Ok(set)
@@ -1833,7 +2232,7 @@ impl WireDecode for OrSetDelta<u64, u64> {
             }),
             TAG_ORSET_REMOVE_U64 => {
                 let mut tokens = Vec::new();
-                for _ in 0..cursor.read_len()? {
+                for _ in 0..cursor.read_limited_len(ResourceDimension::RetainedTombstoneCount)? {
                     tokens.push(cursor.read_u64()?);
                 }
                 Ok(OrSetDelta::Remove { tokens })
@@ -1870,7 +2269,7 @@ impl WireDecode for OrSetDelta<String, u64> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
         match cursor.read_u8()? {
             TAG_ORSET_ADD_STRING => {
-                let len = cursor.read_len()?;
+                let len = cursor.read_limited_len(ResourceDimension::PerRecordPayloadBytes)?;
                 let element = core::str::from_utf8(cursor.read_exact(len)?)
                     .map_err(|_| WireError::InvalidUtf8)?;
                 let token = cursor.read_u64()?;
@@ -1881,7 +2280,7 @@ impl WireDecode for OrSetDelta<String, u64> {
             }
             TAG_ORSET_REMOVE_STRING => {
                 let mut tokens = Vec::new();
-                for _ in 0..cursor.read_len()? {
+                for _ in 0..cursor.read_limited_len(ResourceDimension::RetainedTombstoneCount)? {
                     tokens.push(cursor.read_u64()?);
                 }
                 Ok(OrSetDelta::Remove { tokens })
@@ -1911,13 +2310,13 @@ impl WireDecode for OrSet<u64, u64> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
         read_tag(cursor, TAG_ORSET_U64)?;
         let mut set = OrSet::new();
-        for _ in 0..cursor.read_len()? {
+        for _ in 0..cursor.read_limited_len(ResourceDimension::LiveCarrierEntries)? {
             let element = cursor.read_u64()?;
             let token = cursor.read_u64()?;
             set.add(element, token);
         }
         let mut tombstones = Vec::new();
-        for _ in 0..cursor.read_len()? {
+        for _ in 0..cursor.read_limited_len(ResourceDimension::RetainedTombstoneCount)? {
             tombstones.push(cursor.read_u64()?);
         }
         set.apply_remove(tombstones);
@@ -1945,12 +2344,12 @@ impl WireDecode for Rga<u64, u64> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
         read_tag(cursor, TAG_RGA_U64)?;
         let mut rga = Rga::new();
-        for _ in 0..cursor.read_len()? {
+        for _ in 0..cursor.read_limited_len(ResourceDimension::LiveCarrierEntries)? {
             let position = cursor.read_u64()?;
             let value = cursor.read_u64()?;
             rga.insert(position, value);
         }
-        for _ in 0..cursor.read_len()? {
+        for _ in 0..cursor.read_limited_len(ResourceDimension::RetainedTombstoneCount)? {
             rga.delete(cursor.read_u64()?);
         }
         Ok(rga)
@@ -1974,9 +2373,9 @@ impl<D: WireDecode> WireDecode for Record<D> {
             replica: cursor.read_u64()?,
             sequence: cursor.read_u64()?,
         };
-        let delta_len = cursor.read_len()?;
+        let delta_len = cursor.read_limited_len(ResourceDimension::PerRecordPayloadBytes)?;
         let delta_bytes = cursor.read_exact(delta_len)?;
-        let delta = D::from_wire_bytes(delta_bytes)?;
+        let delta = cursor.decode_nested::<D>(delta_bytes)?;
         Ok(Record { id, delta })
     }
 }
@@ -2042,13 +2441,21 @@ impl<D: WireDecode + WireSchema + PartialEq> WireDecode for EventLog<D> {
         if cursor.read_u32()? != !len {
             return Err(WireError::IntegrityMismatch);
         }
+        cursor.check_limit(
+            ResourceDimension::HistoryEncodedBytes,
+            (len as usize).saturating_add(13),
+        )?;
         let body =
             cursor.read_exact(usize::try_from(len).map_err(|_| WireError::LengthOverflow)?)?;
         let checksum = frame_crc32(&cursor.bytes[start..cursor.offset]);
         if cursor.read_u32()? != checksum {
             return Err(WireError::IntegrityMismatch);
         }
-        let mut body = WireCursor::new(body);
+        let mut body = WireCursor {
+            bytes: body,
+            offset: 0,
+            limits: cursor.limits,
+        };
         if body.read_u32()? != u32::MAX {
             return Err(WireError::MissingShape);
         }
@@ -2062,16 +2469,28 @@ impl<D: WireDecode + WireSchema + PartialEq> WireDecode for EventLog<D> {
             1 => Some(usize::try_from(body.read_u64()?).map_err(|_| WireError::LengthOverflow)?),
             _ => return Err(WireError::ArityKindMismatch),
         };
+        if let Some(count) = replica_count {
+            body.check_limit(ResourceDimension::WriterReplicaCount, count)?;
+        }
         let mut log = EventLog {
             replica_count,
             ..EventLog::new()
         };
-        for _ in 0..body.read_len()? {
+        let mut writers = BTreeSet::new();
+        for _ in 0..body.read_limited_len(ResourceDimension::HistoryRecordCount)? {
             let record_len = body.read_len()?;
             let record_bytes = body.read_exact(record_len)?;
-            if log.insert_record(Record::<D>::from_wire_bytes(record_bytes)?)
-                == Admission::Collision
-            {
+            let record = body.decode_nested::<Record<D>>(record_bytes)?;
+            body.check_limit(
+                ResourceDimension::WriterReplicaCount,
+                writers
+                    .len()
+                    .saturating_add(usize::from(!writers.contains(&record.id.replica))),
+            )?;
+            if body.limits.is_some() {
+                writers.insert(record.id.replica);
+            }
+            if log.insert_record(record) == Admission::Collision {
                 return Err(WireError::RecordCollision);
             }
         }
@@ -2162,7 +2581,7 @@ impl WireDecode for EnableWinsFlagDelta<u64> {
                 token: cursor.read_u64()?,
             }),
             TAG_ENABLE_WINS_FLAG_DISABLE_U64 => {
-                let len = cursor.read_len()?;
+                let len = cursor.read_limited_len(ResourceDimension::RetainedTombstoneCount)?;
                 let mut tokens = Vec::new();
                 for _ in 0..len {
                     tokens.push(cursor.read_u64()?);
@@ -2192,12 +2611,12 @@ impl WireEncode for EnableWinsFlag<u64> {
 impl WireDecode for EnableWinsFlag<u64> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
         read_tag(cursor, TAG_ENABLE_WINS_FLAG_U64)?;
-        let enable_len = cursor.read_len()?;
+        let enable_len = cursor.read_limited_len(ResourceDimension::LiveCarrierEntries)?;
         let mut flag = EnableWinsFlag::new();
         for _ in 0..enable_len {
             flag.enable(cursor.read_u64()?);
         }
-        let tombstone_len = cursor.read_len()?;
+        let tombstone_len = cursor.read_limited_len(ResourceDimension::RetainedTombstoneCount)?;
         for _ in 0..tombstone_len {
             flag.disable([cursor.read_u64()?]);
         }
@@ -2278,7 +2697,7 @@ impl WireEncode for LwwMap<u64, u64> {
 impl WireDecode for LwwMap<u64, u64> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
         read_tag(cursor, TAG_LWW_MAP_U64)?;
-        let entry_len = cursor.read_len()?;
+        let entry_len = cursor.read_limited_len(ResourceDimension::LiveCarrierEntries)?;
         let mut map = LwwMap::new();
         for _ in 0..entry_len {
             map.set(
@@ -2288,7 +2707,7 @@ impl WireDecode for LwwMap<u64, u64> {
                 cursor.read_u64()?,
             );
         }
-        let removal_len = cursor.read_len()?;
+        let removal_len = cursor.read_limited_len(ResourceDimension::RetainedTombstoneCount)?;
         for _ in 0..removal_len {
             map.remove(cursor.read_u64()?, cursor.read_u64()?, cursor.read_u64()?);
         }
