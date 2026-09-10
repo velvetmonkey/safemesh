@@ -3,98 +3,6 @@ use safemesh_crdt::{
     Record, RecordId, WireDecode, WireEncode,
 };
 
-/// A source-level census is the strongest crate-local guard that preserves the
-/// public default body on `Crdt::validate_record`: Rust has no reflection over
-/// trait implementations, and removing that default is a downstream-breaking
-/// API change. The counts are derived from every `impl Crdt for` block in this
-/// crate root, never from a list of carrier names.
-fn crdt_validation_census() -> (usize, usize, usize) {
-    let source = include_str!("../src/lib.rs");
-    let mut implementations = 0;
-    let mut inheritors = 0;
-    let mut unexplained_permissive_overrides = 0;
-    let mut cursor = source;
-
-    while let Some(offset) = cursor.find("impl") {
-        let before = &cursor[..offset];
-        let candidate = &cursor[offset..];
-        cursor = &candidate[4..];
-        if before
-            .chars()
-            .last()
-            .is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
-        {
-            continue;
-        }
-        let Some(header_end) = candidate.find('{') else {
-            break;
-        };
-        let header = &candidate[..header_end];
-        if !header.contains("Crdt for") {
-            continue;
-        }
-        let mut depth = 0usize;
-        let mut body_end = None;
-        for (index, character) in candidate[header_end..].char_indices() {
-            match character {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        body_end = Some(header_end + index + 1);
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        let Some(body_end) = body_end else {
-            panic!("unterminated Crdt implementation in lib.rs");
-        };
-        let body = &candidate[header_end + 1..body_end - 1];
-        implementations += 1;
-        let Some(method_start) = body.find("fn validate_record") else {
-            inheritors += 1;
-            continue;
-        };
-        let before_method = &body[..method_start];
-        let stated_reason = before_method
-            .lines()
-            .rev()
-            .find(|line| !line.trim().is_empty())
-            .is_some_and(|line| line.trim_start().starts_with("///"));
-        let method = &body[method_start..];
-        let method_open = method.find('{').expect("validator body");
-        let mut depth = 0usize;
-        let mut method_end = None;
-        for (index, character) in method[method_open..].char_indices() {
-            match character {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        method_end = Some(method_open + index);
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        let method_body: String = method[method_open + 1..method_end.expect("validator close")]
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect();
-        if method_body == "Ok(())" && !stated_reason {
-            unexplained_permissive_overrides += 1;
-        }
-    }
-    (
-        implementations,
-        inheritors,
-        unexplained_permissive_overrides,
-    )
-}
-
 fn record(sequence: u64, tally: u64) -> Record<GCounterDelta> {
     Record {
         id: RecordId {
@@ -288,13 +196,6 @@ mod owned_local {
     /// saved log the user already has.
     #[test]
     fn owned_empty_remove_persists_and_reopens_through_checked_loader() {
-        let (implementations, inheritors, unexplained_permissive_overrides) =
-            crdt_validation_census();
-        assert_eq!(
-            inheritors + unexplained_permissive_overrides,
-            0,
-            "{implementations} Crdt implementations must state a validator or explain a permissive one"
-        );
         use safemesh_crdt::OrSet;
         let mut r = LocalReplica::utf8_set(&root("empty-remove"), config(0)).unwrap();
         let removed = r.remove(r.ticket(), &String::from("never-added")).unwrap();
@@ -857,12 +758,6 @@ fn seqzero_acknowledgment_is_independent_of_positive_prefix() {
 /// validator that refuses a legitimately-losing record goes red here.
 #[test]
 fn inherited_types_accept_records_that_replay_subsumes() {
-    let (implementations, inheritors, unexplained_permissive_overrides) = crdt_validation_census();
-    assert_eq!(
-        inheritors + unexplained_permissive_overrides,
-        0,
-        "{implementations} Crdt implementations must state a validator or explain a permissive one"
-    );
     use safemesh_crdt::{
         EnableWinsFlag, EnableWinsFlagDelta, GSet, LwwMap, LwwMapDelta, LwwRegister,
         LwwRegisterDelta, OrSet, OrSetDelta, Rga, RgaDelta, WireError, WireSchema,
@@ -1085,4 +980,225 @@ fn inherited_types_accept_records_that_replay_subsumes() {
 
     println!("LEGITIMATE RECORDS ACCEPTED {checked} OF {checked}");
     assert_eq!(checked, 15);
+}
+
+fn accepts_absorbed<C>(mut carrier: C, mut fresh: C, delta: C::Delta)
+where
+    C: Crdt + Clone + PartialEq + std::fmt::Debug,
+    C::Delta: Clone,
+{
+    let id = RecordId {
+        replica: 0,
+        sequence: 1,
+    };
+    carrier.apply_delta(delta.clone());
+    let before = carrier.clone();
+    assert_eq!(carrier.validate_record(id, &delta), Ok(()));
+    assert_eq!(fresh.validate_record(id, &delta), Ok(()));
+    carrier.apply_delta(delta.clone());
+    fresh.apply_delta(delta);
+    assert_eq!(carrier, before, "replay is absorbed");
+    assert_eq!(fresh, before, "fresh carrier holds the denoted state");
+}
+
+#[test]
+fn gcounter_accepts_absorbed_record() {
+    accepts_absorbed(
+        GCounter::new(2),
+        GCounter::new(2),
+        GCounterDelta {
+            replica: 0,
+            tally: 7,
+        },
+    );
+}
+
+#[test]
+fn pncounter_accepts_absorbed_record() {
+    for delta in [
+        PnCounterDelta::Inc {
+            replica: 0,
+            tally: 7,
+        },
+        PnCounterDelta::Dec {
+            replica: 0,
+            tally: 7,
+        },
+    ] {
+        accepts_absorbed(PnCounter::new(2), PnCounter::new(2), delta);
+    }
+}
+
+#[test]
+fn gset_accepts_absorbed_record() {
+    accepts_absorbed(safemesh_crdt::GSet::new(), safemesh_crdt::GSet::new(), 7u64);
+}
+
+#[test]
+fn orset_accepts_absorbed_record() {
+    accepts_absorbed(
+        safemesh_crdt::OrSet::new(),
+        safemesh_crdt::OrSet::new(),
+        safemesh_crdt::OrSetDelta::Add {
+            element: 7u64,
+            token: 1u64,
+        },
+    );
+}
+
+#[test]
+fn rga_accepts_absorbed_record() {
+    accepts_absorbed(
+        safemesh_crdt::Rga::new(),
+        safemesh_crdt::Rga::new(),
+        safemesh_crdt::RgaDelta::Insert {
+            position: 1u64,
+            value: 7u64,
+        },
+    );
+}
+
+#[test]
+fn flag_accepts_absorbed_record() {
+    accepts_absorbed(
+        safemesh_crdt::EnableWinsFlag::new(),
+        safemesh_crdt::EnableWinsFlag::new(),
+        safemesh_crdt::EnableWinsFlagDelta::Enable { token: 1u64 },
+    );
+}
+
+#[test]
+fn register_accepts_absorbed_record() {
+    accepts_absorbed(
+        safemesh_crdt::LwwRegister::new(),
+        safemesh_crdt::LwwRegister::new(),
+        safemesh_crdt::LwwRegisterDelta {
+            timestamp: 1,
+            replica: 0,
+            value: 7u64,
+        },
+    );
+}
+
+#[test]
+fn map_accepts_absorbed_record() {
+    accepts_absorbed(
+        safemesh_crdt::LwwMap::new(),
+        safemesh_crdt::LwwMap::new(),
+        safemesh_crdt::LwwMapDelta::Set {
+            key: 1u64,
+            timestamp: 1,
+            replica: 0,
+            value: 7u64,
+        },
+    );
+}
+
+#[test]
+fn gcounter_refuses_record_outside_same_shape() {
+    for tally in [0, 9] {
+        let mut carrier = GCounter::new(2);
+        carrier.apply_bump(0, tally);
+        let before = carrier.clone();
+        let bad = GCounterDelta {
+            replica: 2,
+            tally: 7,
+        };
+        assert_eq!(
+            carrier.validate_record(
+                RecordId {
+                    replica: 2,
+                    sequence: 1
+                },
+                &bad
+            ),
+            Err(safemesh_crdt::WireError::OwnershipViolation)
+        );
+        assert!(carrier.try_apply_bump(bad.replica, bad.tally).is_err());
+        assert_eq!(carrier, before);
+    }
+}
+
+#[test]
+fn pncounter_refuses_record_outside_same_shape() {
+    for tally in [0, 9] {
+        let mut carrier = PnCounter::new(2);
+        carrier.apply_inc(0, tally);
+        for bad in [
+            PnCounterDelta::Inc {
+                replica: 2,
+                tally: 7,
+            },
+            PnCounterDelta::Dec {
+                replica: 2,
+                tally: 7,
+            },
+        ] {
+            let before = carrier.clone();
+            assert_eq!(
+                carrier.validate_record(
+                    RecordId {
+                        replica: 2,
+                        sequence: 1
+                    },
+                    &bad
+                ),
+                Err(safemesh_crdt::WireError::OwnershipViolation)
+            );
+            carrier.apply_delta(bad);
+            assert_eq!(carrier, before);
+        }
+    }
+}
+
+#[test]
+fn loading_rest_after_refusal_preserves_previously_applied_records() {
+    let mut state = GCounter::new(2);
+    let mut prefix = EventLog::for_crdt(&state);
+    prefix.insert_record(record(1, 5));
+    let prefix =
+        EventLog::<GCounterDelta>::from_wire_bytes_for(&prefix.to_wire_bytes().unwrap(), &state)
+            .unwrap();
+    for r in prefix.records() {
+        state.apply_delta(r.delta.clone());
+    }
+    assert_eq!(state.value(), 5);
+
+    let bad = Record {
+        id: RecordId {
+            replica: 1,
+            sequence: 2,
+        },
+        delta: GCounterDelta {
+            replica: 0,
+            tally: 99,
+        },
+    };
+    let mut remaining = EventLog::for_crdt(&state);
+    remaining.insert_record(bad);
+    remaining.insert_record(record(3, 9));
+    let bytes = remaining.to_wire_bytes().unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            EventLog::<GCounterDelta>::from_wire_bytes_for(&bytes, &state),
+            Err(safemesh_crdt::WireError::OwnershipViolation)
+        );
+        assert_eq!(
+            state.value(),
+            5,
+            "failed load neither rolls back earlier replay nor applies a suffix"
+        );
+    }
+    // A caller can explicitly supply a separate valid suffix. The checked
+    // loader does not automatically skip a refused record or return a prefix.
+    let mut suffix = EventLog::for_crdt(&state);
+    suffix.insert_record(record(3, 9));
+    let loaded =
+        EventLog::<GCounterDelta>::from_wire_bytes_for(&suffix.to_wire_bytes().unwrap(), &state)
+            .unwrap();
+    for r in loaded.records() {
+        state.apply_delta(r.delta.clone());
+    }
+    assert_eq!(state.value(), 9);
+    println!("refusal=OwnershipViolation retry=OwnershipViolation earlier=5 suffix_after_explicit_selection=9");
 }

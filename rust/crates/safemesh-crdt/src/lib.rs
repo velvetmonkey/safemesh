@@ -35,12 +35,32 @@ use alloc::vec::Vec;
 ///
 /// For in-house types, this contract is backed by the Lean proof suite and
 /// differential conformance corpus. For user-defined types, it is a tested
-/// contract enforced by the laws harness, not a proof.
+/// contract enforced by the laws harness, not a proof. Admission is a separate
+/// obligation: user-defined CRDTs must implement [`Crdt::validate_record`].
 pub trait Mergeable {
     fn merge(&mut self, other: &Self);
 }
 
 /// Delta application surface for CRDT product types.
+///
+/// Every implementation, including user-defined types, must explicitly provide
+/// [`Crdt::validate_record`]. The compiler checks its presence; behavioral tests
+/// must check its contract (the merge laws alone do not establish admission).
+/// An implementation in another module cannot inherit permissive admission:
+///
+/// ```compile_fail,E0046
+/// mod downstream {
+///     use safemesh_crdt::{Crdt, Mergeable};
+///     pub struct MissingValidation;
+///     impl Mergeable for MissingValidation {
+///         fn merge(&mut self, _: &Self) {}
+///     }
+///     impl Crdt for MissingValidation {
+///         type Delta = ();
+///         fn apply_delta(&mut self, _: ()) {}
+///     }
+/// }
+/// ```
 pub trait Crdt: Mergeable {
     type Delta;
 
@@ -49,10 +69,22 @@ pub trait Crdt: Mergeable {
         None
     }
 
-    /// Validate decoded records before admission or replay into this carrier.
-    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
-        Ok(())
-    }
+    /// Validate a decoded record before admission or replay into this carrier.
+    ///
+    /// Refuse records outside the carrier's shape or ownership domain: no
+    /// carrier of that same shape may legitimately apply such a record. For
+    /// example, a fixed-width counter refuses an out-of-range coordinate or a
+    /// coordinate belonging to a different record author.
+    ///
+    /// Accept legitimate replay even when the current state absorbs the delta
+    /// (duplicates, lower tallies, losing writes, or existing tombstones). On a
+    /// fresh carrier of the same shape, it must yield the state the record
+    /// denotes, including lattice bottom for an empty remove. A lack of visible
+    /// change is not evidence of invalidity. Types with a total typed delta
+    /// domain may explicitly return `Ok(())`; they have no domain refusal case.
+    /// This check must not mutate state. Wire decoding and log-shape validation
+    /// are separate checks performed before this method.
+    fn validate_record(&self, id: RecordId, delta: &Self::Delta) -> Result<(), WireError>;
 
     fn apply_delta(&mut self, delta: Self::Delta);
 }
