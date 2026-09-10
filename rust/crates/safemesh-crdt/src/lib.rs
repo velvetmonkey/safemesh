@@ -9,7 +9,9 @@
 //! `lean/SafeMesh/` (carrier = join-semilattice, merge = join, delta =
 //! single-coordinate bump), held to those proofs by a differential
 //! conformance test (`tests/conformance.rs`) that replays a Lean-emitted
-//! corpus through this code and requires byte-identical outputs.
+//! JSON corpus through this code and compares state vectors, sets, read vectors,
+//! numeric values, ownership decisions and optional allocation/sequence results
+//! with the parsed expectations.
 //!
 //! What is PROVEN (in Lean, kernel-checked) vs what is TESTED (here): the
 //! Lean theorems are universal; this crate is checked against them over a
