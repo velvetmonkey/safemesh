@@ -23,14 +23,14 @@ rustup target add thumbv7em-none-eabihf wasm32-unknown-unknown
 (
   cd "$repo_root/rust"
   cargo fmt --all --check
-  cargo test --workspace
-  cargo test -p safemesh-crdt --no-default-features
-  cargo test -p safemesh-crdt --features laws
-  cargo test -p safemesh-crdt --examples
-  cargo run -p safemesh-crdt --example break_it
-  cargo run -p safemesh-crdt --example cold_chain_kill_test
-  cargo build -p safemesh-crdt --target thumbv7em-none-eabihf
-  cargo build -p safemesh-wasm --target wasm32-unknown-unknown
+  cargo test --workspace --locked
+  cargo test -p safemesh-crdt --no-default-features --locked
+  cargo test -p safemesh-crdt --features laws --locked
+  cargo test -p safemesh-crdt --examples --locked
+  cargo run -p safemesh-crdt --example break_it --locked
+  cargo run -p safemesh-crdt --example cold_chain_kill_test --locked
+  cargo build -p safemesh-crdt --target thumbv7em-none-eabihf --locked
+  cargo build -p safemesh-wasm --target wasm32-unknown-unknown --locked
   header="$(mktemp)"
   cbindgen --config crates/safemesh-ffi/cbindgen.toml \
     --crate safemesh-ffi \
