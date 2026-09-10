@@ -1156,3 +1156,69 @@ mod resource_limits {
         assert_eq!(log.admit_wire(&record(43, 1)), Ok(Admission::Collision));
     }
 }
+
+#[test]
+fn persisted_loading_policy_boundary_and_frame_bytes() {
+    use safemesh_crdt::{GCounter, ResourceDimension, ResourceLimit, ResourceLimits};
+    let state = GCounter::new(1);
+    let mut log = EventLog::for_crdt(&state);
+    log.append(
+        0,
+        GCounterDelta {
+            replica: 0,
+            tally: 7,
+        },
+    );
+    let bytes = log.to_wire_bytes().unwrap();
+    assert_eq!(bytes[0], 0x03);
+    let mut limits = ResourceLimits::default();
+    limits.history_record_count = 0;
+    assert_eq!(
+        EventLog::<GCounterDelta>::from_wire_bytes_for_with_limits(&bytes, &state, limits),
+        Err(WireError::ResourceLimit(ResourceLimit {
+            dimension: ResourceDimension::HistoryRecordCount,
+            limit: 0,
+            requested: 1
+        }))
+    );
+    limits.history_record_count = 1;
+    let loaded =
+        EventLog::<GCounterDelta>::from_wire_bytes_for_with_limits(&bytes, &state, limits).unwrap();
+    assert_eq!(loaded.to_wire_bytes().unwrap(), bytes);
+    assert_eq!(
+        EventLog::<GCounterDelta>::from_wire_bytes_for(&bytes, &state)
+            .unwrap()
+            .to_wire_bytes()
+            .unwrap(),
+        bytes
+    );
+    let default_writer_limit = ResourceLimits::default().writer_replica_count;
+    let wide_state = GCounter::new(default_writer_limit + 1);
+    let wide_bytes = EventLog::for_crdt(&wide_state).to_wire_bytes().unwrap();
+    assert_eq!(
+        EventLog::<GCounterDelta>::from_wire_bytes_for(&wide_bytes, &wide_state),
+        Err(WireError::ResourceLimit(ResourceLimit {
+            dimension: ResourceDimension::WriterReplicaCount,
+            limit: default_writer_limit,
+            requested: default_writer_limit + 1
+        }))
+    );
+    let raised = ResourceLimits {
+        writer_replica_count: default_writer_limit + 1,
+        ..ResourceLimits::default()
+    };
+    assert!(EventLog::<GCounterDelta>::from_wire_bytes_for_with_limits(
+        &wide_bytes,
+        &wide_state,
+        raised
+    )
+    .is_ok());
+    limits.history_encoded_bytes = bytes.len() - 1;
+    assert!(matches!(
+        EventLog::<GCounterDelta>::from_wire_bytes_for_with_limits(&bytes, &state, limits),
+        Err(WireError::ResourceLimit(ResourceLimit {
+            dimension: ResourceDimension::HistoryEncodedBytes,
+            ..
+        }))
+    ));
+}

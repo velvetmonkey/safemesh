@@ -1881,11 +1881,25 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
     /// Decode and compare the saved shape with the destination before replay.
     /// Plain `from_wire_bytes` decodes a log and retains its domain; it does not
     /// load a CRDT. Use this method at every persisted-state loading boundary.
+    /// This compatibility form uses development-placeholder `ResourceLimits::default()`;
+    /// use `from_wire_bytes_for_with_limits` to supply operator policy. Defaults
+    /// are not an operator-approved ceiling.
     pub fn from_wire_bytes_for<C: Crdt<Delta = D>>(
         bytes: &[u8],
         state: &C,
     ) -> Result<Self, WireError> {
-        let log = Self::from_wire_bytes(bytes)?;
+        Self::from_wire_bytes_for_with_limits(bytes, state, ResourceLimits::default())
+    }
+
+    /// Load persisted state with explicit operator policy, checking limits before
+    /// allocation and validating its destination shape before replay.
+    pub fn from_wire_bytes_for_with_limits<C: Crdt<Delta = D>>(
+        bytes: &[u8],
+        state: &C,
+        limits: ResourceLimits,
+    ) -> Result<Self, WireError> {
+        limits.check(ResourceDimension::HistoryEncodedBytes, bytes.len())?;
+        let log = Self::from_wire_bytes_with_limits(bytes, limits)?;
         match (state.replica_count(), log.replica_count) {
             (Some(expected), Some(actual)) if expected != actual => {
                 return Err(WireError::ReplicaCountMismatch { expected, actual })

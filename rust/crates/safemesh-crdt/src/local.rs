@@ -6,7 +6,7 @@
 //! and offers checked ordinary restart of an existing committed store.
 use crate::{
     ownership::*, Admission, Crdt, EventLog, GCounter, GCounterDelta, OrSet, OrSetDelta, Record,
-    RecordId, WireDecode, WireEncode, WireError, WireSchema,
+    RecordId, ResourceDimension, ResourceLimits, WireDecode, WireEncode, WireError, WireSchema,
 };
 use alloc::{format, string::String, vec::Vec};
 use std::{
@@ -74,7 +74,7 @@ where
             Err(TryLockError::Error(e)) => return Err(e.into()),
         };
         let mut bytes = Vec::new();
-        fence.read_to_end(&mut bytes)?;
+        Read::by_ref(&mut fence).take(25).read_to_end(&mut bytes)?;
         let generation = if bytes.is_empty() && held {
             // Reserve the store even before the first edit. Resetting an old
             // allocation is never an implicit recovery policy.
@@ -295,8 +295,25 @@ pub struct CommittedTransaction {
 }
 impl CommittedTransaction {
     pub fn read(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
+        Self::read_with_limits(root, config, ResourceLimits::default())
+    }
+    /// Read at most the configured frame allowance plus the unchanged 24-byte wrapper.
+    pub fn read_with_limits(
+        root: &Path,
+        config: WriterConfig,
+        limits: ResourceLimits,
+    ) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
-        let bytes = fs::read(transaction_path(root, config))?;
+        let file = File::open(transaction_path(root, config))?;
+        let mut bytes = Vec::new();
+        file.take((limits.history_encoded_bytes as u64).saturating_add(25))
+            .read_to_end(&mut bytes)?;
+        limits
+            .check(
+                ResourceDimension::HistoryEncodedBytes,
+                bytes.len().saturating_sub(24),
+            )
+            .map_err(|e| LocalError::History(e.into()))?;
         if bytes.len() < 24 {
             return Err(LocalError::RecoveryRequired);
         }
@@ -324,12 +341,28 @@ fn transaction_path(root: &Path, config: WriterConfig) -> PathBuf {
 pub struct DurableReplica<C: Crdt> {
     inner: LocalReplica<C>,
     path: PathBuf,
+    limits: ResourceLimits,
+    encoded_bytes: usize,
+    payload_size: fn(&C::Delta, ResourceLimits) -> Result<usize, WireError>,
 }
 impl<C: Crdt> DurableReplica<C>
 where
     C::Delta: OwnedDelta + Clone + PartialEq + WireEncode + WireSchema,
 {
-    fn fresh(root: &Path, config: WriterConfig, state: C) -> Result<Self, LocalError> {
+    fn fresh(
+        root: &Path,
+        config: WriterConfig,
+        state: C,
+        limits: ResourceLimits,
+        payload_size: fn(&C::Delta, ResourceLimits) -> Result<usize, WireError>,
+    ) -> Result<Self, LocalError> {
+        let encoded_bytes = EventLog::for_crdt(&state)
+            .to_wire_bytes()
+            .map_err(LocalError::History)?
+            .len();
+        limits
+            .check(ResourceDimension::HistoryEncodedBytes, encoded_bytes)
+            .map_err(|e| LocalError::History(e.into()))?;
         let root = root.canonicalize()?;
         // Never overwrite a transaction whose fence is missing.
         match fs::metadata(transaction_path(&root, config)) {
@@ -342,7 +375,13 @@ where
             return Err(LocalError::Refused);
         }
         let path = transaction_path(&root, config);
-        let mut replica = Self { inner, path };
+        let mut replica = Self {
+            inner,
+            path,
+            limits,
+            encoded_bytes,
+            payload_size,
+        };
         replica.inner.held = false;
         Self::commit(&replica.path, config, &replica.inner.log, 0)?;
         replica.inner.held = true;
@@ -382,12 +421,56 @@ where
     pub fn renew(&mut self, ticket: WriteTicket) -> Result<WriteTicket, LocalError> {
         self.inner.renew(ticket)
     }
+    /// Development defaults are placeholders; operator policy can be changed
+    /// without deleting retained history. A tighter policy controls future work.
+    pub fn set_limits(&mut self, limits: ResourceLimits) {
+        self.limits = limits;
+    }
+    pub fn limits(&self) -> ResourceLimits {
+        self.limits
+    }
+
     fn admit(
         &mut self,
         ticket: WriteTicket,
         record: Record<C::Delta>,
         local: bool,
     ) -> Result<Admission, LocalError> {
+        // Check caller-owned payload sizes before cloning or encoding anything.
+        // Only the two built-in constructors can install this size function.
+        let payload =
+            (self.payload_size)(&record.delta, self.limits).map_err(LocalError::History)?;
+        let check = |dimension, requested| {
+            self.limits
+                .check(dimension, requested)
+                .map_err(|e| LocalError::History(e.into()))
+        };
+        check(ResourceDimension::PerRecordPayloadBytes, payload)?;
+        let existing = self.inner.log.records().iter().any(|r| r.id == record.id);
+        let requested = self
+            .inner
+            .log
+            .records()
+            .len()
+            .saturating_add(usize::from(!existing));
+        check(ResourceDimension::HistoryRecordCount, requested)?;
+        check(
+            ResourceDimension::WriterReplicaCount,
+            self.inner.config.writers as usize,
+        )?;
+        let encoded_bytes = self.encoded_bytes.saturating_add(if existing {
+            0
+        } else {
+            payload.saturating_add(25)
+        });
+        check(ResourceDimension::HistoryEncodedBytes, encoded_bytes)?;
+        if !local {
+            check(ResourceDimension::RecordsPerSyncBatch, 1)?;
+            check(
+                ResourceDimension::BytesPerSyncBatch,
+                payload.saturating_add(21),
+            )?;
+        }
         let path = &self.path;
         let config = self.inner.config;
         let outcome = self
@@ -395,6 +478,9 @@ where
             .admit_committed(ticket, record, local, |log, sequence| {
                 Self::commit(path, config, log, sequence)
             })?;
+        if outcome == Admission::Accepted {
+            self.encoded_bytes = encoded_bytes;
+        }
         #[cfg(test)]
         persistence::checkpoint(7)?;
         Ok(outcome)
@@ -412,6 +498,7 @@ where
         delta: C::Delta,
     ) -> Result<Record<C::Delta>, LocalError> {
         let sequence = next_sequence(self.inner.last_sequence).ok_or(LocalError::Exhausted)?;
+        (self.payload_size)(&delta, self.limits).map_err(LocalError::History)?;
         let record = Record {
             id: RecordId {
                 replica: self.inner.config.writer,
@@ -429,7 +516,13 @@ impl<C: Crdt> DurableReplica<C>
 where
     C::Delta: OwnedDelta + Clone + PartialEq + WireEncode + WireDecode + WireSchema,
 {
-    fn restart(root: &Path, config: WriterConfig, state: C) -> Result<Self, LocalError> {
+    fn restart(
+        root: &Path,
+        config: WriterConfig,
+        state: C,
+        limits: ResourceLimits,
+        payload_size: fn(&C::Delta, ResourceLimits) -> Result<usize, WireError>,
+    ) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
         let root = root.canonicalize()?;
         // Opening without create is deliberate: missing ownership is not a new store.
@@ -443,7 +536,7 @@ where
             Err(TryLockError::Error(e)) => return Err(e.into()),
         }
         let mut bytes = Vec::new();
-        fence.read_to_end(&mut bytes)?;
+        Read::by_ref(&mut fence).take(25).read_to_end(&mut bytes)?;
         if bytes.len() != 24 {
             return Err(LocalError::RecoveryRequired);
         }
@@ -456,9 +549,13 @@ where
             return Err(LocalError::RecoveryRequired);
         }
         // The lock covers reading, checking and replaying the complete transaction.
-        let transaction = CommittedTransaction::read(&root, config)?;
-        let log = EventLog::<C::Delta>::from_wire_bytes_for(&transaction.log_bytes, &state)
-            .map_err(LocalError::History)?;
+        let transaction = CommittedTransaction::read_with_limits(&root, config, limits)?;
+        let log = EventLog::<C::Delta>::from_wire_bytes_for_with_limits(
+            &transaction.log_bytes,
+            &state,
+            limits,
+        )
+        .map_err(LocalError::History)?;
         let mut inner = LocalReplica {
             config,
             fence,
@@ -483,22 +580,77 @@ where
         Ok(Self {
             inner,
             path: transaction_path(&root, config),
+            limits,
+            encoded_bytes: transaction.log_bytes.len(),
+            payload_size,
         })
     }
+}
+
+fn counter_payload_size(_: &GCounterDelta, limits: ResourceLimits) -> Result<usize, WireError> {
+    limits.check(ResourceDimension::PerRecordPayloadBytes, 17)?;
+    Ok(17)
+}
+fn set_payload_size(
+    delta: &OrSetDelta<String, u64>,
+    limits: ResourceLimits,
+) -> Result<usize, WireError> {
+    let size = match delta {
+        OrSetDelta::Add { element, .. } => {
+            limits.check(ResourceDimension::LiveCarrierEntries, 1)?;
+            element.len().saturating_add(13)
+        }
+        OrSetDelta::Remove { tokens } => {
+            limits.check(ResourceDimension::RetainedTombstoneCount, tokens.len())?;
+            tokens.len().saturating_mul(8).saturating_add(5)
+        }
+    };
+    limits.check(ResourceDimension::PerRecordPayloadBytes, size)?;
+    Ok(size)
 }
 
 impl DurableReplica<GCounter> {
     /// Reacquire ownership, validate the committed history and replay fresh state.
     /// Any error returns no replica and grants no write ticket.
+    /// Compatibility constructor using development-placeholder defaults.
     pub fn restart_counter(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
-        config.validate().map_err(|_| LocalError::Configuration)?;
-        let n = usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?;
-        Self::restart(root, config, GCounter::new(n))
+        Self::restart_counter_with_limits(root, config, ResourceLimits::default())
     }
-    pub fn counter(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
+    /// Construct with explicit operator resource policy; no history is reclaimed.
+    pub fn restart_counter_with_limits(
+        root: &Path,
+        config: WriterConfig,
+        limits: ResourceLimits,
+    ) -> Result<Self, LocalError> {
+        limits
+            .check(
+                ResourceDimension::WriterReplicaCount,
+                usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?,
+            )
+            .map_err(|e| LocalError::History(e.into()))?;
         config.validate().map_err(|_| LocalError::Configuration)?;
         let n = usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?;
-        Self::fresh(root, config, GCounter::new(n))
+        Self::restart(root, config, GCounter::new(n), limits, counter_payload_size)
+    }
+    /// Compatibility constructor using development-placeholder defaults.
+    pub fn counter(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
+        Self::counter_with_limits(root, config, ResourceLimits::default())
+    }
+    /// Construct with explicit operator resource policy; no history is reclaimed.
+    pub fn counter_with_limits(
+        root: &Path,
+        config: WriterConfig,
+        limits: ResourceLimits,
+    ) -> Result<Self, LocalError> {
+        limits
+            .check(
+                ResourceDimension::WriterReplicaCount,
+                usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?,
+            )
+            .map_err(|e| LocalError::History(e.into()))?;
+        config.validate().map_err(|_| LocalError::Configuration)?;
+        let n = usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?;
+        Self::fresh(root, config, GCounter::new(n), limits, counter_payload_size)
     }
     pub fn bump(
         &mut self,
@@ -516,11 +668,41 @@ impl DurableReplica<GCounter> {
 }
 impl DurableReplica<OrSet<String, u64>> {
     /// Checked ordinary restart, including tombstones and token allocation.
+    /// Compatibility constructor using development-placeholder defaults.
     pub fn restart_utf8_set(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
-        Self::restart(root, config, OrSet::new())
+        Self::restart_utf8_set_with_limits(root, config, ResourceLimits::default())
     }
+    /// Construct with explicit operator resource policy; no history is reclaimed.
+    pub fn restart_utf8_set_with_limits(
+        root: &Path,
+        config: WriterConfig,
+        limits: ResourceLimits,
+    ) -> Result<Self, LocalError> {
+        limits
+            .check(
+                ResourceDimension::WriterReplicaCount,
+                usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?,
+            )
+            .map_err(|e| LocalError::History(e.into()))?;
+        Self::restart(root, config, OrSet::new(), limits, set_payload_size)
+    }
+    /// Compatibility constructor using development-placeholder defaults.
     pub fn utf8_set(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
-        Self::fresh(root, config, OrSet::new())
+        Self::utf8_set_with_limits(root, config, ResourceLimits::default())
+    }
+    /// Construct with explicit operator resource policy; no history is reclaimed.
+    pub fn utf8_set_with_limits(
+        root: &Path,
+        config: WriterConfig,
+        limits: ResourceLimits,
+    ) -> Result<Self, LocalError> {
+        limits
+            .check(
+                ResourceDimension::WriterReplicaCount,
+                usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?,
+            )
+            .map_err(|e| LocalError::History(e.into()))?;
+        Self::fresh(root, config, OrSet::new(), limits, set_payload_size)
     }
     pub fn add(
         &mut self,
@@ -541,6 +723,23 @@ impl DurableReplica<OrSet<String, u64>> {
         ticket: WriteTicket,
         element: &String,
     ) -> Result<Record<OrSetDelta<String, u64>>, LocalError> {
+        // Count borrowed entries before observed_tokens allocates its collection.
+        let count = self
+            .inner
+            .state
+            .adds()
+            .iter()
+            .filter(|(candidate, _)| candidate == element)
+            .count();
+        self.limits
+            .check(ResourceDimension::RetainedTombstoneCount, count)
+            .map_err(|e| LocalError::History(e.into()))?;
+        self.limits
+            .check(
+                ResourceDimension::PerRecordPayloadBytes,
+                count.saturating_mul(8).saturating_add(5),
+            )
+            .map_err(|e| LocalError::History(e.into()))?;
         self.append(
             ticket,
             OrSetDelta::Remove {
@@ -777,6 +976,207 @@ mod durable_tests {
         std::process::exit(77);
     }
     static SERIAL: AtomicU64 = AtomicU64::new(0);
+    #[test]
+    fn durable_1100_bumps_policy_refusal_then_append_export_restart() {
+        use crate::{ExportCursor, LimitedEventLog, ResourceLimit};
+        let root = root();
+        let config = WriterConfig {
+            writers: 1,
+            writer: 0,
+        };
+        let mut limits = ResourceLimits {
+            history_record_count: 1000,
+            ..ResourceLimits::default()
+        };
+        let mut r = DurableReplica::counter_with_limits(&root, config, limits).unwrap();
+        for tally in 0..1100 {
+            let result = r.bump(r.ticket(), tally);
+            if tally < 1000 {
+                assert_eq!(result.unwrap().id.sequence, tally + 1);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(LocalError::History(WireError::ResourceLimit(
+                        ResourceLimit {
+                            dimension: ResourceDimension::HistoryRecordCount,
+                            limit: 1000,
+                            requested: 1001
+                        }
+                    )))
+                ));
+            }
+        }
+        assert_eq!(r.log().records().len(), 1000);
+        let before = r.log().to_wire_bytes().unwrap();
+        assert_eq!(
+            CommittedTransaction::read_with_limits(&root, config, limits)
+                .unwrap()
+                .log_bytes,
+            before
+        );
+        assert_eq!(
+            EventLog::<GCounterDelta>::from_wire_bytes_for_with_limits(
+                &before,
+                &GCounter::new(1),
+                limits
+            )
+            .unwrap()
+            .records()
+            .len(),
+            1000
+        );
+        limits.history_record_count = 1100;
+        r.set_limits(limits);
+        assert_eq!(r.bump(r.ticket(), 1000).unwrap().id.sequence, 1001);
+        let mut export = LimitedEventLog::<GCounterDelta>::new(Some(1), limits).unwrap();
+        for record in r.log().records() {
+            export.admit_wire(&record.to_wire_bytes().unwrap()).unwrap();
+        }
+        let mut cursor = ExportCursor::default();
+        let mut exported = Vec::new();
+        while let Some(chunk) = export.export_chunk(cursor).unwrap() {
+            exported.extend_from_slice(chunk.bytes);
+            cursor = chunk.next;
+        }
+        let expected: Vec<u8> = r
+            .log()
+            .records()
+            .iter()
+            .flat_map(|r| r.to_wire_bytes().unwrap())
+            .collect();
+        assert_eq!(exported, expected);
+        let bytes = r.log().to_wire_bytes().unwrap();
+        let transaction = fs::read(transaction_path(&root, config)).unwrap();
+        let mut expected_transaction = [
+            1u64.to_le_bytes(),
+            0u64.to_le_bytes(),
+            1001u64.to_le_bytes(),
+        ]
+        .concat();
+        expected_transaction.extend_from_slice(&bytes);
+        assert_eq!(transaction, expected_transaction);
+        drop(r);
+        let r = DurableReplica::restart_counter_with_limits(&root, config, limits).unwrap();
+        assert_eq!(r.log().to_wire_bytes().unwrap(), bytes);
+        assert_eq!(r.state().state(), &[1000]);
+        assert_eq!(r.inner.last_sequence, 1001);
+    }
+
+    #[test]
+    fn durable_policy_inputs_and_refusal_preserve_ticket_and_bytes() {
+        use crate::ResourceLimit;
+        let root = root();
+        let config = WriterConfig {
+            writers: 1,
+            writer: 0,
+        };
+        let mut limits = ResourceLimits::default();
+        limits.writer_replica_count = 0;
+        assert!(matches!(
+            DurableReplica::counter_with_limits(&root, config, limits),
+            Err(LocalError::History(WireError::ResourceLimit(
+                ResourceLimit {
+                    dimension: ResourceDimension::WriterReplicaCount,
+                    limit: 0,
+                    requested: 1
+                }
+            )))
+        ));
+        limits.writer_replica_count = 1;
+        let mut r = DurableReplica::utf8_set_with_limits(&root, config, limits).unwrap();
+        let bytes = fs::read(transaction_path(&root, config)).unwrap();
+        limits.per_record_payload_bytes = 13;
+        r.set_limits(limits);
+        assert!(matches!(
+            r.add(r.ticket(), "x".into()),
+            Err(LocalError::History(WireError::ResourceLimit(
+                ResourceLimit {
+                    dimension: ResourceDimension::PerRecordPayloadBytes,
+                    limit: 13,
+                    requested: 14
+                }
+            )))
+        ));
+        assert_eq!(fs::read(transaction_path(&root, config)).unwrap(), bytes);
+        limits.per_record_payload_bytes = 14;
+        r.set_limits(limits);
+        let added = r.add(r.ticket(), "x".into()).unwrap();
+        assert_eq!(added.id.sequence, 1);
+        let before = r.log().to_wire_bytes().unwrap();
+        limits.retained_tombstone_count = 0;
+        r.set_limits(limits);
+        assert!(matches!(
+            r.remove(r.ticket(), &"x".into()),
+            Err(LocalError::History(WireError::ResourceLimit(
+                ResourceLimit {
+                    dimension: ResourceDimension::RetainedTombstoneCount,
+                    limit: 0,
+                    requested: 1
+                }
+            )))
+        ));
+        assert_eq!(r.log().to_wire_bytes().unwrap(), before);
+        limits.retained_tombstone_count = 1;
+        limits.records_per_sync_batch = 0;
+        r.set_limits(limits);
+        assert!(matches!(
+            r.receive(r.ticket(), added.clone()),
+            Err(LocalError::History(WireError::ResourceLimit(
+                ResourceLimit {
+                    dimension: ResourceDimension::RecordsPerSyncBatch,
+                    limit: 0,
+                    requested: 1
+                }
+            )))
+        ));
+        limits.records_per_sync_batch = 1;
+        limits.bytes_per_sync_batch = added.to_wire_bytes().unwrap().len() - 1;
+        r.set_limits(limits);
+        assert!(matches!(
+            r.receive(r.ticket(), added.clone()),
+            Err(LocalError::History(WireError::ResourceLimit(
+                ResourceLimit {
+                    dimension: ResourceDimension::BytesPerSyncBatch,
+                    ..
+                }
+            )))
+        ));
+        limits.bytes_per_sync_batch += 1;
+        r.set_limits(limits);
+        assert_eq!(r.receive(r.ticket(), added).unwrap(), Admission::Duplicate);
+        limits.history_encoded_bytes = r.encoded_bytes;
+        r.set_limits(limits);
+        assert!(matches!(
+            r.remove(r.ticket(), &"x".into()),
+            Err(LocalError::History(WireError::ResourceLimit(
+                ResourceLimit {
+                    dimension: ResourceDimension::HistoryEncodedBytes,
+                    ..
+                }
+            )))
+        ));
+        limits.history_encoded_bytes += 38;
+        r.set_limits(limits);
+        r.remove(r.ticket(), &"x".into()).unwrap();
+        assert_eq!(r.encoded_bytes, r.log().to_wire_bytes().unwrap().len());
+        let bytes = r.log().to_wire_bytes().unwrap();
+        drop(r);
+        limits.history_encoded_bytes = bytes.len() - 1;
+        assert!(matches!(
+            DurableReplica::restart_utf8_set_with_limits(&root, config, limits),
+            Err(LocalError::History(WireError::ResourceLimit(
+                ResourceLimit {
+                    dimension: ResourceDimension::HistoryEncodedBytes,
+                    ..
+                }
+            )))
+        ));
+        limits.history_encoded_bytes += 1;
+        let r = DurableReplica::restart_utf8_set_with_limits(&root, config, limits).unwrap();
+        assert_eq!(r.log().to_wire_bytes().unwrap(), bytes);
+        assert_eq!(r.state().tombstones().len(), 1);
+    }
+
     fn root() -> PathBuf {
         let root = std::env::temp_dir().join(format!(
             "durable-{}-{}",
