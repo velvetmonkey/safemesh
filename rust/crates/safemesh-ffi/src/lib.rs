@@ -2,6 +2,50 @@
 // Copyright (C) 2026 Ben Cassie
 // SPDX-License-Identifier: Apache-2.0
 
+//! Thin C ABI spine over the SafeMesh Rust core.
+//!
+//! Every function that takes a handle or an owned buffer is `unsafe extern "C"`, because the
+//! caller, not the compiler, guarantees that the pointer is live, unaliased, and released
+//! exactly once. Each such function carries a `# Safety` section naming what the caller must
+//! guarantee and whether the call consumes the pointer. The C ABI is unaffected: an
+//! `unsafe extern "C"` function exports the same symbol and calling convention as `extern "C"`.
+//!
+//! # Safety gate
+//!
+//! Safe Rust cannot reach any pointer operation whose validity it cannot prove. Each block below
+//! is a `compile_fail` doctest that `cargo test -p safemesh-ffi --doc` rejects if it ever
+//! compiles. Stable rustdoc does not check the annotated error code, so the enforced gate is
+//! `tests/compile_fail.rs`, which compiles the same cases from `tests/compile_fail/` and requires
+//! the specific error `E0133` (call to unsafe function requires an `unsafe` block).
+//!
+//! ```compile_fail,E0133
+//! let counter = safemesh_ffi::safemesh_gcounter_new(1);
+//! safemesh_ffi::safemesh_gcounter_free(counter);
+//! ```
+//!
+//! ```compile_fail,E0133
+//! let counter = safemesh_ffi::safemesh_gcounter_new(1);
+//! safemesh_ffi::safemesh_gcounter_apply_bump(counter, 0, 1);
+//! ```
+//!
+//! ```compile_fail,E0133
+//! let counter = safemesh_ffi::safemesh_gcounter_new(1);
+//! safemesh_ffi::safemesh_gcounter_value(counter);
+//! ```
+//!
+//! ```compile_fail,E0133
+//! let bytes = safemesh_ffi::safemesh_gcounter_delta_to_wire(0, 1);
+//! safemesh_ffi::safemesh_bytes_free(bytes);
+//! ```
+//!
+//! The double free that motivated the gate is also rejected outright:
+//!
+//! ```compile_fail,E0133
+//! let counter = safemesh_ffi::safemesh_gcounter_new(2);
+//! safemesh_ffi::safemesh_gcounter_free(counter);
+//! safemesh_ffi::safemesh_gcounter_free(counter);
+//! ```
+
 use safemesh_crdt::{GCounter, GCounterDelta, OrSet, WireEncode};
 
 pub struct SafeMeshGCounter {
@@ -42,22 +86,37 @@ pub extern "C" fn safemesh_gcounter_new(replicas: usize) -> *mut SafeMeshGCounte
     }))
 }
 
+/// Release a counter handle. Null is accepted and ignored.
+///
+/// # Safety
+/// `counter` must be null or a handle returned by `safemesh_gcounter_new` that has not been
+/// freed. The handle is consumed: ownership passes to this call, the memory is released, and
+/// the caller no longer owns the pointer afterwards. It must not read, write, or free the
+/// pointer again; a second call on the same handle is a double free. No other use of the
+/// counter may be in progress during the call. The null check cannot detect a dangling or
+/// already-freed pointer; passing one is undefined behaviour.
 #[no_mangle]
-pub extern "C" fn safemesh_gcounter_free(counter: *mut SafeMeshGCounter) {
+pub unsafe extern "C" fn safemesh_gcounter_free(counter: *mut SafeMeshGCounter) {
     if !counter.is_null() {
-        unsafe {
-            drop(Box::from_raw(counter));
-        }
+        drop(Box::from_raw(counter));
     }
 }
 
+/// Apply a bump. Returns false only for a null handle; an out-of-range replica is ignored.
+///
+/// # Safety
+/// `counter` must be null or a live handle returned by `safemesh_gcounter_new` that has not
+/// been freed. The call needs exclusive access for its duration: no other read or write of
+/// the same counter may overlap it. The caller keeps ownership; the handle stays valid after
+/// the call and must still be released once with `safemesh_gcounter_free`. The null check
+/// cannot detect a dangling or already-freed pointer; passing one is undefined behaviour.
 #[no_mangle]
-pub extern "C" fn safemesh_gcounter_apply_bump(
+pub unsafe extern "C" fn safemesh_gcounter_apply_bump(
     counter: *mut SafeMeshGCounter,
     replica: usize,
     tally: u64,
 ) -> bool {
-    match unsafe { counter.as_mut() } {
+    match counter.as_mut() {
         Some(counter) => {
             counter.inner.apply_bump(replica, tally);
             true
@@ -66,9 +125,17 @@ pub extern "C" fn safemesh_gcounter_apply_bump(
     }
 }
 
+/// Read the counter total. A null handle reads as 0.
+///
+/// # Safety
+/// `counter` must be null or a live handle returned by `safemesh_gcounter_new` that has not
+/// been freed. Concurrent reads may overlap, but no write to the same counter may be in
+/// progress during the call. The caller keeps ownership; the handle stays valid after the
+/// call. The null check cannot detect a dangling or already-freed pointer; passing one is
+/// undefined behaviour.
 #[no_mangle]
-pub extern "C" fn safemesh_gcounter_value(counter: *const SafeMeshGCounter) -> u64 {
-    match unsafe { counter.as_ref() } {
+pub unsafe extern "C" fn safemesh_gcounter_value(counter: *const SafeMeshGCounter) -> u64 {
+    match counter.as_ref() {
         Some(counter) => counter.inner.value(),
         None => 0,
     }
@@ -82,12 +149,18 @@ pub extern "C" fn safemesh_gcounter_delta_to_wire(replica: usize, tally: u64) ->
     }
 }
 
+/// Release a byte buffer returned by `safemesh_gcounter_delta_to_wire`. A null `ptr` is ignored.
+///
+/// # Safety
+/// `bytes` must be a value returned by this library with `ptr`, `len` and `cap` unmodified,
+/// and it must not have been released before. The buffer is consumed: ownership passes to
+/// this call and the caller must not read or free `ptr` again; a second call on the same
+/// value is a double free. A buffer that did not come from this library, or whose fields were
+/// changed, is undefined behaviour.
 #[no_mangle]
-pub extern "C" fn safemesh_bytes_free(bytes: SafeMeshBytes) {
+pub unsafe extern "C" fn safemesh_bytes_free(bytes: SafeMeshBytes) {
     if !bytes.ptr.is_null() {
-        unsafe {
-            drop(Vec::from_raw_parts(bytes.ptr, bytes.len, bytes.cap));
-        }
+        drop(Vec::from_raw_parts(bytes.ptr, bytes.len, bytes.cap));
     }
 }
 
