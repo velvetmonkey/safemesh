@@ -1028,9 +1028,12 @@ pub struct VersionVector {
     zero_replicas: BTreeSet<u64>,
 }
 
-/// Maximum number of sequence IDs reconstructed for one replica from a peer map.
-/// This bounds CPU and memory work at an untrusted reconstruction boundary while
-/// leaving room for the ordinary peer histories this crate targets.
+/// Maximum number of positive sequence IDs reconstructed for one replica from a peer map.
+/// This bounds per-replica positive-prefix replay only, not total reconstruction
+/// CPU or memory work. The caller must bound the number of authors (`r`) and zero
+/// acknowledgements (`z`) before accepting peer input; this constant caps neither.
+/// Total positive-sequence visits (`s`) can still reach `r * MAX_PEER_PREFIX`.
+/// See [`VersionVector`] for the whole-input time and space costs.
 pub const MAX_PEER_PREFIX: u64 = 1_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1071,6 +1074,9 @@ impl VersionVector {
 
     /// Reconstruct a vector from a peer's canonical positive prefixes and
     /// independent sequence-zero acknowledgements.
+    ///
+    /// [`MAX_PEER_PREFIX`] caps each positive prefix only; callers must bound
+    /// author and zero-acknowledgement counts to bound whole-input work.
     pub fn from_peer_prefixes(
         entries: &BTreeMap<u64, u64>,
         zero_replicas: &BTreeSet<u64>,
@@ -2793,6 +2799,15 @@ mod version_vector_tests {
     use super::*;
 
     #[test]
+    fn planted_zero_acknowledgements_exceed_per_replica_prefix_cap() {
+        let zeros: BTreeSet<u64> = (0..=1_000_000).collect();
+        let vector = VersionVector::from_peer_prefixes(&BTreeMap::new(), &zeros).unwrap();
+        assert_eq!(vector.zero_replicas().len(), 1_000_001);
+        assert_eq!(vector.zero_replicas(), &zeros);
+        assert!(vector.entries().is_empty());
+    }
+
+    #[test]
     fn planted_zero_prefix_is_rejected() {
         let entries = BTreeMap::from([(7, 0)]);
         let zeros = BTreeSet::new();
@@ -2824,6 +2839,21 @@ mod version_vector_tests {
             (BTreeMap::new(), BTreeSet::from([2])),
             (BTreeMap::from([(3, MAX_PEER_PREFIX)]), BTreeSet::new()),
             (BTreeMap::from([(4, 2)]), BTreeSet::from([4, 5])),
+            (BTreeMap::from([(0, 1)]), BTreeSet::new()),
+            (BTreeMap::from([(u64::MAX, 3)]), BTreeSet::new()),
+            (
+                (1..=32).map(|replica| (replica, replica)).collect(),
+                BTreeSet::new(),
+            ),
+            (BTreeMap::from([(0, 5)]), BTreeSet::from([0])),
+            (BTreeMap::new(), BTreeSet::from([0, u64::MAX])),
+            (
+                BTreeMap::from([(11, MAX_PEER_PREFIX), (12, MAX_PEER_PREFIX)]),
+                BTreeSet::new(),
+            ),
+            (BTreeMap::from([(8, MAX_PEER_PREFIX - 1)]), BTreeSet::new()),
+            (BTreeMap::from([(1, 4), (3, 2)]), BTreeSet::from([2, 9])),
+            (BTreeMap::from([(1, 2), (1, 4)]), BTreeSet::new()),
         ];
         let mut constructed = 0;
         for (entries, zeros) in cases {
@@ -2843,7 +2873,40 @@ mod version_vector_tests {
             assert_eq!(actual, expected);
             constructed += 1;
         }
-        assert_eq!(constructed, 5);
+        assert_eq!(constructed, 14);
+    }
+
+    #[test]
+    fn refused_peer_map_leaves_since_on_previous_version_unchanged() {
+        let mut local = EventLog::new();
+        let acknowledged = local.append(7, 10u64);
+        let missing = local.append(7, 20u64);
+        let remote_version =
+            VersionVector::from_peer_prefixes(&BTreeMap::from([(7, 1)]), &BTreeSet::new()).unwrap();
+        let before = local.since(&remote_version);
+        for (prefix, error) in [
+            (0, VersionVectorError::ZeroPrefix { replica: 7 }),
+            (
+                MAX_PEER_PREFIX + 1,
+                VersionVectorError::PrefixTooLarge {
+                    replica: 7,
+                    prefix: MAX_PEER_PREFIX + 1,
+                    max: MAX_PEER_PREFIX,
+                },
+            ),
+        ] {
+            assert_eq!(
+                VersionVector::from_peer_prefixes(&BTreeMap::from([(7, prefix)]), &BTreeSet::new()),
+                Err(error)
+            );
+            let after = local.since(&remote_version);
+            assert_eq!(after, before);
+            assert_eq!(after.len(), 1);
+            assert_eq!(after[0].id, missing);
+            assert!(remote_version.includes(acknowledged));
+            assert!(!remote_version.includes(missing));
+        }
+        assert_eq!(local.since(&VersionVector::new()).len(), 2);
     }
 
     #[test]
