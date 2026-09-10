@@ -29,80 +29,80 @@ Run `summarize.py --self-test`, then `summarize.py <evidence/raw> <new-output-fi
 
 B1 repetitions are successive accepted appends, so retained history increases by one between samples. B2 preserves actual outcomes rather than equating requested duplicate ratio with measured ratio. B3 uses posix_fadvise(DONTNEED) on the transaction only; fence and device caches are not made cold. B4 measures caller batching over an unbounded export and borrowed typed record import; wire bytes are encoded record lengths, and encode time is outside export/import timers. B5 times removal/query loops and records clone allocation as an explicit memory proxy. B6 times candidate decoding of generated valid and damaged frames. No production source or persisted format is modified.
 
-## T2 — Six families
+## T2 — Measurement families
 
-FAMILY B1 RAN yes; CARRIERS OR-Set UTF-8; RUNGS retained setup records 8, 32, 128, 512; STOPPED BY box brake: swap activity above 1000 KB/s; REPETITIONS 7 per condition. Top complete rung B1-r3: payload 256 bytes, actual writer domain 8.
+FAMILY B1 RAN yes; MEASUREMENTS CRDT not recorded; durability not recorded; append; RUNGS retained setup records 8, 32, 128, 512; STOPPED BY box brake: swap activity above 1000 KB/s; REPETITIONS 7 per condition. Top complete rung B1-r3: payload 256 bytes, actual writer domain 8.
 
 | Operation / condition | p50/p95/p99 ms | Peak RSS bytes | Peak allocator bytes | Cumulative allocation bytes, min–max | Kernel write bytes, min–max |
 |---|---:|---:|---:|---:|---:|
-| append / warm  | 2.584374/2.617129/2.617129 | 3751936 | 1211871 | 1762892–1779450 | 151552–155648 |
+| CRDT not recorded; durability not recorded; append / warm  | 2.584374/2.617129/2.617129 | 3751936 | 1211871 | 1762892–1779450 | 151552–155648 |
 
 BYTES transaction 150904–152668; amplification 589.469–596.359 serialized; 592.000–608.000 kernel. ASSERTION accepted history grows; full-history rewrite is exposed by actual resulting transaction lengths and storage accounting. RESULT held. Sync counts are in the separate traced control, not assumed per untraced rung.
 
-FAMILY B2 RAN yes; CARRIERS OR-Set UTF-8; RUNGS retained setup records 8, 32, 128; STOPPED BY box brake: swap activity above 1000 KB/s; REPETITIONS 7 per condition. Top complete rung B2-r2: payload 128 bytes, actual writer domain 4.
+FAMILY B2 RAN yes; MEASUREMENTS CRDT not recorded; durability not recorded; duplicate_batch, CRDT not recorded; durability not recorded; mixed_batch; RUNGS retained setup records 8, 32, 128; STOPPED BY box brake: swap activity above 1000 KB/s; REPETITIONS 7 per condition. Top complete rung B2-r2: payload 128 bytes, actual writer domain 4.
 
 | Operation / condition | p50/p95/p99 ms | Peak RSS bytes | Peak allocator bytes | Cumulative allocation bytes, min–max | Kernel write bytes, min–max |
 |---|---:|---:|---:|---:|---:|
-| duplicate_batch / warm 100 | 0.030942/0.039033/0.039033 | 2846720 | 157198 | 113828–113828 | 0–0 |
-| mixed_batch / warm 0 | 1.909800/2.029626/2.029626 | 2932736 | 302192 | 632737–677889 | 49152–57344 |
-| mixed_batch / warm 50 | 2.097390/2.256611/2.256611 | 2899968 | 277396 | 581437–625085 | 49152–49152 |
+| CRDT not recorded; durability not recorded; duplicate_batch / warm 100 | 0.030942/0.039033/0.039033 | 2846720 | 157198 | 113828–113828 | 0–0 |
+| CRDT not recorded; durability not recorded; mixed_batch / warm 0 | 1.909800/2.029626/2.029626 | 2932736 | 302192 | 632737–677889 | 49152–57344 |
+| CRDT not recorded; durability not recorded; mixed_batch / warm 50 | 2.097390/2.256611/2.256611 | 2899968 | 277396 | 581437–625085 | 49152–49152 |
 
 BYTES pre-batch log up to 25622. ASSERTION pure duplicate state, wire log, version and allocation sequence unchanged: RESULT held. Mixed rows retain actual accepted/duplicate counts. Requested 0% duplicate batches can redeliver IDs used by the earlier 50% condition; interpret actual counts rather than the requested ratio. Accepted-only single-append latency is B1; this family measures batches.
 
-FAMILY B3 RAN yes; CARRIERS OR-Set UTF-8; RUNGS retained setup records 8, 32, 128, 512, 2048; STOPPED BY box brake: swap activity above 1000 KB/s; REPETITIONS 7 per condition. Top complete rung B3-r4: payload 512 bytes, actual writer domain 16.
+FAMILY B3 RAN yes; MEASUREMENTS CRDT not recorded; durability not recorded; restart; RUNGS retained setup records 8, 32, 128, 512, 2048; STOPPED BY box brake: swap activity above 1000 KB/s; REPETITIONS 7 per condition. Top complete rung B3-r4: payload 512 bytes, actual writer domain 16.
 
 | Operation / condition | p50/p95/p99 ms | Peak RSS bytes | Peak allocator bytes | Cumulative allocation bytes, min–max | Kernel write bytes, min–max |
 |---|---:|---:|---:|---:|---:|
-| restart / file-cache-eviction-requested  | 163.025591/170.220702/170.220702 | 15249408 | 9759523 | 1479014636–1479014636 | 4096–4096 |
-| restart / warm  | 161.869171/165.943636/165.943636 | 15204352 | 9759523 | 1479014636–1479014636 | 4096–4096 |
+| CRDT not recorded; durability not recorded; restart / file-cache-eviction-requested  | 163.025591/170.220702/170.220702 | 15249408 | 9759523 | 1479014636–1479014636 | 4096–4096 |
+| CRDT not recorded; durability not recorded; restart / warm  | 161.869171/165.943636/165.943636 | 15204352 | 9759523 | 1479014636–1479014636 | 4096–4096 |
 
 Descriptive log-log fit of warm median against record count along this co-varying workload path: slope 1.240. Payload and writer count also increase. This is no asymptotic proof.
 
 BYTES replay frame 1126458. ASSERTION exact state, encoded log and recovered local sequence: RESULT held. File-cache eviction was requested with successful posix_fadvise(DONTNEED); actual cache residency and device-cold restart are NOT MEASURED. Cache condition order is warm first, eviction-requested second.
 
-FAMILY B4 RAN yes; CARRIERS OR-Set UTF-8; RUNGS retained setup records 8, 32, 128, 512; STOPPED BY box brake: swap activity above 1000 KB/s; REPETITIONS 7 per condition. Top complete rung B4-r3: payload 256 bytes, actual writer domain 8.
+FAMILY B4 RAN yes; MEASUREMENTS CRDT not recorded; durability not recorded; export, CRDT not recorded; durability not recorded; import; RUNGS retained setup records 8, 32, 128, 512; STOPPED BY box brake: swap activity above 1000 KB/s; REPETITIONS 7 per condition. Top complete rung B4-r3: payload 256 bytes, actual writer domain 8.
 
 | Operation / condition | p50/p95/p99 ms | Peak RSS bytes | Peak allocator bytes | Cumulative allocation bytes, min–max | Kernel write bytes, min–max |
 |---|---:|---:|---:|---:|---:|
-| export / warm  | 0.011876/0.021570/0.023282 | 2990080 | 372669 | 2624–180032 | 0–0 |
-| import / warm  | 0.001241/0.001842/0.002734 | 2990080 | 362605 | 0–25136 | 0–0 |
+| CRDT not recorded; durability not recorded; export / warm  | 0.011876/0.021570/0.023282 | 2990080 | 372669 | 2624–180032 | 0–0 |
+| CRDT not recorded; durability not recorded; import / warm  | 0.001241/0.001842/0.002734 | 2990080 | 362605 | 0–25136 | 0–0 |
 
 BYTES maximum actual record-wire batch 2320; wire excludes an unspecified transport wrapper. ASSERTION all IDs and contiguous versions converge, every batch advances: RESULT held. Odd IDs precede even IDs, with 0 and n/4 peer prefixes. Caller batching filters already-held IDs and applies record and byte caps; the product export remains unbounded. No product pagination or continuation API is claimed.
 
-FAMILY B5 RAN yes; CARRIERS OR-Set UTF-8; RUNGS retained setup records 8, 32, 128, 512, 2048, 8192; STOPPED BY box brake: box wall-time brake 20 seconds; REPETITIONS 7 per condition. Top complete rung B5-r5: payload 1024 bytes, actual writer domain 1.
+FAMILY B5 RAN yes; MEASUREMENTS CRDT not recorded; durability not recorded; query, CRDT not recorded; durability not recorded; remove; RUNGS retained setup records 8, 32, 128, 512, 2048, 8192; STOPPED BY box brake: box wall-time brake 20 seconds; REPETITIONS 7 per condition. Top complete rung B5-r5: payload 1024 bytes, actual writer domain 1.
 
 | Operation / condition | p50/p95/p99 ms | Peak RSS bytes | Peak allocator bytes | Cumulative allocation bytes, min–max | Kernel write bytes, min–max |
 |---|---:|---:|---:|---:|---:|
-| query / warm  | 310.910004/396.812169/396.812169 | 66363392 | 19120194 | 16744448–16744448 | 0–0 |
-| remove / warm  | 213.490000/228.708024/228.708024 | 66363392 | 19115666 | 9275728–10061184 | 0–0 |
+| CRDT not recorded; durability not recorded; query / warm  | 310.910004/396.812169/396.812169 | 66363392 | 19120194 | 16744448–16744448 | 0–0 |
+| CRDT not recorded; durability not recorded; remove / warm  | 213.490000/228.708024/228.708024 | 66363392 | 19115666 | 9275728–10061184 | 0–0 |
 
 BYTES encoded log up to 9011258; retained add count 8192; tombstones up to 8192; live membership ends at zero. State/log/tombstone clone allocation maxima: 9070328/10041856/160680 bytes. Encoded bytes per recorded operation: 550.004–720.671. Remove/query times cover the row's full loop, including seeded query-string construction; not a single-operation latency. ASSERTION membership and tombstone counts exact: RESULT held.
 
-FAMILY B6 RAN yes; CARRIERS OR-Set UTF-8; RUNGS retained setup records 8, 32; STOPPED BY box brake: swap activity above 1000 KB/s; REPETITIONS 7 per condition. Top complete rung B6-r1: payload 64 bytes, actual writer domain 1.
+FAMILY B6 RAN yes; MEASUREMENTS CRDT not recorded; durability not recorded; decode; RUNGS retained setup records 8, 32; STOPPED BY box brake: swap activity above 1000 KB/s; REPETITIONS 7 per condition. Top complete rung B6-r1: payload 64 bytes, actual writer domain 1.
 
 | Operation / condition | p50/p95/p99 ms | Peak RSS bytes | Peak allocator bytes | Cumulative allocation bytes, min–max | Kernel write bytes, min–max |
 |---|---:|---:|---:|---:|---:|
-| decode / warm large-valid-frame | 0.026787/0.029842/0.029842 | 2580480 | 22640 | 6648–6648 | 0–0 |
-| decode / warm malformed | 0.000030/0.000050/0.000050 | 2584576 | 17368 | 0–0 | 0–0 |
-| decode / warm trailing | 0.026756/0.027198/0.027198 | 2584576 | 25962 | 6648–6648 | 0–0 |
-| decode / warm truncated | 0.000051/0.000071/0.000071 | 2584576 | 17368 | 0–0 | 0–0 |
+| CRDT not recorded; durability not recorded; decode / warm large-valid-frame | 0.026787/0.029842/0.029842 | 2580480 | 22640 | 6648–6648 | 0–0 |
+| CRDT not recorded; durability not recorded; decode / warm malformed | 0.000030/0.000050/0.000050 | 2584576 | 17368 | 0–0 | 0–0 |
+| CRDT not recorded; durability not recorded; decode / warm trailing | 0.026756/0.027198/0.027198 | 2584576 | 25962 | 6648–6648 | 0–0 |
+| CRDT not recorded; durability not recorded; decode / warm truncated | 0.000051/0.000071/0.000071 | 2584576 | 17368 | 0–0 | 0–0 |
 
 BYTES maximum tested frame 3323. Typed errors ['InvalidTag', 'TrailingBytes', 'UnexpectedEof']; large valid frames accepted. ASSERTION malformed/truncated/trailing inputs reject, separately held accepted history and version unchanged: RESULT held. This decoder creates a candidate log and has no mutating import API in this case. The refusal-boundary half of G4 cannot be measured until the limit mechanism exists, and that is a different lane. Binding paths NOT MEASURED: OR-1 owns the language surface.
 
-Carriers NOT MEASURED: G-Set, G-Counter, PN-Counter, RGA/Text. This instrument exercises the OR-Set path to carry variable UTF-8 payloads and retained tombstones through all six families. Numeric-carrier timings cannot be inferred from it; durable constructors currently expose G-Counter and OR-Set, leaving a separate G-Counter run possible but unmeasured.
+Carriers recorded in completed rows: CRDT not recorded. Missing CRDT or durability fields are reported as not recorded; no carrier coverage is inferred from family IDs. Legacy assertions supply identity only when they explicitly name it. Timings cannot be extrapolated to other carriers or durability modes.
 
-## T3 — Eight measured dimensions
+## T3/T4 — Eight measured dimensions and candidate proposal
 
 | Dimension | Min | Max reached | Top measurement | Stop | Peak RSS / allocator bytes | p50/p95/p99 ms | Write amplification |
 |---|---:|---:|---|---|---:|---:|---|
-| history record count | 8 | 16384 | B5-r5 remove warm (n=7) | box wall-time brake 20 seconds | 66363392 / 19115666 | 216.262214/228.708024/228.708024 | N/A: no accepted durable append in this operation |
-| history encoded bytes | 618 | 9011258 | B5-r5 remove warm (n=7) | box wall-time brake 20 seconds | 66363392 / 19115666 | 216.262214/228.708024/228.708024 | N/A: no accepted durable append in this operation |
-| writer/replica count | 1 | 16 | B3-r4 restart warm (n=7) | swap activity above 1000 KB/s | 15204352 / 9759523 | 161.869171/165.943636/165.943636 | N/A: no accepted durable append in this operation |
-| per-record payload bytes | 32 | 1024 | B5-r5 remove warm (n=14) | box wall-time brake 20 seconds | 66363392 / 19115666 | 213.490000/228.708024/228.708024 | N/A: no accepted durable append in this operation |
-| records per caller import batch | 1 | 8 | B4-r3 import warm (n=784) | swap activity above 1000 KB/s | 2990080 / 362605 | 0.001241/0.001842/0.002734 | N/A: no accepted durable append in this operation |
-| bytes per caller import batch | 66 | 2320 | B4-r3 import warm (n=784) | swap activity above 1000 KB/s | 2990080 / 362605 | 0.001241/0.001842/0.002734 | N/A: no accepted durable append in this operation |
-| live carrier entries | 0 | 4096 | B5-r5 remove warm (n=7) | box wall-time brake 20 seconds | 66363392 / 18881082 | 213.490000/221.024499/221.024499 | N/A: no accepted durable append in this operation |
-| retained tombstone count | 4 | 8192 | B5-r5 remove warm (n=7) | box wall-time brake 20 seconds | 66363392 / 19115666 | 216.262214/228.708024/228.708024 | N/A: no accepted durable append in this operation |
+| history record count | 8 | 16384 | B5-r5 CRDT not recorded; durability not recorded; remove warm (n=7) | box wall-time brake 20 seconds | 66363392 / 19115666 | 216.262214/228.708024/228.708024 | N/A: no accepted durable append in this operation |
+| history encoded bytes | 618 | 9011258 | B5-r5 CRDT not recorded; durability not recorded; remove warm (n=7) | box wall-time brake 20 seconds | 66363392 / 19115666 | 216.262214/228.708024/228.708024 | N/A: no accepted durable append in this operation |
+| writer/replica count | 1 | 16 | B3-r4 CRDT not recorded; durability not recorded; restart warm (n=7) | swap activity above 1000 KB/s | 15204352 / 9759523 | 161.869171/165.943636/165.943636 | N/A: no accepted durable append in this operation |
+| per-record payload bytes | 32 | 1024 | B5-r5 CRDT not recorded; durability not recorded; remove warm (n=14) | box wall-time brake 20 seconds | 66363392 / 19115666 | 213.490000/228.708024/228.708024 | N/A: no accepted durable append in this operation |
+| records per caller import batch | 1 | 8 | B4-r3 CRDT not recorded; durability not recorded; import warm (n=784) | swap activity above 1000 KB/s | 2990080 / 362605 | 0.001241/0.001842/0.002734 | N/A: no accepted durable append in this operation |
+| bytes per caller import batch | 66 | 2320 | B4-r3 CRDT not recorded; durability not recorded; import warm (n=784) | swap activity above 1000 KB/s | 2990080 / 362605 | 0.001241/0.001842/0.002734 | N/A: no accepted durable append in this operation |
+| live carrier entries | 0 | 4096 | B5-r5 CRDT not recorded; durability not recorded; remove warm (n=7) | box wall-time brake 20 seconds | 66363392 / 18881082 | 213.490000/221.024499/221.024499 | N/A: no accepted durable append in this operation |
+| retained tombstone count | 4 | 8192 | B5-r5 CRDT not recorded; durability not recorded; remove warm (n=7) | box wall-time brake 20 seconds | 66363392 / 19115666 | 216.262214/228.708024/228.708024 | N/A: no accepted durable append in this operation |
 
 All eight rows are candidate observed ranges, not independently swept ceilings. Maxima come from different workloads and cannot be combined. For dimensions whose maximum was measured in a non-append operation, accepted-payload write amplification is N/A; the measured durable amplification range remains the B1 table, not an extrapolation to those maxima.
 
@@ -118,10 +118,10 @@ PLANTED: 1,048,576-byte vector retained across a decoder call in a COPY of the b
 
 | Control | p50/p95/p99 ms, valid frame | Allocation bytes per decode | Extra peak bytes |
 |---|---:|---:|---:|
-| baseline-0.jsonl | 0.005117/0.007820/0.007820 | 1336 | 1208 |
-| baseline-1.jsonl | 0.005208/0.007630/0.007630 | 1336 | 1208 |
-| baseline-2.jsonl | 0.005347/0.012818/0.012818 | 1336 | 1208 |
-| allocation-0.jsonl | 0.014350/0.674353/0.674353 | 1049912 | 1049784 |
+| baseline-0.jsonl CRDT not recorded; durability not recorded; decode | 0.005117/0.007820/0.007820 | 1336 | 1208 |
+| baseline-1.jsonl CRDT not recorded; durability not recorded; decode | 0.005208/0.007630/0.007630 | 1336 | 1208 |
+| baseline-2.jsonl CRDT not recorded; durability not recorded; decode | 0.005347/0.012818/0.012818 | 1336 | 1208 |
+| allocation-0.jsonl CRDT not recorded; durability not recorded; decode | 0.014350/0.674353/0.674353 | 1049912 | 1049784 |
 
 OBSERVED allocation delta 1048576, extra-peak delta 1048576 bytes. DETECTED yes. NOISE: three unchanged decoder runs, allocation spread 0 bytes and median latency spread 230 ns. SIGNAL EXCEEDS NOISE yes for allocation. One mutant process with seven repetitions; cross-process mutant variance is NOT MEASURED.
 
