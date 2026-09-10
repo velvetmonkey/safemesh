@@ -1282,6 +1282,16 @@ mod tests {
                 tally: 9,
             },
         };
+        let after_collision = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 2,
+            },
+            delta: GCounterDelta {
+                replica: 1,
+                tally: 8,
+            },
+        };
 
         let mut target = SafeMeshGCounterReplica::new(0, 2);
         target
@@ -1323,12 +1333,14 @@ mod tests {
         late.merge_record_bytes(&existing.to_wire_bytes().unwrap())
             .unwrap();
         let before = late.state();
-        let admissions = late.merge_log_bytes(&wire([accepted, collision])).unwrap();
+        let admissions = late
+            .merge_log_bytes(&wire([accepted, collision, after_collision]))
+            .unwrap();
         let after = late.state();
         println!("WASM admissions={admissions:?} before_state={before:?} after_state={after:?}");
-        assert_eq!(admissions, vec!["accepted", "collision"]);
+        assert_eq!(admissions, vec!["accepted", "collision", "accepted"]);
         assert_eq!(before, vec![5, 0]);
-        assert_eq!(after, vec![5, 7]);
+        assert_eq!(after, vec![5, 8]);
     }
 
     #[test]
