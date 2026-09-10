@@ -1,172 +1,146 @@
-   Compiling zmij v1.0.23
-   Compiling serde_core v1.0.229
-   Compiling serde_json v1.0.151
-   Compiling memchr v2.8.3
-   Compiling itoa v1.0.18
-   Compiling safemesh-python v0.1.0 (/home/monkey/scratch/reproinputs/work/rust/crates/safemesh-python)
    Compiling safemesh-wasm v0.1.0 (/home/monkey/scratch/reproinputs/work/rust/crates/safemesh-wasm)
+   Compiling safemesh-python v0.1.0 (/home/monkey/scratch/reproinputs/work/rust/crates/safemesh-python)
    Compiling safemesh-ffi v0.1.0 (/home/monkey/scratch/reproinputs/work/rust/crates/safemesh-ffi)
-   Compiling safemesh-crdt v0.1.0 (/home/monkey/scratch/reproinputs/work/rust/crates/safemesh-crdt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.00s
-     Running unittests src/lib.rs (target/debug/deps/safemesh_crdt-09a7c07e68c9971f)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.85s
+     Running unittests src/lib.rs (target/debug/deps/safemesh_crdt-73775537da76a2d1)
 
-running 19 tests
+running 7 tests
 test frame_tests::crc32_matches_standard_check_vector ... ok
+test wire_helper_tests::external_tag_and_trailing_bytes_are_checked ... ok
 test frame_tests::legacy_integrity_frames_refuse_missing_shape ... ok
+test wire_helper_tests::external_length_extremes_are_checked ... ok
+test frame_tests::seqzero_saturated_prefixes ... ok
 test frame_tests::decoder_surfaces_conflicts_before_deduplication ... ok
 test frame_tests::binding_collision_fixtures_use_product_encoder ... ok
-test frame_tests::seqzero_saturated_prefixes ... ok
-test local::durable_tests::durable_child ... ok
-test wire_helper_tests::external_length_extremes_are_checked ... ok
-test wire_helper_tests::external_tag_and_trailing_bytes_are_checked ... ok
-test local::durable_tests::durable_acknowledged_survives_counter ... ok
-test local::durable_tests::durable_acknowledged_survives_set ... ok
-test local::durable_tests::durable_receive_and_refusal ... ok
-test local::durable_tests::restart_corrupt_history ... ok
-test local::durable_tests::restart_unavailable_ownership ... ok
-test local::durable_tests::restart_mismatched_history ... ok
-test local::durable_tests::restart_still_works_and_fresh_allocation ... ok
-test local::durable_tests::restart_invalid_history ... ok
-test local::durable_tests::durable_io_failure_disables_writes ... ok
-test local::durable_tests::durable_still_works ... ok
-test local::durable_tests::durable_crash_boundaries ... ok
 
-test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running tests/conformance.rs (target/debug/deps/conformance-a1662a28e221e3d1)
+     Running tests/conformance.rs (target/debug/deps/conformance-6106dbbc25421ccf)
 
 running 8 tests
+test orset_matches_lean_oracle ... ok
+test gset_matches_lean_oracle ... ok
 test corpus_is_the_expected_schema ... ok
-test split_delivery_merge_agrees_with_oracle ... ok
 test gcounter_matches_lean_oracle ... ok
 test pncounter_matches_lean_oracle ... ok
 test rga_matches_lean_oracle ... ok
 test owned_writes_match_lean_oracle ... ok
-test gset_matches_lean_oracle ... ok
-test orset_matches_lean_oracle ... ok
+test split_delivery_merge_agrees_with_oracle ... ok
 
 test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
 
-     Running tests/core_api.rs (target/debug/deps/core_api-a72745b2d61f9d04)
+     Running tests/core_api.rs (target/debug/deps/core_api-1f80adcc90600419)
 
 running 17 tests
 test checked_coordinate_and_checked_merge_coexist ... ok
-test counter_traits_preserve_existing_behavior ... ok
 test checked_counter_coordinates_reject_without_changing_any_state_bytes ... ok
+test counter_traits_preserve_existing_behavior ... ok
 test checked_counter_coordinates_match_infallible_valid_results ... ok
 test enable_wins_flag_keeps_concurrent_enable_live ... ok
 test event_log_deduplicates_and_serves_since_version ... ok
-test event_log_version_does_not_hide_out_of_order_gaps ... ok
 test gcounter_read_is_exact_past_the_u64_boundary ... ok
+test event_log_version_does_not_hide_out_of_order_gaps ... ok
 test gcounter_merge_panics_on_mismatch_instead_of_losing_state ... ok
 test gcounter_try_merge_matches_merge_on_equal_width ... ok
-test gcounter_try_merge_rejects_replica_count_mismatch ... ok
-test lww_register_uses_total_ordered_winner ... ok
 test lww_map_tracks_value_and_remove_dots_per_key ... ok
-test pncounter_read_keeps_sign_and_width_past_the_i64_boundary ... ok
+test lww_register_uses_total_ordered_winner ... ok
 test orset_delta_is_add_wins ... ok
+test pncounter_read_keeps_sign_and_width_past_the_i64_boundary ... ok
 test pncounter_try_merge_is_all_or_nothing_on_mismatch ... ok
+test gcounter_try_merge_rejects_replica_count_mismatch ... ok
 test rga_read_is_sorted_by_position_not_delivery ... ok
 
 test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running tests/external_wire.rs (target/debug/deps/external_wire-207ed7cd3136c9e5)
+     Running tests/external_wire.rs (target/debug/deps/external_wire-1ce7b1a77cc2b73b)
 
 running 6 tests
+test external_decoder_reads_library_value ... ok
 test external_byte_strings_roundtrip_empty_and_binary_data ... ok
 test external_custom_payload_roundtrips_in_library_log ... ok
-test external_decoder_reads_library_value ... ok
-test external_reader_bounds_and_overflow_preserve_position ... ok
 test external_encoder_matches_library_set_framing ... ok
+test external_reader_bounds_and_overflow_preserve_position ... ok
 test external_reader_rejects_every_truncated_integer ... ok
 
 test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running tests/laws.rs (target/debug/deps/laws-53e37e5cb9d0133e)
+     Running tests/laws.rs (target/debug/deps/laws-fed64bcbb5f99a01)
 
-running 2 tests
-test convergence_harness_hammers_delta_delivery_shapes ... ok
-test merge_laws_hold_for_in_house_samples ... ok
+running 0 tests
 
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running tests/record_admission.rs (target/debug/deps/record_admission-12a5b1df8a5fb918)
+     Running tests/record_admission.rs (target/debug/deps/record_admission-0d59bc57fc778495)
 
-running 15 tests
+running 9 tests
 test duplicates_and_collisions_do_not_invoke_application ... ok
 test local_append_handles_gaps_and_exhaustion_without_unlogged_application ... ok
 test existing_counter_loader_refuses_foreign_coordinate_history ... ok
+test seqzero_acknowledgment_is_independent_of_positive_prefix ... ok
 test pn_counter_loader_refuses_out_of_range_coordinate ... ok
 test record_1_1_live_and_replay ... ok
-test seqzero_acknowledgment_is_independent_of_positive_prefix ... ok
 test seqzero_two_replica_exchange_and_persisted_replay ... ok
 test seqzero_admission_since_population ... ok
-test owned_local::owned_boundaries_and_existing_store_error ... ok
 test seqzero_converged_replicas_quiesce_at_scale ... ok
-test owned_local::owned_convergence_counter_and_utf8_set ... ok
-test owned_local::owned_refusal_token ... ok
-test owned_local::owned_refusal_coordinate ... ok
-test owned_local::owned_refusal_stale ... ok
-test owned_local::owned_refusal_competing ... ok
 
-test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running tests/transport.rs (target/debug/deps/transport-ce6b64a2a2c0fa7e)
+     Running tests/transport.rs (target/debug/deps/transport-d97efe8df5033b92)
 
 running 6 tests
-test anti_entropy_recovers_after_drop_duplicate_and_reorder ... ok
 test partition_then_heal_uses_versions_to_cover_missing_records ... ok
 test transport_requires_subscription_and_connectivity ... ok
+test anti_entropy_recovers_after_drop_duplicate_and_reorder ... ok
 test version_exchange_public_api_trust_boundary ... ok
 test version_exchange_public_api_round_trip ... ok
 test version_exchange_public_api_edge_cases ... ok
 
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
 
-     Running tests/wire.rs (target/debug/deps/wire-8423267b06fe2a30)
+     Running tests/wire.rs (target/debug/deps/wire-e307a2c1c1d1246a)
 
 running 23 tests
-test enable_wins_flag_record_roundtrips_unormalized_tokens ... ok
-test canonical_state_encodings_are_sorted ... ok
-test enable_wins_flag_wire_is_stable_and_roundtrips ... ok
-test event_log_roundtrips_and_preserves_deduped_records ... ok
 test event_log_shape_distinguishes_unbounded_from_fixed_zero ... ok
-test event_log_shape_checks_full_domain_including_empty_and_zero ... ok
 test gcounter_delta_has_stable_canonical_bytes ... ok
-test event_log_empty_and_embedded_frames_roundtrip_and_reject_truncation ... ok
-test event_log_shape_rejects_wrong_type_even_when_empty_or_nested ... ok
+test event_log_shape_checks_full_domain_including_empty_and_zero ... ok
+test enable_wins_flag_wire_is_stable_and_roundtrips ... ok
+test enable_wins_flag_record_roundtrips_unormalized_tokens ... ok
+test malformed_wire_inputs_fail_closed ... ok
+test canonical_state_encodings_are_sorted ... ok
 test lww_register_wire_is_stable_and_roundtrips ... ok
 test lww_map_wire_is_stable_and_roundtrips ... ok
-test orset_delta_rejects_trailing_bytes_and_oversized_counts ... ok
-test malformed_wire_inputs_fail_closed ... ok
+test event_log_roundtrips_and_preserves_deduped_records ... ok
+test event_log_shape_rejects_wrong_type_even_when_empty_or_nested ... ok
+test orset_delta_rejects_every_truncation ... ok
 test orset_delta_rejects_unknown_tags ... ok
 test orset_delta_roundtrips ... ok
-test orset_delta_rejects_every_truncation ... ok
 test orset_utf8_rejects_invalid_utf8_without_panicking ... ok
 test record_frames_delta_with_length_prefix ... ok
-test orset_delta_roundtrips_in_record_and_event_log ... ok
+test event_log_empty_and_embedded_frames_roundtrip_and_reject_truncation ... ok
+test orset_delta_rejects_trailing_bytes_and_oversized_counts ... ok
 test orset_utf8_rejects_length_lies_tags_and_trailing_bytes ... ok
+test orset_delta_roundtrips_in_record_and_event_log ... ok
 test orset_utf8_wire_shape_and_record_roundtrips ... ok
 test orset_utf8_roundtrips_and_rejects_every_truncation ... ok
 test event_log_refuses_every_single_byte_change ... ok
 
 test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
 
-     Running unittests src/lib.rs (target/debug/deps/safemesh_ffi-533e909d51fd2a72)
+     Running unittests src/lib.rs (target/debug/deps/safemesh_ffi-a62000b22e787cc1)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running tests/compile_fail.rs (target/debug/deps/compile_fail-0bf5783b5dc3dd42)
+     Running tests/compile_fail.rs (target/debug/deps/compile_fail-4408354af32d320c)
 
 running 2 tests
 test the_same_calls_compile_inside_unsafe ... ok
 test safe_rust_cannot_call_pointer_operations ... ok
 
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
 
-     Running tests/ffi.rs (target/debug/deps/ffi-5c9f63c0df0dcb0e)
+     Running tests/ffi.rs (target/debug/deps/ffi-b33099507c27cb30)
 
 running 5 tests
 test c_abi_exports_wire_bytes ... ok
@@ -177,71 +151,71 @@ test orset_c_abi_matches_core ... ok
 
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running tests/header.rs (target/debug/deps/header-021439be87eea518)
+     Running tests/header.rs (target/debug/deps/header-5a0d9acc71a5b2f4)
 
 running 1 test
 test committed_header_has_not_drifted ... ok
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running unittests src/lib.rs (target/debug/deps/safemesh_python-baa433f717a83d3a)
+     Running unittests src/lib.rs (target/debug/deps/safemesh_python-21ef96ad5a6a5129)
 
 running 18 tests
+test tests::orset_matches_core_with_concurrent_add_and_early_tombstone ... ok
 test tests::python_counter_calls_rust_core ... ok
 test tests::python_enable_wins_flag_calls_rust_core ... ok
-test tests::orset_matches_core_with_concurrent_add_and_early_tombstone ... ok
 test tests::python_lww_map_calls_rust_core ... ok
 test tests::python_lww_register_calls_rust_core ... ok
-test admission_tests::invalid_counter_coordinates_are_rejected_before_admission ... ok
-test tests::python_lww_replicas_exchange_canonical_record_bytes ... ok
 test admission_tests::python_batch_reports_every_admission ... ok
 test admission_tests::persisted_counter_shape_mismatch_leaves_destination_unchanged ... ok
-test tests::python_replicas_exchange_canonical_record_bytes ... ok
 test tests::checked_counter_raises_index_error_without_mutation ... ok
+test admission_tests::invalid_counter_coordinates_are_rejected_before_admission ... ok
 test tests::python_flag_replicas_exchange_canonical_record_bytes ... ok
-test tests::python_enable_wins_flag_wire_helpers_preserve_exact_bytes ... ok
-test tests::python_lww_map_replicas_exchange_canonical_record_bytes ... ok
 test admission_tests::all_replica_bindings_reject_conflicting_records_and_report_log_collisions ... ok
 test tests::python_lww_map_wire_helpers_use_canonical_bytes ... ok
+test tests::python_enable_wins_flag_wire_helpers_preserve_exact_bytes ... ok
+test tests::python_lww_map_replicas_exchange_canonical_record_bytes ... ok
 test tests::python_lww_wire_helper_uses_canonical_bytes ... ok
+test tests::python_lww_replicas_exchange_canonical_record_bytes ... ok
+test tests::python_replicas_exchange_canonical_record_bytes ... ok
 test tests::python_wire_helper_uses_canonical_bytes ... ok
 
-test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
 
-     Running tests/pyproject.rs (target/debug/deps/pyproject-84a4a8532c033dde)
+     Running tests/pyproject.rs (target/debug/deps/pyproject-7b79575c48c0915c)
 
 running 1 test
 test pyproject_declares_maturin_pyo3_binding ... ok
 
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running unittests src/lib.rs (target/debug/deps/safemesh_wasm-4315f44f6ea2f30e)
+     Running unittests src/lib.rs (target/debug/deps/safemesh_wasm-f3ca16ad1b9e79b0)
 
 running 20 tests
-test tests::orset_matches_core_with_concurrent_add_and_early_tombstone ... ok
 test tests::wasm_counter_calls_rust_core ... ok
-test tests::wasm_enable_wins_flag_calls_rust_core ... ok
-test tests::wasm_batch_reports_every_admission ... ok
 test tests::wasm_enable_wins_flag_wire_helpers_preserve_exact_bytes ... ok
-test tests::wasm_all_replica_batches_report_collisions ... ok
-test tests::wasm_flag_replicas_exchange_canonical_record_bytes ... ok
-test tests::wasm_lww_map_calls_rust_core ... ok
-test tests::wasm_lww_map_wire_helpers_use_canonical_bytes ... ok
 test tests::wasm_lww_register_calls_rust_core ... ok
-test tests::wasm_lww_map_replicas_exchange_canonical_record_bytes ... ok
+test tests::wasm_lww_map_calls_rust_core ... ok
+test tests::orset_matches_core_with_concurrent_add_and_early_tombstone ... ok
+test tests::wasm_enable_wins_flag_calls_rust_core ... ok
+test tests::wasm_lww_map_wire_helpers_use_canonical_bytes ... ok
 test tests::wasm_lww_replicas_exchange_canonical_record_bytes ... ok
-test tests::wasm_lww_wire_helper_uses_canonical_bytes ... ok
-test tests::wasm_replicas_exchange_canonical_record_bytes ... ok
+test tests::wasm_lww_map_replicas_exchange_canonical_record_bytes ... ok
+test tests::wasm_all_replica_batches_report_collisions ... ok
 test tests::wasm_string_orset_record_inspector_reports_core_decoded_fields ... ok
-test tests::wasm_string_orset_replica_rejects_duplicate_record_without_moving_state ... ok
+test tests::wasm_flag_replicas_exchange_canonical_record_bytes ... ok
+test tests::wasm_lww_wire_helper_uses_canonical_bytes ... ok
+test tests::wasm_batch_reports_every_admission ... ok
+test tests::wasm_replicas_exchange_canonical_record_bytes ... ok
 test tests::wasm_string_orset_replica_keeps_core_token_semantics ... ok
 test tests::wasm_wire_helper_uses_canonical_bytes ... ok
+test tests::wasm_string_orset_replica_rejects_duplicate_record_without_moving_state ... ok
 test tests::wasm_string_orset_replica_round_trips_records_through_core ... ok
 test tests::wasm_string_orset_replica_refuses_corrupted_bytes_without_panicking ... ok
 
 test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running tests/typescript.rs (target/debug/deps/typescript-ed71cbce97375923)
+     Running tests/typescript.rs (target/debug/deps/typescript-de00f55b729f6a71)
 
 running 1 test
 test typescript_surface_lists_the_public_binding ... ok
@@ -254,16 +228,16 @@ running 2 tests
 test crates/safemesh-crdt/src/lib.rs - WireDecode (line 1581) ... ok
 test crates/safemesh-crdt/src/lib.rs - VersionVector (line 1004) ... ok
 
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
 
    Doc-tests safemesh_ffi
 
 running 5 tests
-test crates/safemesh-ffi/src/lib.rs - (line 31) - compile fail ... ok
-test crates/safemesh-ffi/src/lib.rs - (line 44) - compile fail ... ok
-test crates/safemesh-ffi/src/lib.rs - (line 37) - compile fail ... ok
 test crates/safemesh-ffi/src/lib.rs - (line 26) - compile fail ... ok
 test crates/safemesh-ffi/src/lib.rs - (line 21) - compile fail ... ok
+test crates/safemesh-ffi/src/lib.rs - (line 31) - compile fail ... ok
+test crates/safemesh-ffi/src/lib.rs - (line 37) - compile fail ... ok
+test crates/safemesh-ffi/src/lib.rs - (line 44) - compile fail ... ok
 
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
 

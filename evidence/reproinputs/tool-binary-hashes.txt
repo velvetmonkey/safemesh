@@ -1,0 +1,5 @@
+9969f97a3847b0afa5d5afb29ead57cc6f6e9e358205224ccf24aa44896937c9  /home/monkey/.local/bin/maturin
+bf87c2b2ca31e6814dc9865d722de9998bb2d608d1d1226769870b25aada7bc8  /home/monkey/.cargo/bin/cargo-cyclonedx
+1e5a10d06806d154fbe25fc68966eee882747a07ecbb2f2e74c007bebfee14de  /home/monkey/.cargo/bin/wasm-pack
+7fde7b8afa198da66257f42ee2001d874c7355631e6d1579a5fb5ef1f246df4c  /home/monkey/scratch/reproinputs/node-tool/node_modules/.bin/node
+cargo-cyclonedx-cyclonedx 0.5.9

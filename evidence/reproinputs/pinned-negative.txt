@@ -1,0 +1,5 @@
+error: rustc 1.88.0 is not supported by the following packages:
+  safemesh-crdt@0.1.0 requires rustc 1.89
+  safemesh-ffi@0.1.0 requires rustc 1.89
+  safemesh-python@0.1.0 requires rustc 1.89
+  safemesh-wasm@0.1.0 requires rustc 1.89
