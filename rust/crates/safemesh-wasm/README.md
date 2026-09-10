@@ -32,10 +32,15 @@ const left = new SafeMeshGCounterReplica(1n, 3);
 const right = new SafeMeshGCounterReplica(2n, 3);
 
 right.mergeRecordBytes(left.appendBump(1, 5n));
-left.mergeLogBytes(right.logBytes());
+const admissions = left.mergeLogBytes(right.logBytes());
+console.assert(admissions.join() === "duplicate");
 
 console.log(left.value(), right.value());
 ```
+
+`mergeLogBytes` returns one `"accepted"`, `"duplicate"`, or `"collision"`
+verdict per input record, in order. Decode and whole-batch validation errors
+throw before any record is applied.
 
 Stdout:
 

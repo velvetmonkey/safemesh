@@ -47,6 +47,14 @@ function save(side, replica) {
   }
 }
 
+function mergeLog(replica, bytes) {
+  const admissions = replica.mergeLogBytes(bytes);
+  if (admissions.includes("collision")) {
+    throw new Error(`batch collision after admissions=${JSON.stringify(admissions)}`);
+  }
+  return admissions;
+}
+
 function load(side) {
   const replica = fresh(side);
   for (const kind of ["counter", "set"]) {
@@ -56,7 +64,7 @@ function load(side) {
       process.exit(2);
     }
     try {
-      replica[kind].mergeLogBytes(readFileSync(path));
+      mergeLog(replica[kind], readFileSync(path));
     } catch (error) {
       console.error(`RESTORE FAILED file=${path} error=${error.name}: ${error.message}`);
       process.exit(2);
@@ -81,8 +89,8 @@ function same(a, b) {
 
 function exchange(a, b) {
   for (const kind of ["counter", "set"]) {
-    a[kind].mergeLogBytes(b[kind].logBytes());
-    b[kind].mergeLogBytes(a[kind].logBytes());
+    mergeLog(a[kind], b[kind].logBytes());
+    mergeLog(b[kind], a[kind].logBytes());
   }
 }
 
@@ -135,8 +143,8 @@ switch (step) {
     const left = load("left");
     const right = load("right");
     for (const kind of ["counter", "set"]) {
-      left[kind].mergeLogBytes(readFileSync(logPath("right", kind)));
-      right[kind].mergeLogBytes(readFileSync(logPath("left", kind)));
+      mergeLog(left[kind], readFileSync(logPath("right", kind)));
+      mergeLog(right[kind], readFileSync(logPath("left", kind)));
     }
     show("left ", left);
     show("right", right);

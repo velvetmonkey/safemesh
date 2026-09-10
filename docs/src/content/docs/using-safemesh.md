@@ -99,7 +99,8 @@ const left = new SafeMeshGCounterReplica(1n, 3);
 const right = new SafeMeshGCounterReplica(2n, 3);
 const bytes = left.appendBump(1, 5n);
 right.mergeRecordBytes(bytes); // Your transport carries these bytes.
-left.mergeLogBytes(right.logBytes());
+const admissions = left.mergeLogBytes(right.logBytes());
+console.assert(admissions.join() === "duplicate");
 console.log(left.value(), right.value()); // 5n 5n
 left.free();
 right.free();
@@ -119,9 +120,14 @@ import safemesh_python as sm
 left = sm.GCounterReplica(1, 3)
 right = sm.GCounterReplica(2, 3)
 right.merge_record_bytes(left.append_bump(1, 5))
-left.merge_log_bytes(right.log_bytes())
+admissions = left.merge_log_bytes(right.log_bytes())
+assert admissions == ["duplicate"]
 print(left.value(), right.value())  # 5 5
 ```
+
+The batch merge calls return one `accepted`, `duplicate`, or `collision`
+verdict per input record, in order, so a caller can identify every applied
+record even when a later record collides.
 
 Here the Python calls hand bytes directly between two in-process objects; your application must move those bytes across its actual transport. `GCounter.try_apply_bump` raises `IndexError` for an invalid coordinate without changing state. Numeric `OrSet` operations take unsigned 64-bit elements and tokens; allocate fresh replica-unique tokens for adds. [Evidence: Python quickstart and token contract](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-python/README.md).
 
