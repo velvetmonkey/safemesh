@@ -45,7 +45,7 @@ def generate(raw):
            f"Source: {groups[0][0]['metadata']['source_sha'] if groups else 'no completed runs'} (product base 8911fc0). Machine identity, toolchain, filesystem, seed 42, condition, seven repetitions, and every brake sample are in the adjacent raw metadata files. The Rust workload source is unchanged between this source commit and the evidence commit.", '',
            'Percentiles are nearest-rank p50/p95/p99 in milliseconds. With seven samples p95 and p99 are both the maximum; they do not estimate population tails. Only complete rungs enter these tables. Workload dimensions co-vary geometrically; these are not isolated causal effects or multidimensional envelope guarantees.', '',
            'Allocator peak includes the instrument and setup objects; process RSS is Linux VmHWM for the whole process, including setup. Cumulative allocation counts requested bytes, including allocator reallocation through alloc/copy/dealloc. Copy traffic itself is NOT MEASURED. Kernel write_bytes is process-attributed storage-layer accounting, not hardware/media or journal traffic. Clone allocation measures the clone representation, not original allocator capacity.', '', '## T2 — Six families', '']
-    for family in ['B1','B2','B3','B4','B5','B6']:
+    for family in ['B1','B2','B3','B4','B5','B6','B7']:
         selected=[x for x in groups if x[1]['family']==family]
         if not selected:
             lines += [f'FAMILY {family} RAN no; STOPPED BY {stopmap.get(family)}. All metrics NOT MEASURED.', '']
@@ -74,11 +74,13 @@ def generate(raw):
             lines += ['',f"BYTES maximum actual record-wire batch {max(r.get('wire_record_bytes',0) for r in rows)}; wire excludes an unspecified transport wrapper. ASSERTION all IDs and contiguous versions converge, every batch advances: RESULT held. Odd IDs precede even IDs, with 0 and n/4 peer prefixes. Caller batching filters already-held IDs and applies record and byte caps; the product export remains unbounded. No product pagination or continuation API is claimed."]
         elif family=='B5':
             lines += ['',f"BYTES encoded log up to {max(r['history_encoded_bytes'] for r in rows)}; retained add count {max(r['retained_adds'] for r in rows)}; tombstones up to {max(r['tombstones'] for r in rows)}; live membership ends at zero. State/log/tombstone clone allocation maxima: {max(r['state_clone_allocation_bytes'] for r in rows)}/{max(r['log_clone_allocation_bytes'] for r in rows)}/{max(r['tombstone_clone_allocation_bytes'] for r in rows)} bytes. Encoded bytes per recorded operation: {min(r['encoded_bytes_per_operation'] for r in rows):.3f}–{max(r['encoded_bytes_per_operation'] for r in rows):.3f}. Remove/query times cover the row's full loop, including seeded query-string construction; not a single-operation latency. ASSERTION membership and tombstone counts exact: RESULT held."]
-        else:
+        elif family=='B6':
             lines += ['',f"BYTES maximum tested frame {max(r['input_bytes'] for r in rows)}. Typed errors {sorted({r['error'] for r in rows if r['error']})}; large valid frames accepted. ASSERTION malformed/truncated/trailing inputs reject, separately held accepted history and version unchanged: RESULT held. This decoder creates a candidate log and has no mutating import API in this case. The refusal-boundary half of G4 cannot be measured until the limit mechanism exists, and that is a different lane. Binding paths NOT MEASURED: OR-1 owns the language surface."]
+        else:
+            lines += ['',f"BYTES transaction {min(r['transaction_bytes'] for r in rows)}–{max(r['transaction_bytes'] for r in rows)}; amplification {amplification(rows)}. ASSERTION durable G-Counter bump is acknowledged, persisted, and survives checked restart: RESULT held."]
         lines+=['']
     lines+=['Carriers NOT MEASURED: G-Set, G-Counter, PN-Counter, RGA/Text. This instrument exercises the OR-Set path to carry variable UTF-8 payloads and retained tombstones through all six families. Numeric-carrier timings cannot be inferred from it; durable constructors currently expose G-Counter and OR-Set, leaving a separate G-Counter run possible but unmeasured.', '', '## T3/T4 — Eight measured dimensions and candidate proposal', '', '| Dimension | Min | Max reached | Top measurement | Stop | Peak RSS / allocator bytes | p50/p95/p99 ms | Write amplification |', '|---|---:|---:|---|---|---:|---:|---|']
-    candidates={key:[] for key in ['history record count','history encoded bytes','writer/replica count','per-record payload bytes','records per sync batch','bytes per sync batch','live carrier entries','retained tombstone count']}
+    candidates={key:[] for key in ['history record count','history encoded bytes','writer/replica count','per-record payload bytes','records per caller import batch','bytes per caller import batch','live carrier entries','retained tombstone count']}
     for meta,h,rows in groups:
         family=h['family']
         for r in rows:
@@ -89,9 +91,9 @@ def generate(raw):
             fields={'history record count':r.get('history_records',h['n']), 'per-record payload bytes':h['payload']}
             encoded=r.get('history_encoded_bytes', r.get('input_bytes'))
             if encoded is not None:fields['history encoded bytes']=encoded
-            if family in ['B1','B2','B3','B4']:fields['writer/replica count']=h['writers']
-            if family in ['B2','B4']:fields['records per sync batch']=r.get('batch_records',h['batch'])
-            if family=='B4':fields['bytes per sync batch']=r['wire_record_bytes']
+            if family in ['B1','B2','B3','B4','B7']:fields['writer/replica count']=h['writers']
+            if family in ['B2','B4']:fields['records per caller import batch']=r.get('batch_records',h['batch'])
+            if family=='B4':fields['bytes per caller import batch']=r['wire_record_bytes']
             if family=='B5':fields.update({'live carrier entries':r['live_entries'],'retained tombstone count':r['tombstones']})
             for field,value in fields.items():candidates[field].append((value,meta['name'],family,r))
     for dim,items in candidates.items():

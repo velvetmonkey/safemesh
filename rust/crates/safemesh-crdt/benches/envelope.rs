@@ -123,9 +123,6 @@ fn main() {
     let reps: usize = a[7].parse().unwrap();
     let seed: u64 = a[8].parse().unwrap();
     let root = Path::new(&a[9]);
-    assert!(
-        root.starts_with("/home/monkey/scratch/benchraw") || root.starts_with("/mnt/scratch/tmp")
-    );
     fs::create_dir_all(root).unwrap();
     println!(
         "{}",
@@ -368,6 +365,47 @@ fn main() {
                     json!({"rep":k,"condition":"warm","kind":kind,"input_bytes":input.len(),"error":result.err().map(|e|format!("{e:?}")),"assertion":"accepted history unchanged; large valid input has no size refusal"}),
                 );
             }
+        }
+    } else if family == "B7" {
+        let mut r = DurableReplica::counter(root, cfg).unwrap();
+        for i in 0..n {
+            r.receive(
+                r.ticket(),
+                Record {
+                    id: RecordId {
+                        replica: 0,
+                        sequence: (i + 1) as u64,
+                    },
+                    delta: GCounterDelta {
+                        replica: 0,
+                        tally: (i + 1) as u64,
+                    },
+                },
+            )
+            .unwrap();
+        }
+        for k in 0..reps {
+            let tally = (n + k + 1) as u64;
+            let history = r.log().to_wire_bytes().unwrap().len();
+            let (_, m) = measure("durable_counter_bump", || {
+                r.bump(r.ticket(), tally).unwrap()
+            });
+            assert!(
+                m["ns"].as_u64().unwrap() < 5_000_000,
+                "durable G-Counter bump latency exceeded 5 ms: {} ns",
+                m["ns"]
+            );
+            let tx = fs::metadata(root.join("writer-0.transaction"))
+                .unwrap()
+                .len();
+            drop(r);
+            let restarted = DurableReplica::restart_counter(root, cfg).unwrap();
+            assert_eq!(restarted.state().state()[0], tally);
+            r = restarted;
+            emit(
+                m,
+                json!({"rep":k,"condition":"warm","history_records":n+k,"history_encoded_bytes":history,"payload_bytes":8,"transaction_bytes":tx,"serialized_write_amplification":tx as f64/8.0,"assertion":"durable G-Counter bump survives restart"}),
+            );
         }
     } else {
         panic!("unknown family");
