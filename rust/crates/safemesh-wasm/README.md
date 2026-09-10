@@ -18,6 +18,10 @@ wasm-pack build . --target bundler --release
 npm pack --dry-run ./pkg
 ```
 
+## Counter read compatibility (main, unreleased)
+
+`SafeMeshGCounter.value()` and `SafeMeshGCounterReplica.value()` return an exact JavaScript `bigint`, now also for totals above `u64::MAX`. The previous `u64` binding already returned `bigint`: there is no JavaScript return-type change. `typeof` is `"bigint"`, `===` against a number is false, and `JSON.stringify` throws on a bigint. Use bigint literals such as `5n` for comparisons and convert totals to decimal strings explicitly when encoding JSON; converting to `Number` can lose precision.
+
 ## Quickstart
 
 The bundler package exports named classes and initializes WASM on import; it has

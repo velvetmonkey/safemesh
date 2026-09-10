@@ -60,7 +60,7 @@ struct Packet {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Projection {
-    counter: u64,
+    counter: u128,
     supplies: Vec<u64>,
     text_positions: Vec<u64>,
 }

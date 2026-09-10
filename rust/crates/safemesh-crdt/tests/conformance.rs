@@ -92,7 +92,7 @@ fn gcounter_matches_lean_oracle() {
         );
         assert_eq!(
             g.value(),
-            case["expected_value"].as_u64().unwrap(),
+            u128::from(case["expected_value"].as_u64().unwrap()),
             "value mismatch in {name}"
         );
     }
@@ -159,7 +159,7 @@ fn pncounter_matches_lean_oracle() {
         assert_eq!(pn.n_state(), expected_n.as_slice(), "N mismatch in {name}");
         assert_eq!(
             pn.value(),
-            case["expected_value"].as_i64().unwrap(),
+            i128::from(case["expected_value"].as_i64().unwrap()),
             "value mismatch in {name}"
         );
     }

@@ -196,9 +196,17 @@ impl GCounter {
         &self.counts
     }
 
-    /// The counter's read: sum of per-replica tallies — `Crdt.gcounterValue`.
-    pub fn value(&self) -> u64 {
-        self.counts.iter().sum()
+    /// The counter's read: sum of per-replica tallies — `Crdt.gcounterValue`,
+    /// a natural number with no upper bound in the model.
+    ///
+    /// The read is exact for every state this counter can hold: at most
+    /// `isize::MAX` coordinates, each at most `u64::MAX`, sum to strictly less
+    /// than `2^127`, so the `u128` total never wraps and is never clamped. A
+    /// total that no longer fits a narrower integer is still returned whole;
+    /// a caller that needs `u64` narrows it with `u64::try_from` and handles
+    /// the failure itself.
+    pub fn value(&self) -> u128 {
+        self.counts.iter().map(|&tally| u128::from(tally)).sum()
     }
 }
 
@@ -384,9 +392,16 @@ impl PnCounter {
     }
 
     /// The counter's read: (sum of increments) − (sum of decrements) —
-    /// `Crdt.pncounterValue` (ℤ in the model, `i64` here).
-    pub fn value(&self) -> i64 {
-        self.p.value() as i64 - self.n.value() as i64
+    /// `Crdt.pncounterValue`, an integer with no bound in the model.
+    ///
+    /// The read is exact for every representable state: each side's total is
+    /// below `2^127` (see [`GCounter::value`]), so both fit in `i128` and their
+    /// difference lies strictly inside `i128`'s range. No conversion here can
+    /// change the sign or wrap; a positive total always reads positive.
+    pub fn value(&self) -> i128 {
+        let increments = i128::try_from(self.p.value()).expect("a G-Counter total is below 2^127");
+        let decrements = i128::try_from(self.n.value()).expect("a G-Counter total is below 2^127");
+        increments - decrements
     }
 }
 

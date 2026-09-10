@@ -171,7 +171,7 @@ struct Projection {
     active_holders: Vec<&'static str>,
     active_alerts: Vec<&'static str>,
     audit_codes: Vec<&'static str>,
-    event_count: u64,
+    event_count: u128,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

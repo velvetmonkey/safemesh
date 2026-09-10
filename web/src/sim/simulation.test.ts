@@ -1,3 +1,4 @@
+import { SafeMeshGCounterReplica } from '../../../rust/crates/safemesh-wasm/pkg/safemesh_wasm'
 import { describe, expect, it } from 'vitest'
 import {
   addElement,
@@ -161,5 +162,27 @@ describe('mesh simulation', () => {
     sim = runAntiEntropyNow(sim)
 
     expect(convergence(sim).sameRawState).toBe(true)
+  })
+})
+
+describe('wide counter reads', () => {
+  function wideSimulation(tally: bigint) {
+    const sim = createSimulation(2)
+    const source = new SafeMeshGCounterReplica(0n, 2)
+    source.appendBump(0, tally)
+    sim.peers[0].gcounterLog = source.logBytes()
+    source.free()
+    return sim
+  }
+
+  it('reports an unrepresentable displayed total instead of rounding it', () => {
+    expect(convergence(wideSimulation(9007199254740991n)).gcounterValue).toBe(9007199254740991)
+    expect(() => convergence(wideSimulation(9007199254740993n))).toThrow(RangeError)
+  })
+
+  it('refuses a rounded anti-entropy label and a rounded state snapshot', () => {
+    const sim = wideSimulation(9007199254740993n)
+    expect(() => queueAntiEntropyPackets(sim)).toThrow(RangeError)
+    expect(() => runAntiEntropyNow(sim)).toThrow(RangeError)
   })
 })

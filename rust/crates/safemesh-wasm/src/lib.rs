@@ -22,6 +22,13 @@ fn safe_mesh_error(code: u32, message: &str) -> JsValue {
     SafeMeshError::new(code, message).into()
 }
 
+/// A counter total as an exact JavaScript `bigint`. wasm-bindgen carries `u64`
+/// as `bigint` but has no `u128` mapping, so the total crosses as its decimal
+/// text and is parsed by `BigInt`, which is unbounded; no digit is lost.
+fn exact_bigint(total: u128) -> JsValue {
+    JsValue::bigint_from_str(&total.to_string())
+}
+
 fn admission_name(admission: safemesh_crdt::Admission) -> String {
     match admission {
         safemesh_crdt::Admission::Accepted => "accepted",
@@ -58,7 +65,15 @@ impl SafeMeshGCounter {
             .map_err(|_| safe_mesh_error(2, "replica out of range"))
     }
 
-    pub fn value(&self) -> u64 {
+    /// The counter total as an exact `bigint`, also past the 64-bit boundary.
+    #[wasm_bindgen(unchecked_return_type = "bigint")]
+    pub fn value(&self) -> JsValue {
+        exact_bigint(self.total())
+    }
+
+    /// The Rust-core total behind [`Self::value`]; not exported, so host-side
+    /// tests can read it without constructing a JavaScript value.
+    fn total(&self) -> u128 {
         self.inner.value()
     }
 
@@ -402,7 +417,15 @@ impl SafeMeshGCounterReplica {
         self.log.version().get(replica)
     }
 
-    pub fn value(&self) -> u64 {
+    /// The counter total as an exact `bigint`, also past the 64-bit boundary.
+    #[wasm_bindgen(unchecked_return_type = "bigint")]
+    pub fn value(&self) -> JsValue {
+        exact_bigint(self.total())
+    }
+
+    /// The Rust-core total behind [`Self::value`]; not exported, so host-side
+    /// tests can read it without constructing a JavaScript value.
+    fn total(&self) -> u128 {
         self.state.value()
     }
 
@@ -1202,7 +1225,7 @@ mod tests {
         let mut counter = SafeMeshGCounter::new(3);
         counter.apply_bump(1, 5);
         counter.apply_bump(1, 2);
-        assert_eq!(counter.value(), 5);
+        assert_eq!(counter.total(), 5);
         assert_eq!(counter.state(), vec![0, 5, 0]);
     }
 
@@ -1235,11 +1258,11 @@ mod tests {
 
         right.merge_record_bytes(&bytes).unwrap();
         right.merge_record_bytes(&bytes).unwrap();
-        assert_eq!(right.value(), 5);
+        assert_eq!(right.total(), 5);
         assert_eq!(right.version_for(1), 1);
 
         left.merge_log_bytes(&right.log_bytes().unwrap()).unwrap();
-        assert_eq!(left.value(), right.value());
+        assert_eq!(left.total(), right.total());
     }
 
     #[test]

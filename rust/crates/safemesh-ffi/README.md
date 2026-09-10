@@ -24,12 +24,18 @@ The public header is committed at `rust/crates/safemesh-ffi/include/safemesh.h`.
 ```c
 #include "safemesh.h"
 
-SafeMeshGCounter *counter = safemesh_gcounter_new(2);
-SafeMeshStatus status = safemesh_gcounter_try_apply_bump(counter, 0, 3);
-/* status == Ok; ReplicaOutOfRange (2) rejects an invalid index. */
-uint64_t value = safemesh_gcounter_value(counter);
-safemesh_gcounter_free(counter);
+SafeMeshStatus example_counter(uint64_t *out) {
+    SafeMeshGCounter *counter = safemesh_gcounter_new(2);
+    SafeMeshStatus status = safemesh_gcounter_try_apply_bump(counter, 0, 3);
+    if (status == Ok) {
+        status = safemesh_gcounter_try_value(counter, out);
+    }
+    safemesh_gcounter_free(counter);
+    return status;
+}
 ```
+
+Only use `out` after `example_counter` returns `Ok`. Otherwise report the returned status and do not produce a number. `ValueOverflow` means the true total does not fit `uint64_t`; the output remains untouched. No numeric sentinel is possible: every `uint64_t` value, including zero and `UINT64_MAX`, is a legitimate total. Ignoring the status can expose a stale value, or an indeterminate value if the caller did not initialize the output.
 
 ## Ownership contract
 
