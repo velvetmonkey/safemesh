@@ -1,8 +1,16 @@
-// The worker is served from the Lab's root, so its own location names the base path:
-// / on the local servers, the mount path when the documentation site bundles the Lab.
-const BASE = new URL('./', self.location.href).pathname
+// The registration scope is the Lab base path: / locally, or the mount path on the documentation site.
+// It is stable across worker updates and differs between mounts on one origin.
+const SCOPE_PATH = new URL(self.registration.scope).pathname
+const SCOPE_NAMESPACE = SCOPE_PATH === '/' ? 'root' : encodeURIComponent(SCOPE_PATH)
+const BASE = SCOPE_PATH
+// Cache Storage is shared by every application served from this origin, so activation may
+// only remove caches this Lab named itself. Every name the Lab has ever used carries this
+// prefix. Legacy product-wide names have no scope identity, so they are deliberately orphaned
+// rather than risk deleting another deployment's data.
+const CACHE_PREFIX = 'safemesh-pwa-'
+const CACHE_NAMESPACE = `${CACHE_PREFIX}${SCOPE_NAMESPACE}-`
 // Production builds prepend BUILD with every emitted asset and a content-derived cache name.
-const CACHE_NAME = typeof BUILD === 'undefined' ? 'safemesh-pwa-dev' : BUILD.cacheName
+const CACHE_NAME = typeof BUILD === 'undefined' ? CACHE_NAMESPACE + 'dev' : BUILD.cacheName
 const APP_SHELL = typeof BUILD === 'undefined'
   ? ['', 'README.md', 'manifest.webmanifest', 'pwa-icon.svg', 'favicon.svg'].map((name) => BASE + name)
   : BUILD.assets
@@ -16,7 +24,14 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))))
+      .then((keys) => keys.filter((key) => key.startsWith(CACHE_NAMESPACE) && key !== CACHE_NAME))
+      // One cache refusing deletion stays for the next activation; it must not stop the
+      // remaining deletions or leave open pages uncontrolled.
+      .then((stale) => Promise.allSettled(stale.map((key) => caches.delete(key))).then((results) => {
+        results.forEach((result, index) => {
+          if (result.status === 'rejected') console.warn(`SafeMesh could not delete stale cache ${stale[index]}.`, result.reason)
+        })
+      }))
       .then(() => self.clients.claim()),
   )
 })

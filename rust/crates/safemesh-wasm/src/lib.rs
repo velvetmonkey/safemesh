@@ -29,6 +29,15 @@ fn exact_bigint(total: u128) -> JsValue {
     JsValue::bigint_from_str(&total.to_string())
 }
 
+fn admission_name(admission: safemesh_crdt::Admission) -> String {
+    match admission {
+        safemesh_crdt::Admission::Accepted => "accepted",
+        safemesh_crdt::Admission::Duplicate => "duplicate",
+        safemesh_crdt::Admission::Collision => "collision",
+    }
+    .to_owned()
+}
+
 #[wasm_bindgen]
 pub struct SafeMeshGCounter {
     inner: GCounter,
@@ -352,8 +361,12 @@ impl SafeMeshGCounterReplica {
         Ok(())
     }
 
-    #[wasm_bindgen(js_name = mergeLogBytes)]
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
+    /// Return one core admission verdict for every decoded input record.
+    #[wasm_bindgen(
+        js_name = mergeLogBytes,
+        unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
+    )]
+    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
         let log = EventLog::<GCounterDelta>::from_wire_bytes_for(bytes, &self.state).map_err(
             |error| {
                 safe_mesh_error(
@@ -379,15 +392,17 @@ impl SafeMeshGCounterReplica {
                 "counter coordinate out of range or not owned by record author",
             ));
         }
-        for record in log.records().iter().cloned() {
-            if self.log.admit_with(record, |delta| {
-                self.state.apply_delta(delta.clone());
-            }) == safemesh_crdt::Admission::Collision
-            {
-                return Err(safe_mesh_error(1, "record ID collision"));
-            }
-        }
-        Ok(())
+        Ok(log
+            .records()
+            .iter()
+            .cloned()
+            .map(|record| {
+                self.log.admit_with(record, |delta| {
+                    self.state.apply_delta(delta.clone());
+                })
+            })
+            .map(admission_name)
+            .collect())
     }
 
     #[wasm_bindgen(js_name = logBytes)]
@@ -487,8 +502,12 @@ impl SafeMeshEnableWinsFlagReplica {
         Ok(())
     }
 
-    #[wasm_bindgen(js_name = mergeLogBytes)]
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
+    /// Return one core admission verdict for every decoded input record.
+    #[wasm_bindgen(
+        js_name = mergeLogBytes,
+        unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
+    )]
+    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
         let log = EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes_for(bytes, &self.state)
             .map_err(|error| {
                 safe_mesh_error(
@@ -504,15 +523,17 @@ impl SafeMeshEnableWinsFlagReplica {
                     },
                 )
             })?;
-        for record in log.records().iter().cloned() {
-            if self.log.admit_with(record, |delta| {
-                self.state.apply_delta(delta.clone());
-            }) == safemesh_crdt::Admission::Collision
-            {
-                return Err(safe_mesh_error(1, "record ID collision"));
-            }
-        }
-        Ok(())
+        Ok(log
+            .records()
+            .iter()
+            .cloned()
+            .map(|record| {
+                self.log.admit_with(record, |delta| {
+                    self.state.apply_delta(delta.clone());
+                })
+            })
+            .map(admission_name)
+            .collect())
     }
 
     #[wasm_bindgen(js_name = logBytes)]
@@ -621,8 +642,12 @@ impl SafeMeshLwwMapReplica {
         Ok(())
     }
 
-    #[wasm_bindgen(js_name = mergeLogBytes)]
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
+    /// Return one core admission verdict for every decoded input record.
+    #[wasm_bindgen(
+        js_name = mergeLogBytes,
+        unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
+    )]
+    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
         let log = EventLog::<LwwMapDelta<u64, u64>>::from_wire_bytes_for(bytes, &self.state)
             .map_err(|error| {
                 safe_mesh_error(
@@ -638,15 +663,17 @@ impl SafeMeshLwwMapReplica {
                     },
                 )
             })?;
-        for record in log.records().iter().cloned() {
-            if self.log.admit_with(record, |delta| {
-                self.state.apply_delta(delta.clone());
-            }) == safemesh_crdt::Admission::Collision
-            {
-                return Err(safe_mesh_error(1, "record ID collision"));
-            }
-        }
-        Ok(())
+        Ok(log
+            .records()
+            .iter()
+            .cloned()
+            .map(|record| {
+                self.log.admit_with(record, |delta| {
+                    self.state.apply_delta(delta.clone());
+                })
+            })
+            .map(admission_name)
+            .collect())
     }
 
     #[wasm_bindgen(js_name = logBytes)]
@@ -741,8 +768,12 @@ impl SafeMeshLwwRegisterReplica {
         Ok(())
     }
 
-    #[wasm_bindgen(js_name = mergeLogBytes)]
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
+    /// Return one core admission verdict for every decoded input record.
+    #[wasm_bindgen(
+        js_name = mergeLogBytes,
+        unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
+    )]
+    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
         let log = EventLog::<LwwRegisterDelta<u64>>::from_wire_bytes_for(bytes, &self.state)
             .map_err(|error| {
                 safe_mesh_error(
@@ -758,15 +789,17 @@ impl SafeMeshLwwRegisterReplica {
                     },
                 )
             })?;
-        for record in log.records().iter().cloned() {
-            if self.log.admit_with(record, |delta| {
-                self.state.apply_delta(delta.clone());
-            }) == safemesh_crdt::Admission::Collision
-            {
-                return Err(safe_mesh_error(1, "record ID collision"));
-            }
-        }
-        Ok(())
+        Ok(log
+            .records()
+            .iter()
+            .cloned()
+            .map(|record| {
+                self.log.admit_with(record, |delta| {
+                    self.state.apply_delta(delta.clone());
+                })
+            })
+            .map(admission_name)
+            .collect())
     }
 
     #[wasm_bindgen(js_name = logBytes)]
@@ -1015,13 +1048,20 @@ impl SafeMeshStringOrSetReplica {
         })
     }
 
-    fn try_merge_log_bytes(&mut self, bytes: &[u8]) -> Result<(), BindingError> {
+    fn try_merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, BindingError> {
         let log = EventLog::<OrSetDelta<String, u64>>::from_wire_bytes_for(bytes, &self.state)
             .map_err(event_log_decode_error)?;
-        for record in log.records().iter().cloned() {
-            self.admit(record)?;
-        }
-        Ok(())
+        Ok(log
+            .records()
+            .iter()
+            .cloned()
+            .map(|record| {
+                self.log.admit_with(record, |delta| {
+                    self.state.apply_delta(delta.clone());
+                })
+            })
+            .map(admission_name)
+            .collect())
     }
 
     fn try_inspect_record_bytes(bytes: &[u8]) -> Result<SafeMeshStringOrSetRecord, BindingError> {
@@ -1073,8 +1113,12 @@ impl SafeMeshStringOrSetReplica {
             .map_err(JsValue::from)
     }
 
-    #[wasm_bindgen(js_name = mergeLogBytes)]
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
+    /// Return one core admission verdict for every decoded input record.
+    #[wasm_bindgen(
+        js_name = mergeLogBytes,
+        unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
+    )]
+    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
         self.try_merge_log_bytes(bytes).map_err(JsValue::from)
     }
 
@@ -1219,6 +1263,223 @@ mod tests {
 
         left.merge_log_bytes(&right.log_bytes().unwrap()).unwrap();
         assert_eq!(left.total(), right.total());
+    }
+
+    #[test]
+    fn wasm_batch_reports_every_admission() {
+        fn wire(records: impl IntoIterator<Item = Record<GCounterDelta>>) -> Vec<u8> {
+            let mut log = EventLog::with_replica_count(2);
+            for record in records {
+                assert_eq!(
+                    log.insert_record(record),
+                    safemesh_crdt::Admission::Accepted
+                );
+            }
+            log.to_wire_bytes().unwrap()
+        }
+
+        let existing = Record {
+            id: RecordId {
+                replica: 0,
+                sequence: 1,
+            },
+            delta: GCounterDelta {
+                replica: 0,
+                tally: 5,
+            },
+        };
+        let accepted = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 1,
+            },
+            delta: GCounterDelta {
+                replica: 1,
+                tally: 7,
+            },
+        };
+        let collision = Record {
+            id: existing.id,
+            delta: GCounterDelta {
+                replica: 0,
+                tally: 9,
+            },
+        };
+        let after_collision = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 2,
+            },
+            delta: GCounterDelta {
+                replica: 1,
+                tally: 8,
+            },
+        };
+
+        let mut target = SafeMeshGCounterReplica::new(0, 2);
+        target
+            .merge_record_bytes(&existing.to_wire_bytes().unwrap())
+            .unwrap();
+        assert_eq!(
+            target.merge_log_bytes(&wire([])).unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(target.state(), vec![5, 0]);
+
+        let mut one = SafeMeshGCounterReplica::new(0, 2);
+        assert_eq!(
+            one.merge_log_bytes(&wire([accepted.clone()])).unwrap(),
+            vec!["accepted"]
+        );
+        assert_eq!(one.state(), vec![0, 7]);
+
+        let before = target.state();
+        assert_eq!(
+            target.merge_log_bytes(&wire([collision.clone()])).unwrap(),
+            vec!["collision"]
+        );
+        assert_eq!(target.state(), before);
+
+        target
+            .merge_record_bytes(&accepted.to_wire_bytes().unwrap())
+            .unwrap();
+        let before = target.state();
+        assert_eq!(
+            target
+                .merge_log_bytes(&wire([existing.clone(), accepted.clone()]))
+                .unwrap(),
+            vec!["duplicate", "duplicate"]
+        );
+        assert_eq!(target.state(), before);
+
+        let mut late = SafeMeshGCounterReplica::new(0, 2);
+        late.merge_record_bytes(&existing.to_wire_bytes().unwrap())
+            .unwrap();
+        let before = late.state();
+        let admissions = late
+            .merge_log_bytes(&wire([accepted, collision, after_collision]))
+            .unwrap();
+        let after = late.state();
+        println!("WASM admissions={admissions:?} before_state={before:?} after_state={after:?}");
+        assert_eq!(admissions, vec!["accepted", "collision", "accepted"]);
+        assert_eq!(before, vec![5, 0]);
+        assert_eq!(after, vec![5, 8]);
+    }
+
+    #[test]
+    fn wasm_all_replica_batches_report_collisions() {
+        macro_rules! check {
+            ($replica:expr, $first:expr, $second:expr) => {{
+                let first = Record {
+                    id: RecordId {
+                        replica: 1,
+                        sequence: 1,
+                    },
+                    delta: $first,
+                };
+                let second = Record {
+                    id: first.id,
+                    delta: $second,
+                };
+                let mut replica = $replica;
+                replica
+                    .merge_record_bytes(&first.to_wire_bytes().unwrap())
+                    .unwrap();
+                let state = replica.state.clone();
+                let log = replica.log.clone();
+                let mut incoming = EventLog::for_crdt(&replica.state);
+                assert_eq!(
+                    incoming.insert_record(second),
+                    safemesh_crdt::Admission::Accepted
+                );
+                assert_eq!(
+                    replica
+                        .merge_log_bytes(&incoming.to_wire_bytes().unwrap())
+                        .unwrap(),
+                    vec!["collision"]
+                );
+                assert_eq!(replica.state, state);
+                assert_eq!(replica.log, log);
+            }};
+        }
+        check!(
+            SafeMeshGCounterReplica::new(2, 2),
+            GCounterDelta {
+                replica: 1,
+                tally: 5
+            },
+            GCounterDelta {
+                replica: 1,
+                tally: 9
+            }
+        );
+        check!(
+            SafeMeshEnableWinsFlagReplica::new(2),
+            EnableWinsFlagDelta::Enable { token: 5 },
+            EnableWinsFlagDelta::Enable { token: 9 }
+        );
+        check!(
+            SafeMeshLwwRegisterReplica::new(2),
+            LwwRegisterDelta {
+                timestamp: 1,
+                replica: 1,
+                value: 5
+            },
+            LwwRegisterDelta {
+                timestamp: 2,
+                replica: 1,
+                value: 9
+            }
+        );
+        check!(
+            SafeMeshLwwMapReplica::new(2),
+            LwwMapDelta::Set {
+                key: 1,
+                timestamp: 1,
+                replica: 1,
+                value: 5
+            },
+            LwwMapDelta::Remove {
+                key: 1,
+                timestamp: 2,
+                replica: 1
+            }
+        );
+
+        let first = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 1,
+            },
+            delta: OrSetDelta::Add {
+                element: "first".to_owned(),
+                token: 5,
+            },
+        };
+        let second = Record {
+            id: first.id,
+            delta: OrSetDelta::Add {
+                element: "second".to_owned(),
+                token: 9,
+            },
+        };
+        let mut replica = SafeMeshStringOrSetReplica::new(2);
+        replica.admit(first).unwrap();
+        let state = replica.state.clone();
+        let log = replica.log.clone();
+        let mut incoming = EventLog::for_crdt(&replica.state);
+        assert_eq!(
+            incoming.insert_record(second),
+            safemesh_crdt::Admission::Accepted
+        );
+        assert_eq!(
+            replica
+                .try_merge_log_bytes(&incoming.to_wire_bytes().unwrap())
+                .unwrap(),
+            vec!["collision"]
+        );
+        assert_eq!(replica.state, state);
+        assert_eq!(replica.log, log);
     }
 
     #[test]

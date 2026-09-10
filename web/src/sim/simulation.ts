@@ -422,13 +422,13 @@ function applyDeltaToPeer(peer: Peer, delta: MeshDelta): Peer {
   if (delta.kind === 'gcounter.bump') {
     const counter = replicaFor(peer, peer.gcounter.length)
     if (delta.payload === 'record') counter.mergeRecordBytes(delta.bytes)
-    else counter.mergeLogBytes(delta.bytes)
+    else mergeLogBytes(counter, delta.bytes)
     return snapshotGCounterPeer(peer, counter)
   }
   const replica = orsetReplicaFor(peer)
   try {
     if (delta.payload === 'record') replica.mergeRecordBytes(delta.bytes)
-    else replica.mergeLogBytes(delta.bytes)
+    else mergeLogBytes(replica, delta.bytes)
     return { ...peer, orset: replica.logBytes() }
   } finally {
     replica.free()
@@ -460,15 +460,15 @@ function runAntiEntropy(sim: Simulation): Simulation {
 
       const leftCounter = replicaFor(left, peers.length)
       const rightCounter = replicaFor(right, peers.length)
-      leftCounter.mergeLogBytes(rightCounter.logBytes())
-      rightCounter.mergeLogBytes(leftCounter.logBytes())
+      mergeLogBytes(leftCounter, rightCounter.logBytes())
+      mergeLogBytes(rightCounter, leftCounter.logBytes())
       const leftSet = orsetReplicaFor(left)
       const rightSet = orsetReplicaFor(right)
       let leftLog: Uint8Array
       let rightLog: Uint8Array
       try {
-        leftSet.mergeLogBytes(rightSet.logBytes())
-        rightSet.mergeLogBytes(leftSet.logBytes())
+        mergeLogBytes(leftSet, rightSet.logBytes())
+        mergeLogBytes(rightSet, leftSet.logBytes())
         leftLog = leftSet.logBytes()
         rightLog = rightSet.logBytes()
       } finally {
@@ -599,7 +599,7 @@ function backfillDescriptions(
 function orsetReplicaFor(peer: Pick<Peer, 'id' | 'orset'>): SafeMeshStringOrSetReplica {
   const replica = new SafeMeshStringOrSetReplica(BigInt(peer.id))
   try {
-    if (peer.orset.length > 0) replica.mergeLogBytes(peer.orset)
+    if (peer.orset.length > 0) mergeLogBytes(replica, peer.orset)
     return replica
   } catch (error) {
     replica.free()
@@ -656,8 +656,18 @@ function emptyGCounterPeer(id: number, replicas: number): Pick<Peer, 'gcounter' 
 
 function replicaFor(peer: Peer, replicas: number): SafeMeshGCounterReplica {
   const replica = new SafeMeshGCounterReplica(BigInt(peer.id), replicas)
-  if (peer.gcounterLog.length > 0) replica.mergeLogBytes(peer.gcounterLog)
+  if (peer.gcounterLog.length > 0) mergeLogBytes(replica, peer.gcounterLog)
   return replica
+}
+
+function mergeLogBytes(
+  replica: { mergeLogBytes(bytes: Uint8Array): Array<'accepted' | 'duplicate' | 'collision'> },
+  bytes: Uint8Array,
+): void {
+  const admissions = replica.mergeLogBytes(bytes)
+  if (admissions.includes('collision')) {
+    throw new Error(`batch collision after admissions=${JSON.stringify(admissions)}`)
+  }
 }
 
 function snapshotGCounterPeer(peer: Peer, counter: SafeMeshGCounterReplica): Peer {

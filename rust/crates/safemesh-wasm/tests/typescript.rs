@@ -43,6 +43,13 @@ fn typescript_surface_lists_the_public_binding() {
     assert!(DTS.contains("appendEnable(token: bigint): Uint8Array"));
     assert!(DTS.contains("appendDisableObserved(): Uint8Array"));
     assert!(DTS.contains("mergeRecordBytes(bytes: Uint8Array): void"));
+    assert_eq!(
+        DTS.matches(
+            "mergeLogBytes(bytes: Uint8Array): (\"accepted\" | \"duplicate\" | \"collision\")[]"
+        )
+        .count(),
+        5
+    );
     assert!(DTS.contains("gcounterDeltaToWire(replica: number, tally: bigint): Uint8Array"));
     assert!(DTS.contains(
         "lwwRegisterDeltaToWire(timestamp: bigint, replica: bigint, value: bigint): Uint8Array"
