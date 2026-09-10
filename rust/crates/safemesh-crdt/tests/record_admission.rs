@@ -2,6 +2,99 @@ use safemesh_crdt::{
     Admission, AppendError, Crdt, EventLog, GCounter, GCounterDelta, PnCounter, PnCounterDelta,
     Record, RecordId, WireDecode, WireEncode,
 };
+
+/// A source-level census is the strongest crate-local guard that preserves the
+/// public default body on `Crdt::validate_record`: Rust has no reflection over
+/// trait implementations, and removing that default is a downstream-breaking
+/// API change. The counts are derived from every `impl Crdt for` block in this
+/// crate root, never from a list of carrier names.
+fn crdt_validation_census() -> (usize, usize, usize) {
+    let source = include_str!("../src/lib.rs");
+    let mut implementations = 0;
+    let mut inheritors = 0;
+    let mut unexplained_permissive_overrides = 0;
+    let mut cursor = source;
+
+    while let Some(offset) = cursor.find("impl") {
+        let before = &cursor[..offset];
+        let candidate = &cursor[offset..];
+        cursor = &candidate[4..];
+        if before
+            .chars()
+            .last()
+            .is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
+        {
+            continue;
+        }
+        let Some(header_end) = candidate.find('{') else {
+            break;
+        };
+        let header = &candidate[..header_end];
+        if !header.contains("Crdt for") {
+            continue;
+        }
+        let mut depth = 0usize;
+        let mut body_end = None;
+        for (index, character) in candidate[header_end..].char_indices() {
+            match character {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        body_end = Some(header_end + index + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(body_end) = body_end else {
+            panic!("unterminated Crdt implementation in lib.rs");
+        };
+        let body = &candidate[header_end + 1..body_end - 1];
+        implementations += 1;
+        let Some(method_start) = body.find("fn validate_record") else {
+            inheritors += 1;
+            continue;
+        };
+        let before_method = &body[..method_start];
+        let stated_reason = before_method
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .is_some_and(|line| line.trim_start().starts_with("///"));
+        let method = &body[method_start..];
+        let method_open = method.find('{').expect("validator body");
+        let mut depth = 0usize;
+        let mut method_end = None;
+        for (index, character) in method[method_open..].char_indices() {
+            match character {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        method_end = Some(method_open + index);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let method_body: String = method[method_open + 1..method_end.expect("validator close")]
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        if method_body == "Ok(())" && !stated_reason {
+            unexplained_permissive_overrides += 1;
+        }
+    }
+    (
+        implementations,
+        inheritors,
+        unexplained_permissive_overrides,
+    )
+}
+
 fn record(sequence: u64, tally: u64) -> Record<GCounterDelta> {
     Record {
         id: RecordId {
@@ -189,6 +282,38 @@ mod owned_local {
         proof("holder", &before, &snapshot(&holder));
         assert!(output.status.success(), "competing process must refuse");
     }
+    /// The local writer emits `Remove { tokens: [] }` for an element it has
+    /// never observed. That record is persisted product state, so the checked
+    /// loader must keep opening it: refusing the lattice bottom would refuse a
+    /// saved log the user already has.
+    #[test]
+    fn owned_empty_remove_persists_and_reopens_through_checked_loader() {
+        let (implementations, inheritors, unexplained_permissive_overrides) =
+            crdt_validation_census();
+        assert_eq!(
+            inheritors + unexplained_permissive_overrides,
+            0,
+            "{implementations} Crdt implementations must state a validator or explain a permissive one"
+        );
+        use safemesh_crdt::OrSet;
+        let mut r = LocalReplica::utf8_set(&root("empty-remove"), config(0)).unwrap();
+        let removed = r.remove(r.ticket(), &String::from("never-added")).unwrap();
+        assert_eq!(removed.delta, OrSetDelta::Remove { tokens: vec![] });
+        let bytes = r.log().to_wire_bytes().unwrap();
+        let reopened = EventLog::<OrSetDelta<String, u64>>::from_wire_bytes_for(
+            &bytes,
+            &OrSet::<String, u64>::new(),
+        )
+        .unwrap_or_else(|e| panic!("persisted empty remove refused on reopen: {e:?}"));
+        let mut replay = OrSet::<String, u64>::new();
+        for record in reopened.records() {
+            replay.apply_delta(record.delta.clone());
+        }
+        assert_eq!(reopened.records().len(), 1);
+        assert_eq!(&replay, r.state());
+        assert_eq!(replay, OrSet::new());
+        println!("EMPTY REMOVE persisted=1 reopened=1 replay==live=true");
+    }
     #[test]
     fn owned_refusal_stale() {
         let mut r = LocalReplica::counter(&root("stale"), config(0)).unwrap();
@@ -315,31 +440,6 @@ mod owned_local {
         assert_ne!(next_a.delta, next_b.delta);
         assert_eq!(next_a.id.sequence, 3);
         assert_eq!(next_b.id.sequence, 3);
-    }
-    /// The local writer emits `Remove { tokens: [] }` for an element it has
-    /// never observed. That record is persisted product state, so the checked
-    /// loader must keep opening it: refusing the lattice bottom would refuse a
-    /// saved log the user already has.
-    #[test]
-    fn owned_empty_remove_persists_and_reopens_through_checked_loader() {
-        use safemesh_crdt::OrSet;
-        let mut r = LocalReplica::utf8_set(&root("empty-remove"), config(0)).unwrap();
-        let removed = r.remove(r.ticket(), &String::from("never-added")).unwrap();
-        assert_eq!(removed.delta, OrSetDelta::Remove { tokens: vec![] });
-        let bytes = r.log().to_wire_bytes().unwrap();
-        let reopened = EventLog::<OrSetDelta<String, u64>>::from_wire_bytes_for(
-            &bytes,
-            &OrSet::<String, u64>::new(),
-        )
-        .unwrap_or_else(|e| panic!("persisted empty remove refused on reopen: {e:?}"));
-        let mut replay = OrSet::<String, u64>::new();
-        for record in reopened.records() {
-            replay.apply_delta(record.delta.clone());
-        }
-        assert_eq!(reopened.records().len(), 1);
-        assert_eq!(&replay, r.state());
-        assert_eq!(replay, OrSet::new());
-        println!("EMPTY REMOVE persisted=1 reopened=1 replay==live=true");
     }
     #[test]
     fn owned_boundaries_and_existing_store_error() {
@@ -757,6 +857,12 @@ fn seqzero_acknowledgment_is_independent_of_positive_prefix() {
 /// validator that refuses a legitimately-losing record goes red here.
 #[test]
 fn inherited_types_accept_records_that_replay_subsumes() {
+    let (implementations, inheritors, unexplained_permissive_overrides) = crdt_validation_census();
+    assert_eq!(
+        inheritors + unexplained_permissive_overrides,
+        0,
+        "{implementations} Crdt implementations must state a validator or explain a permissive one"
+    );
     use safemesh_crdt::{
         EnableWinsFlag, EnableWinsFlagDelta, GSet, LwwMap, LwwMapDelta, LwwRegister,
         LwwRegisterDelta, OrSet, OrSetDelta, Rga, RgaDelta, WireError, WireSchema,
