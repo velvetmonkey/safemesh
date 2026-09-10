@@ -10,6 +10,14 @@ const {
   SafeMeshEnableWinsFlagReplica,
 } = require(join(packageDir, "safemesh_wasm.js"));
 
+function mergeLog(replica, bytes) {
+  const admissions = replica.mergeLogBytes(bytes);
+  if (admissions.includes("collision")) {
+    throw new Error(`batch collision after admissions=${JSON.stringify(admissions)}`);
+  }
+  return admissions;
+}
+
 const left = new SafeMeshGCounterReplica(1n, 3);
 const right = new SafeMeshGCounterReplica(2n, 3);
 
@@ -18,8 +26,8 @@ const rightRecord = right.appendBump(2, 7n);
 
 left.mergeRecordBytes(rightRecord);
 right.mergeRecordBytes(leftRecord);
-left.mergeLogBytes(right.logBytes());
-right.mergeLogBytes(left.logBytes());
+mergeLog(left, right.logBytes());
+mergeLog(right, left.logBytes());
 
 const flagLeft = new SafeMeshEnableWinsFlagReplica(1n);
 const flagRight = new SafeMeshEnableWinsFlagReplica(2n);
@@ -27,7 +35,7 @@ flagRight.mergeRecordBytes(flagLeft.appendEnable(44n));
 const removeObserved = flagRight.appendDisableObserved();
 flagLeft.appendEnable(45n);
 flagLeft.mergeRecordBytes(removeObserved);
-flagRight.mergeLogBytes(flagLeft.logBytes());
+mergeLog(flagRight, flagLeft.logBytes());
 
 const counterConverged = left.value() === 12n && right.value() === 12n;
 const flagConverged = flagLeft.value() === true && flagRight.value() === true;

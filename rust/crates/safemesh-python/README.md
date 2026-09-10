@@ -36,10 +36,15 @@ left = sm.GCounterReplica(1, 3)
 right = sm.GCounterReplica(2, 3)
 
 right.merge_record_bytes(left.append_bump(1, 5))
-left.merge_log_bytes(right.log_bytes())
+admissions = left.merge_log_bytes(right.log_bytes())
+assert admissions == ["duplicate"]
 
 print(left.value(), right.value())
 ```
+
+`merge_log_bytes` returns one `"accepted"`, `"duplicate"`, or `"collision"`
+verdict per input record, in order. Decode and whole-batch validation errors
+raise before any record is applied.
 
 ## Demo
 

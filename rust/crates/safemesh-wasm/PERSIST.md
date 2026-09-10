@@ -114,6 +114,14 @@ function save(side, replica) {
   }
 }
 
+function mergeLog(replica, bytes) {
+  const admissions = replica.mergeLogBytes(bytes);
+  if (admissions.includes("collision")) {
+    throw new Error(`batch collision after admissions=${JSON.stringify(admissions)}`);
+  }
+  return admissions;
+}
+
 function load(side) {
   const replica = fresh(side);
   for (const kind of ["counter", "set"]) {
@@ -123,7 +131,7 @@ function load(side) {
       process.exit(2);
     }
     try {
-      replica[kind].mergeLogBytes(readFileSync(path));
+      mergeLog(replica[kind], readFileSync(path));
     } catch (error) {
       console.error(`RESTORE FAILED file=${path} error=${error.name}: ${error.message}`);
       process.exit(2);
@@ -148,8 +156,8 @@ function same(a, b) {
 
 function exchange(a, b) {
   for (const kind of ["counter", "set"]) {
-    a[kind].mergeLogBytes(b[kind].logBytes());
-    b[kind].mergeLogBytes(a[kind].logBytes());
+    mergeLog(a[kind], b[kind].logBytes());
+    mergeLog(b[kind], a[kind].logBytes());
   }
 }
 
@@ -202,8 +210,8 @@ switch (step) {
     const left = load("left");
     const right = load("right");
     for (const kind of ["counter", "set"]) {
-      left[kind].mergeLogBytes(readFileSync(logPath("right", kind)));
-      right[kind].mergeLogBytes(readFileSync(logPath("left", kind)));
+      mergeLog(left[kind], readFileSync(logPath("right", kind)));
+      mergeLog(right[kind], readFileSync(logPath("left", kind)));
     }
     show("left ", left);
     show("right", right);
@@ -235,6 +243,8 @@ Three facts about the calls the program makes:
 - `logBytes()` is the whole log; `mergeLogBytes(bytes)` admits every record in it
   that the replica does not already hold. Records already held are duplicates and
   do not move state, so merging the same file twice is harmless.
+  The return value contains an ordered `accepted`, `duplicate`, or `collision`
+  verdict for every input record, including any accepted prefix before a collision.
 
 ## 3. Persist
 
@@ -371,6 +381,11 @@ const assert = require('node:assert/strict');
 const { SafeMeshGCounterReplica: Counter, SafeMeshStringOrSetReplica: SetReplica } = require('./pkg/safemesh_wasm.js');
 const peer = { counter: new Counter(2n, 3), set: new SetReplica(2n) };
 const recovered = { counter: new Counter(1n, 3), set: new SetReplica(1n) };
+function mergeLog(replica, bytes) {
+  const admissions = replica.mergeLogBytes(bytes);
+  assert(!admissions.includes('collision'), `batch collision after admissions=${JSON.stringify(admissions)}`);
+  return admissions;
+}
 function state(r) {
   return {
     counter: Array.from(r.counter.state(), String),
@@ -383,8 +398,8 @@ function state(r) {
 }
 try {
   for (const kind of ['counter', 'set']) {
-    peer[kind].mergeLogBytes(readFileSync(`logs/right-${kind}.log`));
-    recovered[kind].mergeLogBytes(peer[kind].logBytes());
+    mergeLog(peer[kind], readFileSync(`logs/right-${kind}.log`));
+    mergeLog(recovered[kind], peer[kind].logBytes());
   }
   console.log('peer=' + JSON.stringify(state(peer)));
   console.log('recovered=' + JSON.stringify(state(recovered)));
