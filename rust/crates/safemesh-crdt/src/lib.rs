@@ -959,16 +959,22 @@ pub struct Record<D> {
 ///
 /// `get(replica) == n` means every sequence `1..=n` for that replica is known.
 /// Later records that arrive before earlier records must not advance this
-/// prefix, otherwise `since` could hide gaps.
+/// prefix, otherwise `since` could hide gaps. Sequence zero is acknowledged
+/// independently by `zero_replicas`; it is not implied by a positive prefix.
+/// There is no built-in version wire codec. Custom version exchanges must carry
+/// both `entries()` and `zero_replicas()`; legacy prefix-only exchanges cannot
+/// acknowledge zeros and will keep receiving them until upgraded.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct VersionVector {
     entries: BTreeMap<u64, u64>,
+    zero_replicas: BTreeSet<u64>,
 }
 
 impl VersionVector {
     pub fn new() -> Self {
         VersionVector {
             entries: BTreeMap::new(),
+            zero_replicas: BTreeSet::new(),
         }
     }
 
@@ -981,17 +987,29 @@ impl VersionVector {
     /// Use `EventLog` to ingest out-of-order records; the log remembers gaps
     /// and advances this vector once the prefix is complete.
     pub fn observe(&mut self, id: RecordId) {
-        if self.get(id.replica).checked_add(1) == Some(id.sequence) {
+        if id.sequence == 0 {
+            self.zero_replicas.insert(id.replica);
+        } else if self.get(id.replica).checked_add(1) == Some(id.sequence) {
             self.set(id.replica, id.sequence);
         }
     }
 
     pub fn includes(&self, id: RecordId) -> bool {
-        self.get(id.replica) >= id.sequence
+        if id.sequence == 0 {
+            self.zero_replicas.contains(&id.replica)
+        } else {
+            self.get(id.replica) >= id.sequence
+        }
     }
 
+    /// Positive contiguous prefixes only; does not describe zero possession.
     pub fn entries(&self) -> &BTreeMap<u64, u64> {
         &self.entries
+    }
+
+    /// Authors whose sequence-zero record has been observed.
+    pub fn zero_replicas(&self) -> &BTreeSet<u64> {
+        &self.zero_replicas
     }
 
     fn set(&mut self, replica: u64, sequence: u64) {
@@ -1123,6 +1141,7 @@ impl<D> EventLog<D> {
         let id = record.id;
         self.seen.insert(id, self.records.len());
         self.records.push(record);
+        self.version.observe(id);
         self.advance_contiguous_version(id.replica);
         apply(&self.records.last().expect("accepted record").delta);
         Admission::Accepted
@@ -1161,6 +1180,8 @@ impl<D> EventLog<D> {
 }
 
 impl<D: Clone> EventLog<D> {
+    /// Return admitted records outside the peer's positive contiguous prefixes
+    /// and independently acknowledged sequence-zero records.
     pub fn since(&self, version: &VersionVector) -> Vec<Record<D>> {
         self.records
             .iter()
@@ -2409,6 +2430,41 @@ pub mod laws {
 #[cfg(test)]
 mod frame_tests {
     use super::*;
+
+    #[test]
+    fn seqzero_saturated_prefixes() {
+        extern crate std;
+        let mut cases = 0;
+        let mut mismatches = 0;
+        for author in [0, 1, u64::MAX] {
+            for sequence in [0, 1, 2, 3, u64::MAX - 1, u64::MAX] {
+                for prefix in [u64::MAX - 1, u64::MAX] {
+                    let mut log = EventLog::new();
+                    let r = Record {
+                        id: RecordId {
+                            replica: author,
+                            sequence,
+                        },
+                        delta: 7u64,
+                    };
+                    assert_eq!(log.insert_record(r.clone()), Admission::Accepted);
+                    let mut version = VersionVector::new();
+                    // Exercise saturated prefixes without allocating 2^64 records.
+                    version.set(author, prefix);
+                    let expected = if sequence == 0 || sequence > prefix {
+                        vec![r]
+                    } else {
+                        vec![]
+                    };
+                    mismatches += usize::from(log.since(&version) != expected);
+                    cases += 1;
+                }
+            }
+        }
+        std::println!("SATURATED CASES {cases} DISAGREE {mismatches}");
+        assert_eq!(mismatches, 0);
+    }
+
     use alloc::vec;
 
     #[test]
