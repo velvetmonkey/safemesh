@@ -1,0 +1,4 @@
+{"command": ["cargo", "fmt", "--all", "--check"], "exit": 0, "log": "check-0.log"}
+{"command": ["cargo", "test", "-j", "1", "-p", "safemesh-crdt", "--no-default-features"], "exit": 0, "log": "check-1.log"}
+{"command": ["cargo", "test", "-j", "1", "-p", "safemesh-crdt", "--features", "laws"], "exit": 0, "log": "check-2.log"}
+{"command": ["cargo", "test", "-j", "1", "-p", "safemesh-crdt", "--examples"], "exit": 0, "log": "check-3.log"}

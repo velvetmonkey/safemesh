@@ -1,0 +1,13 @@
+diff --git a/rust/crates/safemesh-crdt/benches/envelope.rs b/rust/crates/safemesh-crdt/benches/envelope.rs
+index 15764e0..10ce0a8 100644
+--- a/rust/crates/safemesh-crdt/benches/envelope.rs
++++ b/rust/crates/safemesh-crdt/benches/envelope.rs
+@@ -354,7 +354,7 @@ fn main() {
+             }
+             for k in 0..reps {
+                 let (result, m) = measure("decode", || {
+-                    EventLog::<Delta>::from_wire_bytes_for(&input, &Set::new())
++                    { let planted = vec![7u8; 1_048_576]; black_box(&planted); let result = EventLog::<Delta>::from_wire_bytes_for(&input, &Set::new()); black_box(&planted); result }
+                 });
+                 if kind == "large-valid-frame" {
+                     assert!(result.is_ok());

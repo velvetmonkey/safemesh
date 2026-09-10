@@ -1,0 +1,12 @@
+diff --git a/rust/crates/safemesh-crdt/src/local.rs b/rust/crates/safemesh-crdt/src/local.rs
+index 495f7d1..d0a7707 100644
+--- a/rust/crates/safemesh-crdt/src/local.rs
++++ b/rust/crates/safemesh-crdt/src/local.rs
+@@ -364,6 +364,7 @@ where
+             log.to_wire_bytes()
+                 .map_err(|e| LocalError::Io(io::Error::other(format!("{e:?}"))))?,
+         );
++        std::thread::sleep(std::time::Duration::from_millis(5));
+         persistence::replace(path, &bytes)?;
+         Ok(())
+     }

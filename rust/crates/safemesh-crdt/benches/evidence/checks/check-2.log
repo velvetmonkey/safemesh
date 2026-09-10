@@ -1,0 +1,154 @@
+   Compiling safemesh-crdt v0.1.0 (/home/monkey/scratch/benchraw/worktree/rust/crates/safemesh-crdt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.11s
+     Running unittests src/lib.rs (/home/monkey/scratch/benchraw/target/debug/deps/safemesh_crdt-63df3ea71b46ec85)
+
+running 19 tests
+test frame_tests::crc32_matches_standard_check_vector ... ok
+test frame_tests::binding_collision_fixtures_use_product_encoder ... ok
+test frame_tests::decoder_surfaces_conflicts_before_deduplication ... ok
+test frame_tests::legacy_integrity_frames_refuse_missing_shape ... ok
+test frame_tests::seqzero_saturated_prefixes ... ok
+test local::durable_tests::durable_child ... ok
+test wire_helper_tests::external_length_extremes_are_checked ... ok
+test wire_helper_tests::external_tag_and_trailing_bytes_are_checked ... ok
+test local::durable_tests::durable_acknowledged_survives_counter ... ok
+test local::durable_tests::durable_acknowledged_survives_set ... ok
+test local::durable_tests::durable_receive_and_refusal ... ok
+test local::durable_tests::restart_corrupt_history ... ok
+test local::durable_tests::restart_unavailable_ownership ... ok
+test local::durable_tests::restart_mismatched_history ... ok
+test local::durable_tests::restart_still_works_and_fresh_allocation ... ok
+test local::durable_tests::restart_invalid_history ... ok
+test local::durable_tests::durable_io_failure_disables_writes ... ok
+test local::durable_tests::durable_still_works ... ok
+test local::durable_tests::durable_crash_boundaries ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/conformance.rs (/home/monkey/scratch/benchraw/target/debug/deps/conformance-ebb27ff04e7dab04)
+
+running 8 tests
+test corpus_is_the_expected_schema ... ok
+test gcounter_matches_lean_oracle ... ok
+test rga_matches_lean_oracle ... ok
+test pncounter_matches_lean_oracle ... ok
+test owned_writes_match_lean_oracle ... ok
+test orset_matches_lean_oracle ... ok
+test gset_matches_lean_oracle ... ok
+test split_delivery_merge_agrees_with_oracle ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/core_api.rs (/home/monkey/scratch/benchraw/target/debug/deps/core_api-11384f84d7d1ba5a)
+
+running 17 tests
+test checked_coordinate_and_checked_merge_coexist ... ok
+test checked_counter_coordinates_reject_without_changing_any_state_bytes ... ok
+test counter_traits_preserve_existing_behavior ... ok
+test checked_counter_coordinates_match_infallible_valid_results ... ok
+test enable_wins_flag_keeps_concurrent_enable_live ... ok
+test event_log_deduplicates_and_serves_since_version ... ok
+test event_log_version_does_not_hide_out_of_order_gaps ... ok
+test gcounter_read_is_exact_past_the_u64_boundary ... ok
+test gcounter_merge_panics_on_mismatch_instead_of_losing_state ... ok
+test gcounter_try_merge_matches_merge_on_equal_width ... ok
+test gcounter_try_merge_rejects_replica_count_mismatch ... ok
+test lww_map_tracks_value_and_remove_dots_per_key ... ok
+test lww_register_uses_total_ordered_winner ... ok
+test orset_delta_is_add_wins ... ok
+test pncounter_read_keeps_sign_and_width_past_the_i64_boundary ... ok
+test pncounter_try_merge_is_all_or_nothing_on_mismatch ... ok
+test rga_read_is_sorted_by_position_not_delivery ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/external_wire.rs (/home/monkey/scratch/benchraw/target/debug/deps/external_wire-e81c5c2673c0ad6a)
+
+running 6 tests
+test external_byte_strings_roundtrip_empty_and_binary_data ... ok
+test external_decoder_reads_library_value ... ok
+test external_custom_payload_roundtrips_in_library_log ... ok
+test external_encoder_matches_library_set_framing ... ok
+test external_reader_bounds_and_overflow_preserve_position ... ok
+test external_reader_rejects_every_truncated_integer ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/laws.rs (/home/monkey/scratch/benchraw/target/debug/deps/laws-53a7d0b32024acb9)
+
+running 2 tests
+test convergence_harness_hammers_delta_delivery_shapes ... ok
+test merge_laws_hold_for_in_house_samples ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/record_admission.rs (/home/monkey/scratch/benchraw/target/debug/deps/record_admission-28f999d67a4ebcaa)
+
+running 15 tests
+test existing_counter_loader_refuses_foreign_coordinate_history ... ok
+test duplicates_and_collisions_do_not_invoke_application ... ok
+test local_append_handles_gaps_and_exhaustion_without_unlogged_application ... ok
+test pn_counter_loader_refuses_out_of_range_coordinate ... ok
+test record_1_1_live_and_replay ... ok
+test seqzero_acknowledgment_is_independent_of_positive_prefix ... ok
+test seqzero_admission_since_population ... ok
+test seqzero_two_replica_exchange_and_persisted_replay ... ok
+test owned_local::owned_boundaries_and_existing_store_error ... ok
+test seqzero_converged_replicas_quiesce_at_scale ... ok
+test owned_local::owned_convergence_counter_and_utf8_set ... ok
+test owned_local::owned_refusal_token ... ok
+test owned_local::owned_refusal_coordinate ... ok
+test owned_local::owned_refusal_stale ... ok
+test owned_local::owned_refusal_competing ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/transport.rs (/home/monkey/scratch/benchraw/target/debug/deps/transport-9d6458ff8816f32c)
+
+running 6 tests
+test anti_entropy_recovers_after_drop_duplicate_and_reorder ... ok
+test partition_then_heal_uses_versions_to_cover_missing_records ... ok
+test transport_requires_subscription_and_connectivity ... ok
+test version_exchange_public_api_round_trip ... ok
+test version_exchange_public_api_trust_boundary ... ok
+test version_exchange_public_api_edge_cases ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests/wire.rs (/home/monkey/scratch/benchraw/target/debug/deps/wire-2a11c80ceb674211)
+
+running 23 tests
+test enable_wins_flag_wire_is_stable_and_roundtrips ... ok
+test canonical_state_encodings_are_sorted ... ok
+test enable_wins_flag_record_roundtrips_unormalized_tokens ... ok
+test event_log_roundtrips_and_preserves_deduped_records ... ok
+test event_log_shape_distinguishes_unbounded_from_fixed_zero ... ok
+test event_log_shape_checks_full_domain_including_empty_and_zero ... ok
+test gcounter_delta_has_stable_canonical_bytes ... ok
+test event_log_shape_rejects_wrong_type_even_when_empty_or_nested ... ok
+test event_log_empty_and_embedded_frames_roundtrip_and_reject_truncation ... ok
+test lww_register_wire_is_stable_and_roundtrips ... ok
+test lww_map_wire_is_stable_and_roundtrips ... ok
+test malformed_wire_inputs_fail_closed ... ok
+test orset_delta_rejects_trailing_bytes_and_oversized_counts ... ok
+test orset_delta_rejects_every_truncation ... ok
+test orset_delta_rejects_unknown_tags ... ok
+test orset_delta_roundtrips ... ok
+test orset_utf8_rejects_invalid_utf8_without_panicking ... ok
+test orset_delta_roundtrips_in_record_and_event_log ... ok
+test record_frames_delta_with_length_prefix ... ok
+test orset_utf8_rejects_length_lies_tags_and_trailing_bytes ... ok
+test orset_utf8_wire_shape_and_record_roundtrips ... ok
+test orset_utf8_roundtrips_and_rejects_every_truncation ... ok
+test event_log_refuses_every_single_byte_change ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+   Doc-tests safemesh_crdt
+
+running 2 tests
+test crates/safemesh-crdt/src/lib.rs - WireDecode (line 1581) ... ok
+test crates/safemesh-crdt/src/lib.rs - VersionVector (line 1004) ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+

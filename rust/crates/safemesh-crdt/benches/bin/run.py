@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Serial Linux measurement runner. All ceilings below protect the shared box only."""
 import argparse
+import hashlib
 import datetime
 import json
 import os
@@ -103,6 +104,7 @@ def main():
     p.add_argument('output', type=Path)
     p.add_argument('--mode', choices=['sweep', 'noise', 'trace', 'single'], default='sweep')
     p.add_argument('--label', default='baseline')
+    p.add_argument('--family', choices=['B1','B6'], default='B1')
     a = p.parse_args()
     out = a.output.resolve()
     if not (out.is_relative_to('/home/monkey/scratch/benchraw') or out.is_relative_to('/mnt/scratch/tmp')):
@@ -110,6 +112,7 @@ def main():
     out.mkdir(parents=True, exist_ok=False)
     repo = Path(__file__).resolve().parents[5]
     meta = metadata(repo)
+    meta["binary_sha256"] = hashlib.sha256(a.binary.read_bytes()).hexdigest()
     if a.mode == 'sweep':
         for family in ['B1','B2','B3','B4','B5','B6']:
             rung = 0
@@ -124,7 +127,7 @@ def main():
                 rung += 1
     else:
         for i in range(3 if a.mode == 'noise' else 1):
-            if not run(a.binary.resolve(), out, f'{a.label}-{i}', ['B1',8,32,1,1,96,7,42], meta, a.mode=='trace'):
+            if not run(a.binary.resolve(), out, f'{a.label}-{i}', [a.family,8,32,1,1,96,7,42], meta, a.mode=='trace'):
                 break
 
 
