@@ -1167,8 +1167,11 @@ pub struct ResourceLimit {
     pub requested: usize,
 }
 
-/// Configured policy values. Defaults are development placeholders, not an envelope.
-/// OR-4 is outstanding; Ben owns the envelope.
+/// Configured policy values for `LimitedEventLog`, explicit persisted-state
+/// loading, and `DurableReplica`. They are not installed on legacy `EventLog`
+/// mutation or plain `WireDecode`; callers needing bounded admission must select
+/// one of those policy-owning APIs. Defaults are development placeholders, not an
+/// envelope. OR-4 is outstanding; Ben owns the envelope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResourceLimits {
     pub history_record_count: usize,
@@ -1497,6 +1500,10 @@ impl<D: WireDecode + WireSchema + PartialEq> LimitedEventLog<D> {
 }
 
 /// Append-only, deduplicating event log for CRDT deltas.
+///
+/// This legacy core type has unconfigured admission and decoding semantics.
+/// Use `LimitedEventLog` for policy-controlled wire admission, or
+/// `from_wire_bytes_for_with_limits` at a persisted-state loading boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EventLog<D> {
     replica_count: Option<usize>,

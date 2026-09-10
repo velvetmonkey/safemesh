@@ -37,6 +37,9 @@ pub struct WriteTicket(u64);
 
 /// Owns the OS lock for its entire lifetime. No Clone or mutable state/log
 /// access is exposed. Contention yields a read-only instance whose writes fail.
+/// This in-memory adapter owns writer-lease validation, not resource policy;
+/// its retained `EventLog` has legacy unconfigured admission. Use
+/// `DurableReplica` when the local adapter must own configured history limits.
 pub struct LocalReplica<C: Crdt> {
     config: WriterConfig,
     fence: File,

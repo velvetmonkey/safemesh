@@ -427,6 +427,25 @@ delta schema, and retains the saved arity; it does not apply records to a CRDT.
 The Python/WASM replica loaders and the `m2slice` persistence example use the
 destination-aware decoder.
 
+### Resource-policy scope
+
+`ResourceLimits` is selected, rather than global. `LimitedEventLog` owns bounded
+wire admission and export; `EventLog::from_wire_bytes_for_with_limits` owns a
+bounded persisted-state load; and `DurableReplica` owns bounded durable mutation
+and restart. The compatibility forms of those latter APIs use development
+placeholders. Plain `EventLog` mutation and `WireDecode`, and the in-memory
+`LocalReplica` adapter below, deliberately retain their legacy unconfigured
+semantics. They do not promise a history bound.
+
+Choose a policy-owning API before accepting work that needs a resource bound.
+When a bounded import or durable mutation returns `WireError::ResourceLimit` (or
+`LocalError::History(WireError::ResourceLimit(_))`), retain the remaining history
+and continue via `LimitedEventLog::export_chunk` after the operator supplies an
+appropriate policy. Tightening a policy controls future work; it does not erase
+retained bytes. A durable restart under a tighter policy can refuse an oversized
+existing store, so reopen it with the policy that admits its retained history
+before migrating or exporting it.
+
 Existing `0x03` files without the shape header now return `MissingShape`.
 There is no automatic migration: old bytes cannot establish the original arity,
 including replicas that never emitted a delta. Preserve old files and use the
@@ -447,6 +466,11 @@ All local processes for that replica set must use the same storage directory.
 The adapter holds an exclusive file lock until drop; keep its fence files in
 place. A contending instance is read-only and returns `LocalError::Refused` on
 writes. Unsupported locking and filesystem I/O return errors.
+
+`LocalReplica` owns the writer lease and ownership validation described here; it
+does not install `ResourceLimits` on its in-memory `EventLog`. Use
+`local::DurableReplica` when local writes also need the configured durable-history
+policy described above.
 
 Capture `ticket()` and pass it to `bump`, `add`, `remove`, or `receive`. `renew`
 revokes older tickets. Counter edits use the configured writer's coordinate;
