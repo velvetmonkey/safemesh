@@ -1,0 +1,14 @@
+v24.21.0
+10.9.8
+{
+  "NODE_ENV": "production",
+  "LANG": "en_US.UTF-8",
+  "LC_ALL": "C.UTF-8",
+  "TZ": null,
+  "SOURCE_DATE_EPOCH": null,
+  "RUSTFLAGS": null,
+  "CARGO_ENCODED_RUSTFLAGS": null,
+  "CARGO_BUILD_TARGET": null,
+  "CARGO_BUILD_JOBS": "2",
+  "TMPDIR": "/home/monkey/scratch/reproinputs/tmp"
+}

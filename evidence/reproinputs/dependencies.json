@@ -1,0 +1,76 @@
+{
+  "external_packages": 33,
+  "workspace_packages": 4,
+  "external_direct_packages": 3,
+  "external_transitive_only_packages": 30,
+  "direct_dependencies_including_dev": {
+    "safemesh-crdt": [
+      {
+        "name": "serde_json",
+        "version": "1.0.151",
+        "kinds": [
+          {
+            "kind": "dev",
+            "target": null
+          }
+        ]
+      }
+    ],
+    "safemesh-ffi": [
+      {
+        "name": "safemesh-crdt",
+        "version": "0.1.0",
+        "kinds": [
+          {
+            "kind": null,
+            "target": null
+          }
+        ]
+      }
+    ],
+    "safemesh-python": [
+      {
+        "name": "pyo3",
+        "version": "0.22.6",
+        "kinds": [
+          {
+            "kind": null,
+            "target": null
+          }
+        ]
+      },
+      {
+        "name": "safemesh-crdt",
+        "version": "0.1.0",
+        "kinds": [
+          {
+            "kind": null,
+            "target": null
+          }
+        ]
+      }
+    ],
+    "safemesh-wasm": [
+      {
+        "name": "safemesh-crdt",
+        "version": "0.1.0",
+        "kinds": [
+          {
+            "kind": null,
+            "target": null
+          }
+        ]
+      },
+      {
+        "name": "wasm-bindgen",
+        "version": "0.2.128",
+        "kinds": [
+          {
+            "kind": null,
+            "target": null
+          }
+        ]
+      }
+    ]
+  }
+}

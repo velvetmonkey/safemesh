@@ -1,0 +1,81 @@
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded bumpalo v3.20.3
+  Downloaded heck v0.5.0
+  Downloaded memoffset v0.9.1
+  Downloaded pyo3-macros v0.22.6
+  Downloaded indoc v2.0.7
+  Downloaded wasm-bindgen-shared v0.2.128
+  Downloaded rustversion v1.0.23
+  Downloaded unicode-ident v1.0.24
+  Downloaded wasm-bindgen v0.2.128
+  Downloaded wasm-bindgen-macro-support v0.2.128
+  Downloaded pyo3-macros-backend v0.22.6
+  Downloaded pyo3-ffi v0.22.6
+  Downloaded proc-macro2 v1.0.107
+  Downloaded target-lexicon v0.12.16
+  Downloaded once_cell v1.21.4
+  Downloaded wasm-bindgen-macro v0.2.128
+  Downloaded unindent v0.2.4
+  Downloaded quote v1.0.47
+  Downloaded pyo3-build-config v0.22.6
+  Downloaded syn v2.0.119
+  Downloaded syn v3.0.5
+  Downloaded autocfg v1.5.1
+  Downloaded cfg-if v1.0.4
+  Downloaded pyo3 v0.22.6
+  Downloaded libc v0.2.189
+   Compiling target-lexicon v0.12.16
+   Compiling once_cell v1.21.4
+   Compiling unicode-ident v1.0.24
+   Compiling proc-macro2 v1.0.107
+   Compiling pyo3-build-config v0.22.6
+   Compiling quote v1.0.47
+   Compiling wasm-bindgen-shared v0.2.128
+   Compiling rustversion v1.0.23
+   Compiling pyo3-ffi v0.22.6
+   Compiling pyo3-macros-backend v0.22.6
+   Compiling libc v0.2.189
+   Compiling autocfg v1.5.1
+   Compiling memoffset v0.9.1
+   Compiling syn v2.0.119
+   Compiling syn v3.0.5
+   Compiling heck v0.5.0
+   Compiling cfg-if v1.0.4
+   Compiling bumpalo v3.20.3
+   Compiling wasm-bindgen-macro-support v0.2.128
+   Compiling wasm-bindgen v0.2.128
+   Compiling pyo3 v0.22.6
+   Compiling safemesh-crdt v0.1.0 (/home/monkey/scratch/reproinputs/work/rust/crates/safemesh-crdt)
+error[E0432]: unresolved import `std::fs::TryLockError`
+  --> crates/safemesh-crdt/src/local.rs:13:35
+   |
+13 |     fs::{self, File, OpenOptions, TryLockError},
+   |                                   ^^^^^^^^^^^^ no `TryLockError` in `fs`
+   |
+   = help: consider importing this enum instead:
+           std::sync::TryLockError
+
+   Compiling wasm-bindgen-macro v0.2.128
+error[E0599]: no method named `unlock` found for struct `File` in the current scope
+  --> crates/safemesh-crdt/src/local.rs:54:28
+   |
+54 |         let _ = self.fence.unlock();
+   |                            ^^^^^^ method not found in `File`
+
+error[E0599]: no method named `try_lock` found for struct `File` in the current scope
+  --> crates/safemesh-crdt/src/local.rs:71:32
+   |
+71 |         let held = match fence.try_lock() {
+   |                                ^^^^^^^^ method not found in `File`
+
+error[E0599]: no method named `try_lock` found for struct `File` in the current scope
+   --> crates/safemesh-crdt/src/local.rs:440:21
+    |
+440 |         match fence.try_lock() {
+    |                     ^^^^^^^^ method not found in `File`
+
+Some errors have detailed explanations: E0432, E0599.
+For more information about an error, try `rustc --explain E0432`.
+error: could not compile `safemesh-crdt` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
