@@ -24,7 +24,7 @@ jobs:
             ${{ runner.os }}-lean-
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.96.1
 
       - name: Cache Rust artifacts
         uses: actions/cache@v6.1.0
@@ -71,7 +71,7 @@ jobs:
           if ! command -v cbindgen >/dev/null 2>&1; then
             cargo install cbindgen --version 0.28.0 --locked
           fi
-          python3 -m pip install --user "maturin>=1.7,<2"
+          python3 -m pip install --user "maturin==1.14.1"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run full gate

@@ -5,6 +5,7 @@
 name = "safemesh-crdt"
 version = "0.1.0"
 edition = "2021"
+rust-version.workspace = true
 license = "Apache-2.0"
 description = "no_std delta-state CRDT core, held to the SafeMesh Lean proofs by differential conformance"
 repository = "https://github.com/velvetmonkey/safemesh"

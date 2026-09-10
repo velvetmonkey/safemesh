@@ -1,0 +1,54 @@
+   Compiling target-lexicon v0.12.16
+   Compiling once_cell v1.21.4
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling pyo3-build-config v0.22.6
+   Compiling wasm-bindgen-shared v0.2.128
+   Compiling rustversion v1.0.23
+   Compiling pyo3-macros-backend v0.22.6
+   Compiling pyo3-ffi v0.22.6
+   Compiling autocfg v1.5.1
+   Compiling libc v0.2.189
+   Compiling memoffset v0.9.1
+   Compiling syn v3.0.5
+   Compiling syn v2.0.119
+   Compiling cfg-if v1.0.4
+   Compiling heck v0.5.0
+   Compiling bumpalo v3.20.3
+   Compiling wasm-bindgen-macro-support v0.2.128
+   Compiling wasm-bindgen v0.2.128
+   Compiling pyo3 v0.22.6
+   Compiling safemesh-crdt v0.1.0 (/home/monkey/scratch/reproinputs/work/rust/crates/safemesh-crdt)
+   Compiling wasm-bindgen-macro v0.2.128
+error[E0432]: unresolved import `std::fs::TryLockError`
+  --> crates/safemesh-crdt/src/local.rs:13:35
+   |
+13 |     fs::{self, File, OpenOptions, TryLockError},
+   |                                   ^^^^^^^^^^^^ no `TryLockError` in `fs`
+   |
+   = help: consider importing this enum instead:
+           std::sync::TryLockError
+
+error[E0599]: no method named `unlock` found for struct `File` in the current scope
+  --> crates/safemesh-crdt/src/local.rs:54:28
+   |
+54 |         let _ = self.fence.unlock();
+   |                            ^^^^^^ method not found in `File`
+
+error[E0599]: no method named `try_lock` found for struct `File` in the current scope
+  --> crates/safemesh-crdt/src/local.rs:71:32
+   |
+71 |         let held = match fence.try_lock() {
+   |                                ^^^^^^^^ method not found in `File`
+
+error[E0599]: no method named `try_lock` found for struct `File` in the current scope
+   --> crates/safemesh-crdt/src/local.rs:440:21
+    |
+440 |         match fence.try_lock() {
+    |                     ^^^^^^^^ method not found in `File`
+
+Some errors have detailed explanations: E0432, E0599.
+For more information about an error, try `rustc --explain E0432`.
+error: could not compile `safemesh-crdt` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...

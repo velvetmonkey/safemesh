@@ -1,0 +1,107 @@
+    Blocking waiting for file lock on build directory
+   Compiling target-lexicon v0.12.16
+   Compiling once_cell v1.21.4
+   Compiling unicode-ident v1.0.24
+   Compiling proc-macro2 v1.0.107
+   Compiling pyo3-build-config v0.22.6
+   Compiling quote v1.0.47
+   Compiling wasm-bindgen-shared v0.2.128
+   Compiling rustversion v1.0.23
+   Compiling pyo3-macros-backend v0.22.6
+   Compiling pyo3-ffi v0.22.6
+   Compiling autocfg v1.5.1
+   Compiling libc v0.2.189
+   Compiling memoffset v0.9.1
+   Compiling syn v3.0.5
+   Compiling syn v2.0.119
+   Compiling heck v0.5.0
+   Compiling bumpalo v3.20.3
+   Compiling cfg-if v1.0.4
+   Compiling wasm-bindgen-macro-support v0.2.128
+   Compiling wasm-bindgen v0.2.128
+   Compiling pyo3 v0.22.6
+   Compiling safemesh-crdt v0.1.0 (/home/monkey/scratch/reproinputs/work/rust/crates/safemesh-crdt)
+error[E0658]: use of unstable library feature `file_lock`
+  --> crates/safemesh-crdt/src/local.rs:13:35
+   |
+13 |     fs::{self, File, OpenOptions, TryLockError},
+   |                                   ^^^^^^^^^^^^
+   |
+   = note: see issue #130994 <https://github.com/rust-lang/rust/issues/130994> for more information
+
+error[E0658]: use of unstable library feature `file_lock`
+  --> crates/safemesh-crdt/src/local.rs:73:17
+   |
+73 |             Err(TryLockError::WouldBlock) => false,
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: see issue #130994 <https://github.com/rust-lang/rust/issues/130994> for more information
+
+error[E0658]: use of unstable library feature `file_lock`
+  --> crates/safemesh-crdt/src/local.rs:74:17
+   |
+74 |             Err(TryLockError::Error(e)) => return Err(e.into()),
+   |                 ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: see issue #130994 <https://github.com/rust-lang/rust/issues/130994> for more information
+
+error[E0658]: use of unstable library feature `file_lock`
+   --> crates/safemesh-crdt/src/local.rs:442:17
+    |
+442 |             Err(TryLockError::WouldBlock) => return Err(LocalError::Refused),
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: see issue #130994 <https://github.com/rust-lang/rust/issues/130994> for more information
+
+error[E0658]: use of unstable library feature `file_lock`
+   --> crates/safemesh-crdt/src/local.rs:443:17
+    |
+443 |             Err(TryLockError::Error(e)) => return Err(e.into()),
+    |                 ^^^^^^^^^^^^^^^^^^^
+    |
+    = note: see issue #130994 <https://github.com/rust-lang/rust/issues/130994> for more information
+
+error[E0658]: use of unstable library feature `file_lock`
+  --> crates/safemesh-crdt/src/local.rs:54:28
+   |
+54 |         let _ = self.fence.unlock();
+   |                            ^^^^^^
+   |
+   = note: see issue #130994 <https://github.com/rust-lang/rust/issues/130994> for more information
+
+error[E0658]: use of unstable library feature `file_lock`
+  --> crates/safemesh-crdt/src/local.rs:71:32
+   |
+71 |         let held = match fence.try_lock() {
+   |                                ^^^^^^^^
+   |
+   = note: see issue #130994 <https://github.com/rust-lang/rust/issues/130994> for more information
+
+error[E0658]: use of unstable library feature `file_lock`
+  --> crates/safemesh-crdt/src/local.rs:74:37
+   |
+74 |             Err(TryLockError::Error(e)) => return Err(e.into()),
+   |                                     ^
+   |
+   = note: see issue #130994 <https://github.com/rust-lang/rust/issues/130994> for more information
+
+error[E0658]: use of unstable library feature `file_lock`
+   --> crates/safemesh-crdt/src/local.rs:440:21
+    |
+440 |         match fence.try_lock() {
+    |                     ^^^^^^^^
+    |
+    = note: see issue #130994 <https://github.com/rust-lang/rust/issues/130994> for more information
+
+error[E0658]: use of unstable library feature `file_lock`
+   --> crates/safemesh-crdt/src/local.rs:443:37
+    |
+443 |             Err(TryLockError::Error(e)) => return Err(e.into()),
+    |                                     ^
+    |
+    = note: see issue #130994 <https://github.com/rust-lang/rust/issues/130994> for more information
+
+   Compiling wasm-bindgen-macro v0.2.128
+For more information about this error, try `rustc --explain E0658`.
+error: could not compile `safemesh-crdt` (lib) due to 10 previous errors
+warning: build failed, waiting for other jobs to finish...

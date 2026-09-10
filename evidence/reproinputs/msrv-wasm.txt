@@ -1,0 +1,15 @@
+   Compiling wasm-bindgen-shared v0.2.128
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling rustversion v1.0.23
+   Compiling syn v3.0.5
+   Compiling bumpalo v3.20.3
+   Compiling wasm-bindgen v0.2.128
+   Compiling unicode-ident v1.0.24
+   Compiling cfg-if v1.0.4
+   Compiling once_cell v1.21.4
+   Compiling safemesh-crdt v0.1.0 (/home/monkey/scratch/reproinputs/work/rust/crates/safemesh-crdt)
+   Compiling wasm-bindgen-macro-support v0.2.128
+   Compiling wasm-bindgen-macro v0.2.128
+   Compiling safemesh-wasm v0.1.0 (/home/monkey/scratch/reproinputs/work/rust/crates/safemesh-wasm)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.69s
