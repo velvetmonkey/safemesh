@@ -983,8 +983,8 @@ pub struct Record<D> {
 /// independently by `zero_replicas`; it is not implied by a positive prefix.
 /// There is no built-in version wire codec. Custom version exchanges must carry
 /// both [`Self::entries`] and [`Self::zero_replicas`]. A receiver can rebuild
-/// the vector with [`Self::observe`] by supplying each positive prefix's IDs in
-/// sequence order and each zero ID, as below; record payloads are not required.
+/// the vector with [`Self::from_peer_prefixes`] after checking application-owned
+/// author and zero-acknowledgement budgets, as below; record payloads are not required.
 /// Legacy prefix-only exchanges cannot acknowledge zeros and will keep receiving
 /// them until upgraded.
 ///
@@ -993,32 +993,35 @@ pub struct Record<D> {
 /// Fabricated IDs can acknowledge missing records and cause `since` to omit them.
 /// Use [`EventLog::version`] to derive claims from records actually admitted.
 ///
-/// Reconstruction visits every sequence in every prefix, not just each map
-/// entry: for `r` authors and `s` total acknowledged positive sequences it takes
-/// O((s + z) log(r + z + 1)) time and O(r + z) space, where `z` is the number of
-/// zero acknowledgements. Bound peer input before replay; a prefix of `u64::MAX`
-/// is representable but impractical to reconstruct this way. Zero-valued prefix
-/// entries are noncanonical and should be rejected by the custom exchange;
-/// only `zero_replicas()` acknowledges sequence zero.
+/// Checked reconstruction validates each positive prefix, then clones both
+/// collections: for `r` authors and `z` zero acknowledgements it takes O(r + z)
+/// time and O(r + z) additional space, independently of the claimed sequences.
+/// Bound both collection sizes before reconstruction and enforce transport byte
+/// limits before decoding to bound the input allocation itself.
+/// Zero-valued prefix entries are noncanonical and are rejected by the checked
+/// constructor; only `zero_replicas()` acknowledges sequence zero.
 ///
 /// ```
-/// use safemesh_crdt::{EventLog, RecordId, VersionVector};
+/// use safemesh_crdt::{EventLog, VersionVector};
+/// use std::collections::{BTreeMap, BTreeSet};
+///
+/// fn receive(
+///     prefixes: &BTreeMap<u64, u64>, zeros: &BTreeSet<u64>,
+///     author_budget: usize, zero_budget: usize,
+/// ) -> Result<VersionVector, &'static str> {
+///     if prefixes.len() > author_budget || zeros.len() > zero_budget {
+///         return Err("peer version exceeds application budget");
+///     }
+///     VersionVector::from_peer_prefixes(prefixes, zeros).map_err(|_| "invalid prefix")
+/// }
 ///
 /// let mut peer = EventLog::new();
 /// peer.append(7, 42u64);
 /// // Carry both collections over the application's transport.
 /// let prefixes = peer.version().entries().clone();
 /// let zeros = peer.version().zero_replicas().clone();
-/// let mut received = VersionVector::new();
-/// for (replica, prefix) in prefixes {
-///     assert!(prefix > 0, "reject noncanonical zero prefix entries");
-///     for sequence in 1..=prefix {
-///         received.observe(RecordId { replica, sequence });
-///     }
-/// }
-/// for replica in zeros {
-///     received.observe(RecordId { replica, sequence: 0 });
-/// }
+/// // This example has one publisher and allocates no sequence-zero records.
+/// let received = receive(&prefixes, &zeros, 1, 0).unwrap();
 /// assert_eq!(&received, peer.version());
 /// assert_eq!(peer.since(&received), peer.since(peer.version()));
 /// ```
@@ -1028,11 +1031,11 @@ pub struct VersionVector {
     zero_replicas: BTreeSet<u64>,
 }
 
-/// Maximum number of positive sequence IDs reconstructed for one replica from a peer map.
-/// This bounds per-replica positive-prefix replay only, not total reconstruction
-/// CPU or memory work. The caller must bound the number of authors (`r`) and zero
-/// acknowledgements (`z`) before accepting peer input; this constant caps neither.
-/// Total positive-sequence visits (`s`) can still reach `r * MAX_PEER_PREFIX`.
+/// Maximum accepted positive prefix value for one replica in a peer map.
+/// This preserves the peer-map acceptance policy; it does not bound reconstruction
+/// CPU or memory, which grow with the collection sizes.
+/// The caller must bound the number of authors (`r`) and zero acknowledgements
+/// (`z`) before accepting peer input; this constant caps neither.
 /// See [`VersionVector`] for the whole-input time and space costs.
 pub const MAX_PEER_PREFIX: u64 = 1_000_000;
 
@@ -1040,7 +1043,7 @@ pub const MAX_PEER_PREFIX: u64 = 1_000_000;
 pub enum VersionVectorError {
     /// Positive prefixes are canonical; sequence zero belongs in zero_replicas.
     ZeroPrefix { replica: u64 },
-    /// Reconstructing this prefix would exceed the per-replica work bound.
+    /// This prefix exceeds the per-replica acceptance limit.
     PrefixTooLarge { replica: u64, prefix: u64, max: u64 },
 }
 
@@ -1094,19 +1097,10 @@ impl VersionVector {
             }
         }
 
-        let mut vector = Self::new();
-        for (&replica, &prefix) in entries {
-            for sequence in 1..=prefix {
-                vector.observe(RecordId { replica, sequence });
-            }
-        }
-        for &replica in zero_replicas {
-            vector.observe(RecordId {
-                replica,
-                sequence: 0,
-            });
-        }
-        Ok(vector)
+        Ok(Self {
+            entries: entries.clone(),
+            zero_replicas: zero_replicas.clone(),
+        })
     }
 
     pub fn get(&self, replica: u64) -> u64 {
@@ -2796,6 +2790,21 @@ mod frame_tests {
 
 #[cfg(test)]
 mod version_vector_tests {
+    #[test]
+    fn large_peer_prefixes_are_copied_directly() {
+        for (authors, prefix) in [
+            (1024, 1000),
+            (1024, MAX_PEER_PREFIX),
+            (2048, MAX_PEER_PREFIX),
+        ] {
+            let entries = (0..authors).map(|r| (r, prefix)).collect();
+            let zeros = (0..authors).collect();
+            let vector = VersionVector::from_peer_prefixes(&entries, &zeros).unwrap();
+            assert_eq!(vector.entries(), &entries);
+            assert_eq!(vector.zero_replicas(), &zeros);
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -2871,6 +2880,42 @@ mod version_vector_tests {
                 });
             }
             assert_eq!(actual, expected);
+            assert_eq!(actual.entries(), &entries);
+            assert_eq!(actual.zero_replicas(), &zeros);
+            let mut local = EventLog::new();
+            let replicas: BTreeSet<_> = entries
+                .keys()
+                .chain(zeros.iter())
+                .copied()
+                .chain([0, 99, u64::MAX])
+                .collect();
+            for replica in replicas {
+                let prefix = entries.get(&replica).copied().unwrap_or(0);
+                let sequences = BTreeSet::from([0, 1, prefix, prefix + 1, u64::MAX]);
+                for sequence in sequences {
+                    let id = RecordId { replica, sequence };
+                    assert_eq!(
+                        local.insert_record(Record {
+                            id,
+                            delta: sequence
+                        }),
+                        Admission::Accepted
+                    );
+                }
+            }
+            assert_eq!(local.since(&actual), local.since(&expected));
+            // Subsequent contiguous, gap, repeated and zero observations agree too.
+            let mut actual_next = actual.clone();
+            let mut expected_next = expected.clone();
+            for sequence in [0, 1, 3, 2, 2, 0] {
+                let id = RecordId {
+                    replica: 99,
+                    sequence,
+                };
+                actual_next.observe(id);
+                expected_next.observe(id);
+                assert_eq!(actual_next, expected_next);
+            }
             constructed += 1;
         }
         assert_eq!(constructed, 14);
