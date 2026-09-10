@@ -10,6 +10,8 @@ import { resolve } from 'node:path'
 // path when the documentation site bundles the Lab under its own address.
 let base = '/'
 
+const scopeNamespace = (pathname: string) => pathname === '/' ? 'root' : encodeURIComponent(pathname)
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
@@ -69,7 +71,7 @@ export default defineConfig({
           hash.update(asset).update(readFileSync(resolve(outDir, asset.slice(base.length) || 'index.html')))
         }
         // The name must carry the worker's CACHE_PREFIX (web/public/sw.js) or activation never sweeps it.
-        const build = { cacheName: `safemesh-pwa-${hash.digest('hex')}`, assets }
+        const build = { cacheName: `safemesh-pwa-${scopeNamespace(base)}-${hash.digest('hex')}`, assets }
         writeFileSync(resolve(outDir, 'sw.js'), `const BUILD = ${JSON.stringify(build)}\n${worker}`)
       },
     },
