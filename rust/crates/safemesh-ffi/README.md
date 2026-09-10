@@ -27,7 +27,10 @@ The public header is committed at `rust/crates/safemesh-ffi/include/safemesh.h`.
 SafeMeshGCounter *counter = safemesh_gcounter_new(2);
 SafeMeshStatus status = safemesh_gcounter_try_apply_bump(counter, 0, 3);
 /* status == Ok; ReplicaOutOfRange (2) rejects an invalid index. */
-uint64_t value = safemesh_gcounter_value(counter);
+uint64_t value = 0;
+status = safemesh_gcounter_try_value(counter, &value);
+/* status == Ok and value == 3; ValueOverflow (3) means the true total does not fit
+ * uint64_t and value was left untouched. */
 safemesh_gcounter_free(counter);
 ```
 

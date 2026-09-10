@@ -5,5 +5,7 @@
 // Planted known-bad case for tests/compile_fail.rs: safe Rust must not be able to read through a handle.
 pub fn value_from_safe_code() -> u64 {
     let counter = safemesh_ffi::safemesh_gcounter_new(1);
-    safemesh_ffi::safemesh_gcounter_value(counter)
+    let mut total = 0u64;
+    safemesh_ffi::safemesh_gcounter_try_value(counter, &mut total);
+    total
 }

@@ -44,7 +44,8 @@ impl PyGCounter {
             .map_err(|error| pyo3::exceptions::PyIndexError::new_err(format!("{error:?}")))
     }
 
-    pub fn value(&self) -> u64 {
+    /// The counter total as a Python `int`, exact past the 64-bit boundary.
+    pub fn value(&self) -> u128 {
         self.inner.value()
     }
 
@@ -395,7 +396,8 @@ impl PyGCounterReplica {
         self.log.version().get(replica)
     }
 
-    pub fn value(&self) -> u64 {
+    /// The counter total as a Python `int`, exact past the 64-bit boundary.
+    pub fn value(&self) -> u128 {
         self.state.value()
     }
 

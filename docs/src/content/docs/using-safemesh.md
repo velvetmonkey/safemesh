@@ -67,13 +67,16 @@ Include `rust/crates/safemesh-ffi/include/safemesh.h` in your C project and link
 uint64_t example_counter(void) {
     SafeMeshGCounter *counter = safemesh_gcounter_new(2);
     SafeMeshStatus status = safemesh_gcounter_try_apply_bump(counter, 0, 3);
-    uint64_t value = status == 0 ? safemesh_gcounter_value(counter) : 0;
+    uint64_t value = 0;
+    if (status == 0) {
+        status = safemesh_gcounter_try_value(counter, &value);
+    }
     safemesh_gcounter_free(counter);
-    return value;
+    return status == 0 ? value : 0;
 }
 ```
 
-Check status values: `Ok` is 0, `NullPointer` is 1, and `ReplicaOutOfRange` is 2 for this checked bump function. Release each owned handle once. OR-Set queries return owned `SafeMeshU64s` arrays, released with `safemesh_u64s_free`; sets use `safemesh_orset_free`. The caller supplies fresh set tokens. [Evidence: FFI contract](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-ffi/README.md) and [header](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-ffi/include/safemesh.h).
+Check status values: `Ok` is 0, `NullPointer` is 1, and `ReplicaOutOfRange` is 2 for this checked bump function. The checked read returns `ValueOverflow` (3) and leaves `value` untouched when the true total does not fit `uint64_t`, so a C caller never receives a wrapped total. Release each owned handle once. OR-Set queries return owned `SafeMeshU64s` arrays, released with `safemesh_u64s_free`; sets use `safemesh_orset_free`. The caller supplies fresh set tokens. [Evidence: FFI contract](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-ffi/README.md) and [header](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-ffi/include/safemesh.h).
 
 The C ABI has carrier operations and a G-Counter delta-to-wire helper, **no replica/event-log surface**. Do not assume the Python or WASM record-exchange examples translate directly to C. The documented repository checks call ABI functions from Rust and check header drift; those checks do not contain an external C compile/link/run test. [Evidence: root surface description](https://github.com/velvetmonkey/safemesh/blob/main/README.md) and [FFI assurance scope](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-ffi/README.md#claim-boundary).
 

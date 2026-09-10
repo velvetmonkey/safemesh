@@ -30,7 +30,8 @@
 //!
 //! ```compile_fail,E0133
 //! let counter = safemesh_ffi::safemesh_gcounter_new(1);
-//! safemesh_ffi::safemesh_gcounter_value(counter);
+//! let mut total = 0u64;
+//! safemesh_ffi::safemesh_gcounter_try_value(counter, &mut total);
 //! ```
 //!
 //! ```compile_fail,E0133
@@ -125,19 +126,35 @@ pub unsafe extern "C" fn safemesh_gcounter_apply_bump(
     }
 }
 
-/// Read the counter total. A null handle reads as 0.
+/// Read the counter total into `out`. Returns `Ok` after writing the true total;
+/// `NullPointer` for a null handle or a null `out`; `ValueOverflow` when the true total does
+/// not fit in `uint64_t`. On any status other than `Ok`, `out` is untouched, so a caller never
+/// receives a wrapped, truncated or clamped total in place of the real one.
 ///
 /// # Safety
 /// `counter` must be null or a live handle returned by `safemesh_gcounter_new` that has not
 /// been freed. Concurrent reads may overlap, but no write to the same counter may be in
 /// progress during the call. The caller keeps ownership; the handle stays valid after the
-/// call. The null check cannot detect a dangling or already-freed pointer; passing one is
-/// undefined behaviour.
+/// call. `out` must be null or point to writable, properly aligned `uint64_t` storage that no
+/// other access overlaps during the call. The null checks cannot detect a dangling or
+/// already-freed pointer; passing one is undefined behaviour.
 #[no_mangle]
-pub unsafe extern "C" fn safemesh_gcounter_value(counter: *const SafeMeshGCounter) -> u64 {
-    match counter.as_ref() {
-        Some(counter) => counter.inner.value(),
-        None => 0,
+pub unsafe extern "C" fn safemesh_gcounter_try_value(
+    counter: *const SafeMeshGCounter,
+    out: *mut u64,
+) -> SafeMeshStatus {
+    let Some(counter) = counter.as_ref() else {
+        return SafeMeshStatus::NullPointer;
+    };
+    let Some(out) = out.as_mut() else {
+        return SafeMeshStatus::NullPointer;
+    };
+    match u64::try_from(counter.inner.value()) {
+        Ok(total) => {
+            *out = total;
+            SafeMeshStatus::Ok
+        }
+        Err(_) => SafeMeshStatus::ValueOverflow,
     }
 }
 
@@ -171,6 +188,8 @@ pub enum SafeMeshStatus {
     Ok = 0,
     NullPointer = 1,
     ReplicaOutOfRange = 2,
+    /// The true counter total does not fit the 64-bit output; nothing was written.
+    ValueOverflow = 3,
 }
 
 /// # Safety
