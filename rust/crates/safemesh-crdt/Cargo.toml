@@ -21,3 +21,9 @@ laws = ["local-writer"]
 
 [dev-dependencies]
 serde_json = "1"
+
+[[bench]]
+name = "envelope"
+harness = false
+test = false
+required-features = ["local-writer"]
