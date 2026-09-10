@@ -38,6 +38,11 @@ class Labels(unittest.TestCase):
         row = {**B7_ROW, "crdt_type": "OR-Set UTF-8", "durability": "in-memory"}
         self.assertEqual(summarize.identity(row), ("OR-Set UTF-8", "in-memory"))
 
+    def test_legacy_negation_does_not_claim_durability(self):
+        row = {"op": "bump", "assertion": "not durable G-Counter"}
+        self.assertEqual(summarize.identity(row),
+                         ("CRDT not recorded", "durability not recorded"))
+
 
 if __name__ == "__main__":
     unittest.main()

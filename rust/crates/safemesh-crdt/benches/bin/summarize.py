@@ -46,11 +46,11 @@ def identity(row):
     carrier or prove in-memory execution. Old rows without identity stay unknown.
     """
     assertion = row.get('assertion', '')
-    asserted_types = re.findall(r'\b[A-Z][A-Za-z]*-[A-Z][A-Za-z]*\b', assertion)
-    crdt = row.get('crdt_type') or (
-        asserted_types[0] if len(set(asserted_types)) == 1 else 'CRDT not recorded')
-    durability = row.get('durability') or (
-        'durable' if re.search(r'\bdurable\b', assertion) else 'durability not recorded')
+    # Legacy B7 starts its assertion with an explicit durability/carrier pair.
+    # Do not interpret incidental or negated mentions elsewhere in an assertion.
+    asserted = re.match(r'^(durable|in-memory) ([A-Z][A-Za-z]*-[A-Z][A-Za-z]*)(?: |$)', assertion)
+    crdt = row.get('crdt_type') or (asserted[2] if asserted else 'CRDT not recorded')
+    durability = row.get('durability') or (asserted[1] if asserted else 'durability not recorded')
     return crdt, durability
 
 
