@@ -20,12 +20,12 @@ class Labels(unittest.TestCase):
 
     def test_unseen_identity_and_family(self):
         row = {**B7_ROW, "crdt_type": "PN-Counter", "durability": "in-memory",
-               "op": "merge_delta", "assertion": "synthetic unseen schema row"}
+               "op": "holdout_counter_subtract", "assertion": "synthetic unseen schema row"}
         head = {**B7_HEAD, "family": "UNSEEN"}
         meta = {"name": "holdout", "metadata": {"source_sha": "synthetic"}}
         with patch.object(summarize, "load", return_value=([(meta, head, [row])], [])):
             output = summarize.generate(Path("unused"))
-        self.assertIn("PN-Counter; in-memory; merge_delta", output)
+        self.assertIn("PN-Counter; in-memory; holdout_counter_subtract", output)
         self.assertNotIn("G-Counter; durable", output)
 
     def test_missing_identity_does_not_guess_from_operation_or_writes(self):
