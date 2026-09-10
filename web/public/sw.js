@@ -1,8 +1,16 @@
 // The worker is served from the Lab's root, so its own location names the base path:
 // / on the local servers, the mount path when the documentation site bundles the Lab.
 const BASE = new URL('./', self.location.href).pathname
+// Cache Storage is shared by every application served from this origin, so activation may
+// only remove caches this Lab named itself. Every name the Lab has ever used carries this
+// prefix: safemesh-pwa-mvp-v1, safemesh-pwa-antientropy-v1, safemesh-pwa-dev and the
+// content-hashed production names from vite.config.ts. Caches from builds before this rule
+// therefore still count as the Lab's own and are swept as stale; a cache named by any other
+// application on the origin is left alone. Two Lab deployments on one origin share the prefix
+// deliberately and evict each other's stale caches.
+const CACHE_PREFIX = 'safemesh-pwa-'
 // Production builds prepend BUILD with every emitted asset and a content-derived cache name.
-const CACHE_NAME = typeof BUILD === 'undefined' ? 'safemesh-pwa-dev' : BUILD.cacheName
+const CACHE_NAME = typeof BUILD === 'undefined' ? CACHE_PREFIX + 'dev' : BUILD.cacheName
 const APP_SHELL = typeof BUILD === 'undefined'
   ? ['', 'README.md', 'manifest.webmanifest', 'pwa-icon.svg', 'favicon.svg'].map((name) => BASE + name)
   : BUILD.assets
@@ -16,7 +24,14 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))))
+      .then((keys) => keys.filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME))
+      // One cache refusing deletion stays for the next activation; it must not stop the
+      // remaining deletions or leave open pages uncontrolled.
+      .then((stale) => Promise.allSettled(stale.map((key) => caches.delete(key))).then((results) => {
+        results.forEach((result, index) => {
+          if (result.status === 'rejected') console.warn(`SafeMesh could not delete stale cache ${stale[index]}.`, result.reason)
+        })
+      }))
       .then(() => self.clients.claim()),
   )
 })

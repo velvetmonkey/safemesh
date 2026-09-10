@@ -68,6 +68,7 @@ export default defineConfig({
         for (const asset of assets) {
           hash.update(asset).update(readFileSync(resolve(outDir, asset.slice(base.length) || 'index.html')))
         }
+        // The name must carry the worker's CACHE_PREFIX (web/public/sw.js) or activation never sweeps it.
         const build = { cacheName: `safemesh-pwa-${hash.digest('hex')}`, assets }
         writeFileSync(resolve(outDir, 'sw.js'), `const BUILD = ${JSON.stringify(build)}\n${worker}`)
       },
