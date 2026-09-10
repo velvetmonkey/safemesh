@@ -1028,12 +1028,79 @@ pub struct VersionVector {
     zero_replicas: BTreeSet<u64>,
 }
 
+/// Maximum number of sequence IDs reconstructed for one replica from a peer map.
+/// This bounds CPU and memory work at an untrusted reconstruction boundary while
+/// leaving room for the ordinary peer histories this crate targets.
+pub const MAX_PEER_PREFIX: u64 = 1_000_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VersionVectorError {
+    /// Positive prefixes are canonical; sequence zero belongs in zero_replicas.
+    ZeroPrefix { replica: u64 },
+    /// Reconstructing this prefix would exceed the per-replica work bound.
+    PrefixTooLarge { replica: u64, prefix: u64, max: u64 },
+}
+
+impl core::fmt::Display for VersionVectorError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            VersionVectorError::ZeroPrefix { replica } => {
+                write!(f, "replica {replica} has a noncanonical zero prefix")
+            }
+            VersionVectorError::PrefixTooLarge {
+                replica,
+                prefix,
+                max,
+            } => write!(
+                f,
+                "replica {replica} prefix {prefix} exceeds reconstruction bound {max}"
+            ),
+        }
+    }
+}
+
+impl core::error::Error for VersionVectorError {}
+
 impl VersionVector {
     pub fn new() -> Self {
         VersionVector {
             entries: BTreeMap::new(),
             zero_replicas: BTreeSet::new(),
         }
+    }
+
+    /// Reconstruct a vector from a peer's canonical positive prefixes and
+    /// independent sequence-zero acknowledgements.
+    pub fn from_peer_prefixes(
+        entries: &BTreeMap<u64, u64>,
+        zero_replicas: &BTreeSet<u64>,
+    ) -> Result<Self, VersionVectorError> {
+        for (&replica, &prefix) in entries {
+            if prefix == 0 {
+                return Err(VersionVectorError::ZeroPrefix { replica });
+            }
+            if prefix > MAX_PEER_PREFIX {
+                return Err(VersionVectorError::PrefixTooLarge {
+                    replica,
+                    prefix,
+                    max: MAX_PEER_PREFIX,
+                });
+            }
+        }
+
+        let mut vector = Self::new();
+        for (&replica, &prefix) in entries {
+            for sequence in 1..=prefix {
+                vector.observe(RecordId { replica, sequence });
+            }
+        }
+        for &replica in zero_replicas {
+            vector.observe(RecordId {
+                replica,
+                sequence: 0,
+            });
+        }
+        Ok(vector)
     }
 
     pub fn get(&self, replica: u64) -> u64 {
@@ -3151,6 +3218,121 @@ mod frame_tests {
             EventLog::<GCounterDelta>::from_wire_bytes(&wire_log(&[record(1, 5), record(1, 5)]))
                 .unwrap();
         assert_eq!(decoded.records(), &[record(1, 5)]);
+    }
+}
+
+#[cfg(test)]
+mod version_vector_tests {
+    use super::*;
+
+    #[test]
+    fn planted_zero_prefix_is_rejected() {
+        let entries = BTreeMap::from([(7, 0)]);
+        let zeros = BTreeSet::new();
+        assert_eq!(
+            VersionVector::from_peer_prefixes(&entries, &zeros),
+            Err(VersionVectorError::ZeroPrefix { replica: 7 })
+        );
+    }
+
+    #[test]
+    fn planted_unbounded_prefix_is_rejected() {
+        let entries = BTreeMap::from([(7, MAX_PEER_PREFIX + 1)]);
+        let zeros = BTreeSet::new();
+        assert_eq!(
+            VersionVector::from_peer_prefixes(&entries, &zeros),
+            Err(VersionVectorError::PrefixTooLarge {
+                replica: 7,
+                prefix: MAX_PEER_PREFIX + 1,
+                max: MAX_PEER_PREFIX,
+            })
+        );
+    }
+
+    #[test]
+    fn legitimate_peer_maps_construct_and_match_observe() {
+        let cases = [
+            (BTreeMap::new(), BTreeSet::new()),
+            (BTreeMap::from([(1, 1)]), BTreeSet::new()),
+            (BTreeMap::new(), BTreeSet::from([2])),
+            (BTreeMap::from([(3, MAX_PEER_PREFIX)]), BTreeSet::new()),
+            (BTreeMap::from([(4, 2)]), BTreeSet::from([4, 5])),
+        ];
+        let mut constructed = 0;
+        for (entries, zeros) in cases {
+            let actual = VersionVector::from_peer_prefixes(&entries, &zeros).unwrap();
+            let mut expected = VersionVector::new();
+            for (&replica, &prefix) in &entries {
+                for sequence in 1..=prefix {
+                    expected.observe(RecordId { replica, sequence });
+                }
+            }
+            for &replica in &zeros {
+                expected.observe(RecordId {
+                    replica,
+                    sequence: 0,
+                });
+            }
+            assert_eq!(actual, expected);
+            constructed += 1;
+        }
+        assert_eq!(constructed, 5);
+    }
+
+    #[test]
+    fn accepted_peer_vector_drives_since_and_anti_entropy() {
+        let mut local = EventLog::new();
+        for id in [
+            RecordId {
+                replica: 1,
+                sequence: 0,
+            },
+            RecordId {
+                replica: 1,
+                sequence: 1,
+            },
+            RecordId {
+                replica: 1,
+                sequence: 2,
+            },
+            RecordId {
+                replica: 1,
+                sequence: 3,
+            },
+            RecordId {
+                replica: 2,
+                sequence: 0,
+            },
+            RecordId {
+                replica: 2,
+                sequence: 1,
+            },
+            RecordId {
+                replica: 2,
+                sequence: 2,
+            },
+        ] {
+            assert_eq!(
+                local.insert_record(Record { id, delta: 7u64 }),
+                Admission::Accepted
+            );
+        }
+        let peer =
+            VersionVector::from_peer_prefixes(&BTreeMap::from([(1, 2)]), &BTreeSet::from([2]))
+                .unwrap();
+        assert_eq!(local.since(&peer).len(), 4);
+
+        let malicious = VersionVector::from_peer_prefixes(
+            &BTreeMap::from([(1, MAX_PEER_PREFIX)]),
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        let mut transport = InMemoryTransport::new();
+        transport.subscribe(1);
+        transport.subscribe(2);
+        anti_entropy(&mut transport, 1, 2, &local, &malicious).unwrap();
+        assert_eq!(transport.pending_len(), 1);
+        assert_eq!(transport.drain(2)[0].records.len(), 4);
     }
 }
 
