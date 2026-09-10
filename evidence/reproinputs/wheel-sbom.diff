@@ -1,0 +1,61 @@
+--- a/sbom.json
++++ b/sbom.json
+@@ -2,7 +2,7 @@
+   "bomFormat": "CycloneDX",
+   "components": [
+     {
+-      "bom-ref": "path+file:///home/monkey/scratch/reproinputs/clean-a/rust/crates/safemesh-crdt#0.1.0",
++      "bom-ref": "path+file:///home/monkey/scratch/reproinputs/clean-b/rust/crates/safemesh-crdt#0.1.0",
+       "description": "no_std delta-state CRDT core, held to the SafeMesh Lean proofs by differential conformance",
+       "externalReferences": [
+         {
+@@ -603,14 +603,14 @@
+   ],
+   "dependencies": [
+     {
+-      "ref": "path+file:///home/monkey/scratch/reproinputs/clean-a/rust/crates/safemesh-crdt#0.1.0"
++      "ref": "path+file:///home/monkey/scratch/reproinputs/clean-b/rust/crates/safemesh-crdt#0.1.0"
+     },
+     {
+       "dependsOn": [
+         "registry+https://github.com/rust-lang/crates.io-index#pyo3@0.22.6",
+-        "path+file:///home/monkey/scratch/reproinputs/clean-a/rust/crates/safemesh-crdt#0.1.0"
+-      ],
+-      "ref": "path+file:///home/monkey/scratch/reproinputs/clean-a/rust/crates/safemesh-python#0.1.0"
++        "path+file:///home/monkey/scratch/reproinputs/clean-b/rust/crates/safemesh-crdt#0.1.0"
++      ],
++      "ref": "path+file:///home/monkey/scratch/reproinputs/clean-b/rust/crates/safemesh-python#0.1.0"
+     },
+     {
+       "ref": "registry+https://github.com/rust-lang/crates.io-index#autocfg@1.5.1"
+@@ -721,10 +721,10 @@
+   ],
+   "metadata": {
+     "component": {
+-      "bom-ref": "path+file:///home/monkey/scratch/reproinputs/clean-a/rust/crates/safemesh-python#0.1.0",
++      "bom-ref": "path+file:///home/monkey/scratch/reproinputs/clean-b/rust/crates/safemesh-python#0.1.0",
+       "components": [
+         {
+-          "bom-ref": "path+file:///home/monkey/scratch/reproinputs/clean-a/rust/crates/safemesh-python#0.1.0 bin-target-0",
++          "bom-ref": "path+file:///home/monkey/scratch/reproinputs/clean-b/rust/crates/safemesh-python#0.1.0 bin-target-0",
+           "name": "safemesh_python",
+           "purl": "pkg:cargo/safemesh-python@0.1.0?download_url=file://.#src/lib.rs",
+           "type": "library",
+@@ -755,7 +755,7 @@
+         "value": "true"
+       }
+     ],
+-    "timestamp": "2026-09-10T11:15:25.384776119Z",
++    "timestamp": "2026-09-10T11:16:07.869843769Z",
+     "tools": [
+       {
+         "name": "cargo-cyclonedx",
+@@ -764,7 +764,7 @@
+       }
+     ]
+   },
+-  "serialNumber": "urn:uuid:b810c504-ff91-45f1-a53a-a8d4b3745e48",
++  "serialNumber": "urn:uuid:d3494c46-5ed0-4617-a00c-00e472bad130",
+   "specVersion": "1.5",
+   "version": 1
+ }

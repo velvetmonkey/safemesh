@@ -1,0 +1,122 @@
+{
+  "rows": [
+    {
+      "row": 1,
+      "result": "skipped",
+      "reason": "zero lean/ files changed; standing rule prohibits Lean build"
+    },
+    {
+      "row": 2,
+      "result": "skipped",
+      "reason": "zero lean/ files changed; standing rule prohibits Lean build"
+    },
+    {
+      "row": 3,
+      "result": "pass",
+      "commands": [
+        "row3"
+      ]
+    },
+    {
+      "row": 4,
+      "result": "pass",
+      "commands": [
+        "row4"
+      ]
+    },
+    {
+      "row": 5,
+      "result": "pass",
+      "commands": [
+        "row5"
+      ]
+    },
+    {
+      "row": 6,
+      "result": "pass",
+      "commands": [
+        "row6"
+      ]
+    },
+    {
+      "row": 7,
+      "result": "pass",
+      "commands": [
+        "row7"
+      ]
+    },
+    {
+      "row": 8,
+      "result": "pass",
+      "commands": [
+        "row8"
+      ]
+    },
+    {
+      "row": 9,
+      "result": "pass",
+      "commands": [
+        "row9"
+      ]
+    },
+    {
+      "row": 10,
+      "result": "pass",
+      "commands": [
+        "row10"
+      ]
+    },
+    {
+      "row": 11,
+      "result": "pass",
+      "commands": [
+        "row11"
+      ]
+    },
+    {
+      "row": 12,
+      "result": "pass",
+      "commands": [
+        "row12"
+      ]
+    },
+    {
+      "row": 13,
+      "result": "pass after environment correction",
+      "commands": [
+        "row13-install-retry",
+        "row13-test-retry",
+        "row13-build-retry"
+      ],
+      "initial_failures": "test/build rc127: development executables omitted by NODE_ENV=production; Node22 engine warning. Retried with Node24.21.0 and npm ci --include=dev."
+    },
+    {
+      "row": 14,
+      "result": "pass, adapted cleanup",
+      "commands": [
+        "row14-retained-scratch"
+      ],
+      "note": "Ran unchanged package-smoke build/install/assertion body via bash -c with repo_root set explicitly and cleanup trap replaced by retention of scratch. No repository script edited; no assertion removed. TMPDIR is lane scratch. Literal script invocation not run because its rm -rf trap violates standing rules."
+    },
+    {
+      "row": 15,
+      "result": "skipped as whole script",
+      "reason": "unconditional Lean stage; constituent Rust/header/C/web/package stages exercised separately"
+    }
+  ],
+  "rows_exercised": 12,
+  "pass": 12,
+  "fail_final": 0,
+  "skipped": [
+    1,
+    2,
+    15
+  ],
+  "literal_unadapted_rows_completed": 11,
+  "lean_build_started": false,
+  "lean_workers_created": 0,
+  "clang_workers_created_by_lean": 0,
+  "lake_path": "/home/monkey/bin/lake",
+  "extra_check": "ffi-c-smoke: rc0",
+  "not_a_gate_verdict": "These are local observations. Required GitHub checks must be read on PR head by lanegate."
+}

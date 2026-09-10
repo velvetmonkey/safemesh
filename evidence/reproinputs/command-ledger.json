@@ -1,0 +1,506 @@
+[
+  {
+    "name": "premises",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "test $(ls rust | grep -c \"^Cargo.lock$\") -eq 0; echo \"lock premise $?: expected 0\"; grep -q \"dtolnay/rust-toolchain@stable\" .github/workflows/ci.yml; echo \"toolchain premise $?: expected 0\"; test $(cat rust/Cargo.toml rust/crates/*/Cargo.toml | grep -c \"rust-version\") -eq 0; echo \"MSRV premise $?: expected 0\"; grep -q 'maturin>=1.7,<2' .github/workflows/ci.yml; echo \"maturin premise $?: expected 0\"",
+    "rc": 0,
+    "time": "2026-09-10T11:10:01.226384+00:00"
+  },
+  {
+    "name": "lock",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "cargo generate-lockfile",
+    "rc": 0,
+    "time": "2026-09-10T11:10:01.414439+00:00"
+  },
+  {
+    "name": "metadata",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "cargo metadata --locked --format-version 1",
+    "rc": 0,
+    "time": "2026-09-10T11:10:10.862015+00:00"
+  },
+  {
+    "name": "releases",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "gh api repos/velvetmonkey/safemesh/releases --paginate",
+    "rc": 0,
+    "time": "2026-09-10T11:10:21.811013+00:00"
+  },
+  {
+    "name": "tags",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "gh api repos/velvetmonkey/safemesh/tags --paginate",
+    "rc": 0,
+    "time": "2026-09-10T11:10:22.169906+00:00"
+  },
+  {
+    "name": "locked-build",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "cargo build --locked",
+    "rc": 0,
+    "time": "2026-09-10T11:10:22.243998+00:00"
+  },
+  {
+    "name": "locked-test",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "cargo test --workspace --locked",
+    "rc": 0,
+    "time": "2026-09-10T11:10:30.627418+00:00"
+  },
+  {
+    "name": "install-1.82",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "rustup toolchain install 1.82.0 --profile minimal",
+    "rc": 0,
+    "time": "2026-09-10T11:10:40.064147+00:00"
+  },
+  {
+    "name": "install-1.83",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "rustup toolchain install 1.83.0 --profile minimal",
+    "rc": 0,
+    "time": "2026-09-10T11:10:46.953757+00:00"
+  },
+  {
+    "name": "install-pinned",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "rustup toolchain install 1.96.1 --profile minimal --component rustfmt --target wasm32-unknown-unknown --target thumbv7em-none-eabihf",
+    "rc": 0,
+    "time": "2026-09-10T11:10:57.158095+00:00"
+  },
+  {
+    "name": "known-bad",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "cargo build --locked",
+    "rc": 101,
+    "time": "2026-09-10T11:10:57.349064+00:00"
+  },
+  {
+    "name": "restored",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "git status --porcelain -- rust/crates/safemesh-crdt/Cargo.toml",
+    "rc": 0,
+    "time": "2026-09-10T11:10:57.426454+00:00"
+  },
+  {
+    "name": "msrv-1.82",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "cargo +1.82.0 build --workspace --locked --features safemesh-crdt/laws",
+    "rc": 101,
+    "time": "2026-09-10T11:11:08.114121+00:00"
+  },
+  {
+    "name": "install-1.88",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "rustup toolchain install 1.88.0 --profile minimal",
+    "rc": 0,
+    "time": "2026-09-10T11:11:13.217204+00:00"
+  },
+  {
+    "name": "msrv-1.83",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "cargo +1.83.0 build --workspace --locked --features safemesh-crdt/laws",
+    "rc": 101,
+    "time": "2026-09-10T11:11:18.537376+00:00"
+  },
+  {
+    "name": "install-1.89",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "rustup toolchain install 1.89.0 --profile minimal --target wasm32-unknown-unknown --target thumbv7em-none-eabihf",
+    "rc": 0,
+    "time": "2026-09-10T11:11:24.437701+00:00"
+  },
+  {
+    "name": "versions",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "rustc +1.96.1 -Vv; cargo +1.96.1 -V; rustup target list --installed --toolchain 1.96.1; cat lean/lean-toolchain; cbindgen --version; maturin --version; node --version; npm --version; wasm-pack --version; python3 --version; python3 -m pip --version; cc --version; ld --version; ldd --version; uname -a; cat /etc/os-release; command -v lake; rustup --version; printenv LANG LC_ALL TZ SOURCE_DATE_EPOCH RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_TARGET CARGO_BUILD_JOBS TMPDIR",
+    "rc": 1,
+    "time": "2026-09-10T11:11:43.094952+00:00"
+  },
+  {
+    "name": "row3",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "RUSTUP_TOOLCHAIN=1.96.1 cargo fmt --all --check",
+    "rc": 0,
+    "time": "2026-09-10T11:11:43.313378+00:00"
+  },
+  {
+    "name": "row4",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "RUSTUP_TOOLCHAIN=1.96.1 cargo test --workspace --locked",
+    "rc": 0,
+    "time": "2026-09-10T11:11:50.093206+00:00"
+  },
+  {
+    "name": "row5",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "RUSTUP_TOOLCHAIN=1.96.1 cargo test -p safemesh-crdt --no-default-features --locked",
+    "rc": 0,
+    "time": "2026-09-10T11:11:54.492015+00:00"
+  },
+  {
+    "name": "msrv-1.88",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "cargo +1.88.0 build --workspace --locked --features safemesh-crdt/laws",
+    "rc": 101,
+    "time": "2026-09-10T11:12:03.147441+00:00"
+  },
+  {
+    "name": "row13-install",
+    "cwd": "/home/monkey/scratch/reproinputs/work/web",
+    "command": "npm ci",
+    "rc": 0,
+    "time": "2026-09-10T11:12:03.185349+00:00"
+  },
+  {
+    "name": "row6",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "RUSTUP_TOOLCHAIN=1.96.1 cargo test -p safemesh-crdt --features laws --locked",
+    "rc": 0,
+    "time": "2026-09-10T11:12:08.257558+00:00"
+  },
+  {
+    "name": "row13-test",
+    "cwd": "/home/monkey/scratch/reproinputs/work/web",
+    "command": "npm test",
+    "rc": 127,
+    "time": "2026-09-10T11:12:18.397350+00:00"
+  },
+  {
+    "name": "msrv-1.89",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "cargo +1.89.0 build --workspace --locked --features safemesh-crdt/laws",
+    "rc": 0,
+    "time": "2026-09-10T11:12:21.949338+00:00"
+  },
+  {
+    "name": "row7",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "RUSTUP_TOOLCHAIN=1.96.1 cargo test -p safemesh-crdt --examples --locked",
+    "rc": 0,
+    "time": "2026-09-10T11:12:23.161029+00:00"
+  },
+  {
+    "name": "row8",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "RUSTUP_TOOLCHAIN=1.96.1 cargo run -p safemesh-crdt --example break_it --locked",
+    "rc": 0,
+    "time": "2026-09-10T11:12:23.283485+00:00"
+  },
+  {
+    "name": "row9",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "RUSTUP_TOOLCHAIN=1.96.1 cargo run -p safemesh-crdt --example cold_chain_kill_test --locked",
+    "rc": 0,
+    "time": "2026-09-10T11:12:23.353967+00:00"
+  },
+  {
+    "name": "row10",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "RUSTUP_TOOLCHAIN=1.96.1 cargo build -p safemesh-crdt --target thumbv7em-none-eabihf --locked",
+    "rc": 0,
+    "time": "2026-09-10T11:12:24.369286+00:00"
+  },
+  {
+    "name": "row13-build",
+    "cwd": "/home/monkey/scratch/reproinputs/work/web",
+    "command": "RUSTUP_TOOLCHAIN=1.96.1 npm run build",
+    "rc": 127,
+    "time": "2026-09-10T11:12:24.754820+00:00"
+  },
+  {
+    "name": "row11",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "RUSTUP_TOOLCHAIN=1.96.1 cargo build -p safemesh-wasm --target wasm32-unknown-unknown --locked",
+    "rc": 0,
+    "time": "2026-09-10T11:12:33.283965+00:00"
+  },
+  {
+    "name": "row12",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "export RUSTUP_TOOLCHAIN=1.96.1; cbindgen --config crates/safemesh-ffi/cbindgen.toml --crate safemesh-ffi --output /home/monkey/scratch/reproinputs/header.h && diff -u crates/safemesh-ffi/include/safemesh.h /home/monkey/scratch/reproinputs/header.h",
+    "rc": 0,
+    "time": "2026-09-10T11:12:33.366168+00:00"
+  },
+  {
+    "name": "msrv-declared",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "cargo +1.89.0 build --workspace --locked --features safemesh-crdt/laws",
+    "rc": 0,
+    "time": "2026-09-10T11:12:43.347984+00:00"
+  },
+  {
+    "name": "msrv-test",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "cargo +1.89.0 test --workspace --locked --features safemesh-crdt/laws",
+    "rc": 0,
+    "time": "2026-09-10T11:12:53.819591+00:00"
+  },
+  {
+    "name": "msrv-thumb",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "cargo +1.89.0 build -p safemesh-crdt --locked --target thumbv7em-none-eabihf",
+    "rc": 0,
+    "time": "2026-09-10T11:12:54.632506+00:00"
+  },
+  {
+    "name": "node-install",
+    "cwd": "/home/monkey/scratch/reproinputs",
+    "command": "npm install --prefix /home/monkey/scratch/reproinputs/node-tool --no-audit --no-fund node@24",
+    "rc": 0,
+    "time": "2026-09-10T11:12:55.100273+00:00"
+  },
+  {
+    "name": "lean-precondition",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "git diff --name-only $(git merge-base origin/main HEAD)..HEAD | grep -c '^lean/'",
+    "rc": 1,
+    "time": "2026-09-10T11:13:02.855139+00:00"
+  },
+  {
+    "name": "msrv-wasm",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "cargo +1.89.0 build -p safemesh-wasm --locked --target wasm32-unknown-unknown",
+    "rc": 0,
+    "time": "2026-09-10T11:13:04.376026+00:00"
+  },
+  {
+    "name": "node24-versions",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; node --version; npm --version; python3 -c 'import os,json; print(json.dumps({k:os.environ.get(k) for k in [\"NODE_ENV\",\"LANG\",\"LC_ALL\",\"TZ\",\"SOURCE_DATE_EPOCH\",\"RUSTFLAGS\",\"CARGO_ENCODED_RUSTFLAGS\",\"CARGO_BUILD_TARGET\",\"CARGO_BUILD_JOBS\",\"TMPDIR\"]},indent=2))'",
+    "rc": 0,
+    "time": "2026-09-10T11:13:35.781881+00:00"
+  },
+  {
+    "name": "row13-install-retry",
+    "cwd": "/home/monkey/scratch/reproinputs/work/web",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; npm ci --include=dev",
+    "rc": 0,
+    "time": "2026-09-10T11:13:38.322148+00:00"
+  },
+  {
+    "name": "row13-test-retry",
+    "cwd": "/home/monkey/scratch/reproinputs/work/web",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; RUSTUP_TOOLCHAIN=1.96.1 npm test",
+    "rc": 0,
+    "time": "2026-09-10T11:13:52.340663+00:00"
+  },
+  {
+    "name": "row13-build-retry",
+    "cwd": "/home/monkey/scratch/reproinputs/work/web",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; RUSTUP_TOOLCHAIN=1.96.1 npm run build",
+    "rc": 0,
+    "time": "2026-09-10T11:13:59.765617+00:00"
+  },
+  {
+    "name": "ffi-smoke",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "RUSTUP_TOOLCHAIN=1.96.1 ./scripts/ffi-c-smoke.sh",
+    "rc": 0,
+    "time": "2026-09-10T11:14:01.094708+00:00"
+  },
+  {
+    "name": "a-clean",
+    "cwd": "/home/monkey/scratch/reproinputs/clean-a",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; export RUSTUP_TOOLCHAIN=1.96.1; git rev-parse HEAD && git status --porcelain",
+    "rc": 0,
+    "time": "2026-09-10T11:15:08.231505+00:00"
+  },
+  {
+    "name": "a-crate",
+    "cwd": "/home/monkey/scratch/reproinputs/clean-a/rust",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; export RUSTUP_TOOLCHAIN=1.96.1; cargo package -p safemesh-crdt --locked",
+    "rc": 0,
+    "time": "2026-09-10T11:15:09.003879+00:00"
+  },
+  {
+    "name": "a-native",
+    "cwd": "/home/monkey/scratch/reproinputs/clean-a/rust",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; export RUSTUP_TOOLCHAIN=1.96.1; cargo build --workspace --release --locked --target x86_64-unknown-linux-gnu",
+    "rc": 0,
+    "time": "2026-09-10T11:15:25.221044+00:00"
+  },
+  {
+    "name": "wasm-tool-versions",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "for tool in /home/monkey/.cache/.wasm-pack/wasm-bindgen-*/wasm-bindgen /home/monkey/.cache/.wasm-pack/wasm-opt-*/bin/wasm-opt; do \"$tool\" --version; sha256sum \"$tool\"; done",
+    "rc": 0,
+    "time": "2026-09-10T11:15:32.673194+00:00"
+  },
+  {
+    "name": "pinned-negative",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "cargo +1.88.0 build --workspace --locked --features safemesh-crdt/laws",
+    "rc": 101,
+    "time": "2026-09-10T11:15:32.862234+00:00"
+  },
+  {
+    "name": "a-wheel",
+    "cwd": "/home/monkey/scratch/reproinputs/clean-a/rust/crates/safemesh-python",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; export RUSTUP_TOOLCHAIN=1.96.1; maturin build --release --locked --features extension-module --target x86_64-unknown-linux-gnu --out /home/monkey/scratch/reproinputs/artifacts-a/wheels",
+    "rc": 0,
+    "time": "2026-09-10T11:15:35.138731+00:00"
+  },
+  {
+    "name": "a-wasm-bundler",
+    "cwd": "/home/monkey/scratch/reproinputs/clean-a",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; export RUSTUP_TOOLCHAIN=1.96.1; wasm-pack build rust/crates/safemesh-wasm --target bundler --out-dir /home/monkey/scratch/reproinputs/artifacts-a/wasm-bundler --release -- --locked",
+    "rc": 0,
+    "time": "2026-09-10T11:15:44.839501+00:00"
+  },
+  {
+    "name": "a-npm-bundler",
+    "cwd": "/home/monkey/scratch/reproinputs/artifacts-a",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; export RUSTUP_TOOLCHAIN=1.96.1; npm pack /home/monkey/scratch/reproinputs/artifacts-a/wasm-bundler --pack-destination /home/monkey/scratch/reproinputs/artifacts-a",
+    "rc": 0,
+    "time": "2026-09-10T11:15:45.193587+00:00"
+  },
+  {
+    "name": "a-wasm-node",
+    "cwd": "/home/monkey/scratch/reproinputs/clean-a",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; export RUSTUP_TOOLCHAIN=1.96.1; wasm-pack build rust/crates/safemesh-wasm --target nodejs --out-dir /home/monkey/scratch/reproinputs/artifacts-a/wasm-node --release -- --locked",
+    "rc": 0,
+    "time": "2026-09-10T11:15:50.302325+00:00"
+  },
+  {
+    "name": "a-npm-node",
+    "cwd": "/home/monkey/scratch/reproinputs/artifacts-a",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; export RUSTUP_TOOLCHAIN=1.96.1; mkdir -p /home/monkey/scratch/reproinputs/artifacts-a/node-tar && npm pack /home/monkey/scratch/reproinputs/artifacts-a/wasm-node --pack-destination /home/monkey/scratch/reproinputs/artifacts-a/node-tar",
+    "rc": 0,
+    "time": "2026-09-10T11:15:50.596617+00:00"
+  },
+  {
+    "name": "b-clean",
+    "cwd": "/home/monkey/scratch/reproinputs/clean-b",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; export RUSTUP_TOOLCHAIN=1.96.1; git rev-parse HEAD && git status --porcelain",
+    "rc": 0,
+    "time": "2026-09-10T11:15:50.660866+00:00"
+  },
+  {
+    "name": "b-crate",
+    "cwd": "/home/monkey/scratch/reproinputs/clean-b/rust",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; export RUSTUP_TOOLCHAIN=1.96.1; cargo package -p safemesh-crdt --locked",
+    "rc": 0,
+    "time": "2026-09-10T11:15:51.541234+00:00"
+  },
+  {
+    "name": "row14-retained-scratch",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "#!/usr/bin/env bash\nset -euo pipefail\nexport PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH\nexport RUSTUP_TOOLCHAIN=1.96.1\n\nrepo_root=\"/home/monkey/scratch/reproinputs/work\"\ntmp_dir=\"$(mktemp -d)\"\n: # retain scratch directory: standing rules forbid rm -rf\n\n(\n  cd \"$repo_root/rust\"\n  cargo publish --dry-run -p safemesh-crdt --allow-dirty\n)\n\nif ! command -v maturin >/dev/null 2>&1; then\n  if command -v pipx >/dev/null 2>&1; then\n    pipx install \"maturin>=1.7,<2\"\n  else\n    python3 -m pip install --user \"maturin>=1.7,<2\"\n  fi\n  export PATH=\"$HOME/.local/bin:$PATH\"\nfi\n\n(\n  cd \"$repo_root/rust/crates/safemesh-python\"\n  maturin build --release --features extension-module --out \"$tmp_dir/wheels\"\n)\n\npython3 -m venv \"$tmp_dir/venv\"\n\"$tmp_dir/venv/bin/pip\" install \\\n  --no-index \\\n  --find-links \"$tmp_dir/wheels\" \\\n  safemesh-python\n\n\"$tmp_dir/venv/bin/python\" - <<'PY'\nimport safemesh_python as sm\n\nleft = sm.GCounterReplica(1, 3)\nright = sm.GCounterReplica(2, 3)\nrecord = left.append_bump(1, 5)\nassert isinstance(record, bytes)\nright.merge_record_bytes(record)\nassert left.merge_log_bytes(right.log_bytes()) == [\"duplicate\"]\nassert left.value() == right.value() == 5\n\nreg_left = sm.LwwRegisterReplica(1)\nreg_right = sm.LwwRegisterReplica(2)\nreg_record = reg_left.append_set(10, 1, 100)\nassert isinstance(reg_record, bytes)\nreg_right.merge_record_bytes(reg_record)\nreg_right.append_set(10, 2, 200)\nassert reg_left.merge_log_bytes(reg_right.log_bytes()) == [\"duplicate\", \"accepted\"]\nassert reg_left.value_or(0) == reg_right.value_or(0) == 200\n\nflag_left = sm.EnableWinsFlagReplica(1)\nflag_right = sm.EnableWinsFlagReplica(2)\nflag_record = flag_left.append_enable(10)\nassert isinstance(flag_record, bytes)\nflag_right.merge_record_bytes(flag_record)\nflag_remove = flag_right.append_disable_observed()\nflag_left.append_enable(11)\nflag_left.merge_record_bytes(flag_remove)\nassert flag_right.merge_log_bytes(flag_left.log_bytes()) == [\"duplicate\", \"accepted\", \"duplicate\"]\nassert flag_left.value() == flag_right.value() is True\n\nmap_left = sm.LwwMapReplica(1)\nmap_right = sm.LwwMapReplica(2)\nmap_record = map_left.append_set(7, 10, 1, 100)\nassert isinstance(map_record, bytes)\nmap_right.merge_record_bytes(map_record)\nmap_remove = map_right.append_remove(7, 11, 2)\nmap_left.append_set(7, 12, 1, 300)\nmap_left.merge_record_bytes(map_remove)\nassert map_right.merge_log_bytes(map_left.log_bytes()) == [\"duplicate\", \"accepted\", \"duplicate\"]\nassert map_left.value_or(7, 0) == map_right.value_or(7, 0) == 300\n\nprint(\"PYTHON_INSTALL_SMOKE=true\")\nPY\n\n\"$tmp_dir/venv/bin/python\" \\\n  \"$repo_root/rust/crates/safemesh-python/examples/data_mule_demo.py\"\n\nif ! command -v wasm-pack >/dev/null 2>&1; then\n  cargo install wasm-pack --version 0.15.0 --locked\nfi\n\nwasm-pack build \"$repo_root/rust/crates/safemesh-wasm\" \\\n  --target bundler \\\n  --out-dir \"$tmp_dir/wasm-pkg\" \\\n  --release\n\nnpm pack --dry-run \"$tmp_dir/wasm-pkg\"\n\nwasm-pack build \"$repo_root/rust/crates/safemesh-wasm\" \\\n  --target nodejs \\\n  --out-dir \"$tmp_dir/wasm-node-pkg\" \\\n  --release\n\nnode \"$repo_root/rust/crates/safemesh-wasm/examples/node-convergence.mjs\" \\\n  \"$tmp_dir/wasm-node-pkg\"\nnode \"$repo_root/rust/crates/safemesh-wasm/tests/node-error-shape.mjs\" \\\n  \"$tmp_dir/wasm-node-pkg\"\n",
+    "rc": 0,
+    "time": "2026-09-10T11:15:58.676257+00:00"
+  },
+  {
+    "name": "b-native",
+    "cwd": "/home/monkey/scratch/reproinputs/clean-b/rust",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; export RUSTUP_TOOLCHAIN=1.96.1; cargo build --workspace --release --locked --target x86_64-unknown-linux-gnu",
+    "rc": 0,
+    "time": "2026-09-10T11:16:07.748569+00:00"
+  },
+  {
+    "name": "b-wheel",
+    "cwd": "/home/monkey/scratch/reproinputs/clean-b/rust/crates/safemesh-python",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; export RUSTUP_TOOLCHAIN=1.96.1; maturin build --release --locked --features extension-module --target x86_64-unknown-linux-gnu --out /home/monkey/scratch/reproinputs/artifacts-b/wheels",
+    "rc": 0,
+    "time": "2026-09-10T11:16:17.103906+00:00"
+  },
+  {
+    "name": "b-wasm-bundler",
+    "cwd": "/home/monkey/scratch/reproinputs/clean-b",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; export RUSTUP_TOOLCHAIN=1.96.1; wasm-pack build rust/crates/safemesh-wasm --target bundler --out-dir /home/monkey/scratch/reproinputs/artifacts-b/wasm-bundler --release -- --locked",
+    "rc": 0,
+    "time": "2026-09-10T11:16:26.748321+00:00"
+  },
+  {
+    "name": "b-npm-bundler",
+    "cwd": "/home/monkey/scratch/reproinputs/artifacts-b",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; export RUSTUP_TOOLCHAIN=1.96.1; npm pack /home/monkey/scratch/reproinputs/artifacts-b/wasm-bundler --pack-destination /home/monkey/scratch/reproinputs/artifacts-b",
+    "rc": 0,
+    "time": "2026-09-10T11:16:27.014302+00:00"
+  },
+  {
+    "name": "b-wasm-node",
+    "cwd": "/home/monkey/scratch/reproinputs/clean-b",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; export RUSTUP_TOOLCHAIN=1.96.1; wasm-pack build rust/crates/safemesh-wasm --target nodejs --out-dir /home/monkey/scratch/reproinputs/artifacts-b/wasm-node --release -- --locked",
+    "rc": 0,
+    "time": "2026-09-10T11:16:33.067027+00:00"
+  },
+  {
+    "name": "b-npm-node",
+    "cwd": "/home/monkey/scratch/reproinputs/artifacts-b",
+    "command": "export PATH=/home/monkey/bin:/home/monkey/scratch/reproinputs/node-tool/node_modules/.bin:$PATH; export RUSTUP_TOOLCHAIN=1.96.1; mkdir -p /home/monkey/scratch/reproinputs/artifacts-b/node-tar && npm pack /home/monkey/scratch/reproinputs/artifacts-b/wasm-node --pack-destination /home/monkey/scratch/reproinputs/artifacts-b/node-tar",
+    "rc": 0,
+    "time": "2026-09-10T11:16:33.314251+00:00"
+  },
+  {
+    "name": "comparison",
+    "cwd": "/home/monkey/scratch/reproinputs",
+    "command": "python3 /home/monkey/scratch/reproinputs/compare.py",
+    "rc": 0,
+    "time": "2026-09-10T11:16:46.961953+00:00"
+  },
+  {
+    "name": "clean-a-after",
+    "cwd": "/home/monkey/scratch/reproinputs/clean-a",
+    "command": "git status --porcelain",
+    "rc": 0,
+    "time": "2026-09-10T11:16:46.997755+00:00"
+  },
+  {
+    "name": "clean-b-after",
+    "cwd": "/home/monkey/scratch/reproinputs/clean-b",
+    "command": "git status --porcelain",
+    "rc": 0,
+    "time": "2026-09-10T11:16:47.042742+00:00"
+  },
+  {
+    "name": "action-pin",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "gh api repos/dtolnay/rust-toolchain/commits/1.96.1 --jq '.sha'",
+    "rc": 0,
+    "time": "2026-09-10T11:17:30.696954+00:00"
+  },
+  {
+    "name": "extra-tools",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "cargo cyclonedx --version; python3 -c 'import importlib.metadata; print(\"maturin\",importlib.metadata.version(\"maturin\"))'; rustc +1.89.0 -Vv; cargo +1.89.0 -V",
+    "rc": 0,
+    "time": "2026-09-10T11:17:30.893078+00:00"
+  },
+  {
+    "name": "pinned-final-build",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "cargo +1.96.1 build --locked",
+    "rc": 0,
+    "time": "2026-09-10T11:17:35.550986+00:00"
+  },
+  {
+    "name": "pinned-final-test",
+    "cwd": "/home/monkey/scratch/reproinputs/work/rust",
+    "command": "cargo +1.96.1 test --workspace --locked",
+    "rc": 0,
+    "time": "2026-09-10T11:17:37.481899+00:00"
+  },
+  {
+    "name": "final-lean-precondition",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "git diff --name-only $(git merge-base origin/main HEAD)..HEAD | grep -c '^lean/'",
+    "rc": 1,
+    "time": "2026-09-10T11:18:58.721933+00:00"
+  },
+  {
+    "name": "final-diff-check",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "git diff --check",
+    "rc": 0,
+    "time": "2026-09-10T11:18:58.762001+00:00"
+  },
+  {
+    "name": "tool-binary-hashes",
+    "cwd": "/home/monkey/scratch/reproinputs/work",
+    "command": "sha256sum \"$(command -v maturin)\" \"$(command -v cargo-cyclonedx)\" \"$(command -v wasm-pack)\" /home/monkey/scratch/reproinputs/node-tool/node_modules/.bin/node; cargo cyclonedx --version",
+    "rc": 0,
+    "time": "2026-09-10T11:19:21.148787+00:00"
+  }
+]
