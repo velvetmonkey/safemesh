@@ -175,8 +175,8 @@ fn enable_wins_flag_wire_is_stable_and_roundtrips() {
         vec![
             0x61, // enable-wins flag disable delta tag
             0x02, 0x00, 0x00, 0x00, // token count
-            0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sorted token
-            0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sorted token
+            0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // caller order
+            0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // caller order
         ],
     );
     roundtrip(EnableWinsFlagDelta::Disable { tokens: vec![2, 9] });
@@ -186,8 +186,14 @@ fn enable_wins_flag_wire_is_stable_and_roundtrips() {
         }
         .to_wire_bytes()
         .unwrap(),
-        disable.to_wire_bytes().unwrap(),
+        vec![
+            0x61, 0x03, 0x00, 0x00, 0x00,
+            0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ],
     );
+    roundtrip(EnableWinsFlagDelta::Disable { tokens: vec![9, 2, 2] });
 
     let mut flag = EnableWinsFlag::new();
     flag.enable(9);
@@ -205,6 +211,21 @@ fn enable_wins_flag_wire_is_stable_and_roundtrips() {
         ],
     );
     roundtrip(flag);
+}
+
+#[test]
+fn enable_wins_flag_record_roundtrips_unormalized_tokens() {
+    let record = safemesh_crdt::Record {
+        id: safemesh_crdt::RecordId { replica: 1, sequence: 1 },
+        delta: EnableWinsFlagDelta::Disable { tokens: vec![9, 2, 2] },
+    };
+    let mut log = EventLog::new();
+    assert_eq!(log.insert_record(record.clone()), safemesh_crdt::Admission::Accepted);
+    let bytes = log.to_wire_bytes().unwrap();
+    let reopened = EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes(&bytes).unwrap();
+    assert_eq!(reopened.records()[0].delta, record.delta);
+    assert_eq!(log.admit_with(reopened.records()[0].clone(), |_| {}), safemesh_crdt::Admission::Duplicate);
+    assert_eq!(log.records(), reopened.records());
 }
 
 #[test]

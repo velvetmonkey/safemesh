@@ -1012,16 +1012,16 @@ mod tests {
     }
 
     #[test]
-    fn python_enable_wins_flag_wire_helpers_use_canonical_bytes() {
+    fn python_enable_wins_flag_wire_helpers_preserve_exact_bytes() {
         with_python(|py| {
             let enable = enable_wins_flag_enable_delta_to_wire(py, 42).unwrap();
             assert_eq!(enable.as_bytes().len(), 9);
             assert_eq!(enable.as_bytes()[0], 0x60);
 
             let disable = enable_wins_flag_disable_delta_to_wire(py, vec![9, 2, 2]).unwrap();
-            assert_eq!(disable.as_bytes().len(), 21);
+            assert_eq!(disable.as_bytes().len(), 29);
             assert_eq!(disable.as_bytes()[0], 0x61);
-            assert_eq!(&disable.as_bytes()[1..5], &[2, 0, 0, 0]);
+            assert_eq!(&disable.as_bytes()[1..5], &[3, 0, 0, 0]);
         });
     }
 
