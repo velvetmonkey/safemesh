@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "astro dev --host localhost --port 4321",
-    "build": "astro build && python3 generate-reference.py && pagefind --site dist",
+    "build": "astro build && node check-assurance.mjs && python3 generate-reference.py && pagefind --site dist",
     "preview": "astro preview --host localhost --port 4320",
     "build:site": "node build-site.mjs"
   },
@@ -16,6 +16,11 @@
     "astro": "^7.3.2"
   },
   "devDependencies": {
-    "pagefind": "^1.5.2"
+    "@astrojs/markdown-remark": "7.3.1",
+    "pagefind": "^1.5.2",
+    "parse5": "8.0.1",
+    "remark-parse": "11.0.0",
+    "remark-rehype": "11.1.2",
+    "unified": "11.0.5"
   }
 }
