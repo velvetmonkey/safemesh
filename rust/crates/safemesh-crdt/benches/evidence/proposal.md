@@ -99,8 +99,8 @@ Carriers NOT MEASURED: G-Set, G-Counter, PN-Counter, RGA/Text. This instrument e
 | history encoded bytes | 618 | 9011258 | B5-r5 remove warm (n=7) | box wall-time brake 20 seconds | 66363392 / 19115666 | 216.262214/228.708024/228.708024 | N/A: no accepted durable append in this operation |
 | writer/replica count | 1 | 16 | B3-r4 restart warm (n=7) | swap activity above 1000 KB/s | 15204352 / 9759523 | 161.869171/165.943636/165.943636 | N/A: no accepted durable append in this operation |
 | per-record payload bytes | 32 | 1024 | B5-r5 remove warm (n=14) | box wall-time brake 20 seconds | 66363392 / 19115666 | 213.490000/228.708024/228.708024 | N/A: no accepted durable append in this operation |
-| records per sync batch | 1 | 8 | B4-r3 import warm (n=784) | swap activity above 1000 KB/s | 2990080 / 362605 | 0.001241/0.001842/0.002734 | N/A: no accepted durable append in this operation |
-| bytes per sync batch | 66 | 2320 | B4-r3 import warm (n=784) | swap activity above 1000 KB/s | 2990080 / 362605 | 0.001241/0.001842/0.002734 | N/A: no accepted durable append in this operation |
+| records per caller import batch | 1 | 8 | B4-r3 import warm (n=784) | swap activity above 1000 KB/s | 2990080 / 362605 | 0.001241/0.001842/0.002734 | N/A: no accepted durable append in this operation |
+| bytes per caller import batch | 66 | 2320 | B4-r3 import warm (n=784) | swap activity above 1000 KB/s | 2990080 / 362605 | 0.001241/0.001842/0.002734 | N/A: no accepted durable append in this operation |
 | live carrier entries | 0 | 4096 | B5-r5 remove warm (n=7) | box wall-time brake 20 seconds | 66363392 / 18881082 | 213.490000/221.024499/221.024499 | N/A: no accepted durable append in this operation |
 | retained tombstone count | 4 | 8192 | B5-r5 remove warm (n=7) | box wall-time brake 20 seconds | 66363392 / 19115666 | 216.262214/228.708024/228.708024 | N/A: no accepted durable append in this operation |
 
