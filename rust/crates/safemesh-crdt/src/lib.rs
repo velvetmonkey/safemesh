@@ -977,8 +977,46 @@ pub struct Record<D> {
 /// prefix, otherwise `since` could hide gaps. Sequence zero is acknowledged
 /// independently by `zero_replicas`; it is not implied by a positive prefix.
 /// There is no built-in version wire codec. Custom version exchanges must carry
-/// both `entries()` and `zero_replicas()`; legacy prefix-only exchanges cannot
-/// acknowledge zeros and will keep receiving them until upgraded.
+/// both [`Self::entries`] and [`Self::zero_replicas`]. A receiver can rebuild
+/// the vector with [`Self::observe`] by supplying each positive prefix's IDs in
+/// sequence order and each zero ID, as below; record payloads are not required.
+/// Legacy prefix-only exchanges cannot acknowledge zeros and will keep receiving
+/// them until upgraded.
+///
+/// These are claims about the sending peer's log. The caller is responsible for
+/// their truth: neither `observe` nor `since` checks possession of record payloads.
+/// Fabricated IDs can acknowledge missing records and cause `since` to omit them.
+/// Use [`EventLog::version`] to derive claims from records actually admitted.
+///
+/// Reconstruction visits every sequence in every prefix, not just each map
+/// entry: for `r` authors and `s` total acknowledged positive sequences it takes
+/// O((s + z) log(r + z + 1)) time and O(r + z) space, where `z` is the number of
+/// zero acknowledgements. Bound peer input before replay; a prefix of `u64::MAX`
+/// is representable but impractical to reconstruct this way. Zero-valued prefix
+/// entries are noncanonical and should be rejected by the custom exchange;
+/// only `zero_replicas()` acknowledges sequence zero.
+///
+/// ```
+/// use safemesh_crdt::{EventLog, RecordId, VersionVector};
+///
+/// let mut peer = EventLog::new();
+/// peer.append(7, 42u64);
+/// // Carry both collections over the application's transport.
+/// let prefixes = peer.version().entries().clone();
+/// let zeros = peer.version().zero_replicas().clone();
+/// let mut received = VersionVector::new();
+/// for (replica, prefix) in prefixes {
+///     assert!(prefix > 0, "reject noncanonical zero prefix entries");
+///     for sequence in 1..=prefix {
+///         received.observe(RecordId { replica, sequence });
+///     }
+/// }
+/// for replica in zeros {
+///     received.observe(RecordId { replica, sequence: 0 });
+/// }
+/// assert_eq!(&received, peer.version());
+/// assert_eq!(peer.since(&received), peer.since(peer.version()));
+/// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct VersionVector {
     entries: BTreeMap<u64, u64>,
