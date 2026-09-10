@@ -316,6 +316,31 @@ mod owned_local {
         assert_eq!(next_a.id.sequence, 3);
         assert_eq!(next_b.id.sequence, 3);
     }
+    /// The local writer emits `Remove { tokens: [] }` for an element it has
+    /// never observed. That record is persisted product state, so the checked
+    /// loader must keep opening it: refusing the lattice bottom would refuse a
+    /// saved log the user already has.
+    #[test]
+    fn owned_empty_remove_persists_and_reopens_through_checked_loader() {
+        use safemesh_crdt::OrSet;
+        let mut r = LocalReplica::utf8_set(&root("empty-remove"), config(0)).unwrap();
+        let removed = r.remove(r.ticket(), &String::from("never-added")).unwrap();
+        assert_eq!(removed.delta, OrSetDelta::Remove { tokens: vec![] });
+        let bytes = r.log().to_wire_bytes().unwrap();
+        let reopened = EventLog::<OrSetDelta<String, u64>>::from_wire_bytes_for(
+            &bytes,
+            &OrSet::<String, u64>::new(),
+        )
+        .unwrap_or_else(|e| panic!("persisted empty remove refused on reopen: {e:?}"));
+        let mut replay = OrSet::<String, u64>::new();
+        for record in reopened.records() {
+            replay.apply_delta(record.delta.clone());
+        }
+        assert_eq!(reopened.records().len(), 1);
+        assert_eq!(&replay, r.state());
+        assert_eq!(replay, OrSet::new());
+        println!("EMPTY REMOVE persisted=1 reopened=1 replay==live=true");
+    }
     #[test]
     fn owned_boundaries_and_existing_store_error() {
         let path = root("restart");
@@ -721,4 +746,237 @@ fn seqzero_acknowledgment_is_independent_of_positive_prefix() {
         .map(|r| r.id)
         .collect();
     assert_eq!(ids, expected);
+}
+
+/// The six non-counter types accept every decodable record. A record that
+/// replay leaves the current carrier unchanged is one the CRDT subsumes (a
+/// losing LWW write, a duplicate add, a tombstone already held) or the lattice
+/// bottom (a remove naming no tokens); the same record applied to a FRESH
+/// carrier of the same shape yields exactly the state it denotes. This pins
+/// the accept contract stated on each impl's `validate_record`, so a future
+/// validator that refuses a legitimately-losing record goes red here.
+#[test]
+fn inherited_types_accept_records_that_replay_subsumes() {
+    use safemesh_crdt::{
+        EnableWinsFlag, EnableWinsFlagDelta, GSet, LwwMap, LwwMapDelta, LwwRegister,
+        LwwRegisterDelta, OrSet, OrSetDelta, Rga, RgaDelta, WireError, WireSchema,
+    };
+    use std::fmt::Debug;
+    fn rec<D>(delta: D) -> Record<D> {
+        Record {
+            id: RecordId {
+                replica: 0,
+                sequence: 1,
+            },
+            delta,
+        }
+    }
+    // Through the checked loader: validate against `carrier`, then replay the
+    // loaded log into a clone of `carrier` and into `fresh`.
+    fn via_loader<C, D>(carrier: &C, fresh: C, record: Record<D>) -> (C, C)
+    where
+        C: Crdt<Delta = D> + Clone + Debug + PartialEq,
+        D: WireEncode + WireDecode + WireSchema + Clone + PartialEq + Debug,
+    {
+        let mut log = EventLog::for_crdt(carrier);
+        assert_eq!(log.insert_record(record), Admission::Accepted);
+        let bytes = log.to_wire_bytes().unwrap();
+        let loaded = EventLog::<D>::from_wire_bytes_for(&bytes, carrier)
+            .unwrap_or_else(|e: WireError| panic!("legitimate record refused: {e:?}"));
+        let mut existing = carrier.clone();
+        let mut fresh = fresh;
+        for r in loaded.records() {
+            existing.apply_delta(r.delta.clone());
+            fresh.apply_delta(r.delta.clone());
+        }
+        (existing, fresh)
+    }
+    // GSet and Rga have no delta wire codec, so the loader cannot carry them;
+    // exercise the trait method the loader calls, then replay by hand.
+    fn via_trait<C, D>(carrier: &C, fresh: C, record: Record<D>) -> (C, C)
+    where
+        C: Crdt<Delta = D> + Clone + Debug + PartialEq,
+        D: Clone,
+    {
+        carrier
+            .validate_record(record.id, &record.delta)
+            .unwrap_or_else(|e| panic!("legitimate record refused: {e:?}"));
+        let mut existing = carrier.clone();
+        let mut fresh = fresh;
+        existing.apply_delta(record.delta.clone());
+        fresh.apply_delta(record.delta);
+        (existing, fresh)
+    }
+    let mut checked = 0;
+
+    // OrSet: element 1 added under token 5 then removed; element 2 live.
+    let mut set = OrSet::<u64, u64>::new();
+    set.add(1, 5);
+    set.apply_remove([5]);
+    set.add(2, 6);
+    let losing: Vec<(OrSetDelta<u64, u64>, OrSet<u64, u64>)> = vec![
+        (OrSetDelta::Remove { tokens: vec![] }, OrSet::new()),
+        (OrSetDelta::Remove { tokens: vec![5] }, {
+            let mut s = OrSet::new();
+            s.apply_remove([5]);
+            s
+        }),
+        (
+            OrSetDelta::Add {
+                element: 1,
+                token: 5,
+            },
+            {
+                let mut s = OrSet::new();
+                s.add(1, 5);
+                s
+            },
+        ),
+        (
+            OrSetDelta::Add {
+                element: 2,
+                token: 6,
+            },
+            {
+                let mut s = OrSet::new();
+                s.add(2, 6);
+                s
+            },
+        ),
+    ];
+    for (delta, denoted) in losing {
+        let (existing, fresh) = via_loader(&set, OrSet::new(), rec(delta));
+        assert_eq!(
+            existing, set,
+            "subsumed record must leave the carrier as is"
+        );
+        assert_eq!(
+            fresh, denoted,
+            "fresh carrier must hold what the record denotes"
+        );
+        checked += 1;
+    }
+
+    // EnableWinsFlag: enabled under token 1 then disabled.
+    let mut flag = EnableWinsFlag::<u64>::new();
+    flag.enable(1);
+    flag.disable([1]);
+    let losing: Vec<(EnableWinsFlagDelta<u64>, EnableWinsFlag<u64>)> = vec![
+        (
+            EnableWinsFlagDelta::Disable { tokens: vec![] },
+            EnableWinsFlag::new(),
+        ),
+        (EnableWinsFlagDelta::Disable { tokens: vec![1] }, {
+            let mut f = EnableWinsFlag::new();
+            f.disable([1]);
+            f
+        }),
+        (EnableWinsFlagDelta::Enable { token: 1 }, {
+            let mut f = EnableWinsFlag::new();
+            f.enable(1);
+            f
+        }),
+    ];
+    for (delta, denoted) in losing {
+        let (existing, fresh) = via_loader(&flag, EnableWinsFlag::new(), rec(delta));
+        assert_eq!(existing, flag);
+        assert_eq!(fresh, denoted);
+        checked += 1;
+    }
+
+    // LwwRegister: holds 42 at (10, 0).
+    let mut reg = LwwRegister::<u64>::new();
+    reg.set(10, 0, 42);
+    for (timestamp, replica, value) in [(1, 0, 7), (10, 0, 5), (10, 0, 42)] {
+        let delta = LwwRegisterDelta {
+            timestamp,
+            replica,
+            value,
+        };
+        let mut denoted = LwwRegister::new();
+        denoted.set(timestamp, replica, value);
+        let (existing, fresh) = via_loader(&reg, LwwRegister::new(), rec(delta));
+        assert_eq!(existing, reg);
+        assert_eq!(fresh, denoted);
+        assert_eq!(fresh.value(), Some(&value));
+        checked += 1;
+    }
+
+    // LwwMap: key 1 = 42 at (10, 0); key 2 removed at (10, 0).
+    let mut map = LwwMap::<u64, u64>::new();
+    map.set(1, 10, 0, 42);
+    map.remove(2, 10, 0);
+    let losing: Vec<(LwwMapDelta<u64, u64>, LwwMap<u64, u64>)> = vec![
+        (
+            LwwMapDelta::Set {
+                key: 1,
+                timestamp: 1,
+                replica: 0,
+                value: 7,
+            },
+            {
+                let mut m = LwwMap::new();
+                m.set(1, 1, 0, 7);
+                m
+            },
+        ),
+        (
+            LwwMapDelta::Remove {
+                key: 2,
+                timestamp: 1,
+                replica: 0,
+            },
+            {
+                let mut m = LwwMap::new();
+                m.remove(2, 1, 0);
+                m
+            },
+        ),
+    ];
+    for (delta, denoted) in losing {
+        let (existing, fresh) = via_loader(&map, LwwMap::new(), rec(delta));
+        assert_eq!(existing, map);
+        assert_eq!(fresh, denoted);
+        checked += 1;
+    }
+
+    // GSet: element 1 present.
+    let mut gset = GSet::<u64>::new();
+    gset.insert(1);
+    let (existing, fresh) = via_trait(&gset, GSet::new(), rec(1u64));
+    assert_eq!(existing, gset);
+    assert_eq!(fresh, gset);
+    checked += 1;
+
+    // Rga: (1, 10) placed then deleted.
+    let mut rga = Rga::<u64, u64>::new();
+    rga.insert(1, 10);
+    rga.delete(1);
+    let losing: Vec<(RgaDelta<u64, u64>, Rga<u64, u64>)> = vec![
+        (
+            RgaDelta::Insert {
+                position: 1,
+                value: 10,
+            },
+            {
+                let mut r = Rga::new();
+                r.insert(1, 10);
+                r
+            },
+        ),
+        (RgaDelta::Delete { position: 1 }, {
+            let mut r = Rga::new();
+            r.delete(1);
+            r
+        }),
+    ];
+    for (delta, denoted) in losing {
+        let (existing, fresh) = via_trait(&rga, Rga::new(), rec(delta));
+        assert_eq!(existing, rga);
+        assert_eq!(fresh, denoted);
+        checked += 1;
+    }
+
+    println!("LEGITIMATE RECORDS ACCEPTED {checked} OF {checked}");
+    assert_eq!(checked, 15);
 }

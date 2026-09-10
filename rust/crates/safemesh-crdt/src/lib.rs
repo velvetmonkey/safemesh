@@ -283,6 +283,13 @@ impl<T: Ord + Clone> Mergeable for GSet<T> {
 impl<T: Ord + Clone> Crdt for GSet<T> {
     type Delta = T;
 
+    /// Accepts every record: every `T` is in a G-Set's domain, and a fresh set
+    /// inserts it. The only record replay ignores is an element already present,
+    /// and ignoring it is set idempotence (join with a member), not loss.
+    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
+        Ok(())
+    }
+
     fn apply_delta(&mut self, delta: Self::Delta) {
         self.insert(delta);
     }
@@ -533,6 +540,18 @@ impl<T: Ord + Clone, K: Ord + Clone> Mergeable for OrSet<T, K> {
 impl<T: Ord + Clone, K: Ord + Clone> Crdt for OrSet<T, K> {
     type Delta = OrSetDelta<T, K>;
 
+    /// Accepts every record. An add always joins the add set, even when its
+    /// token is already tombstoned (that is the observed-remove rule, and a fresh
+    /// set applies it). A remove tombstones every token it names whether or not
+    /// this replica observed them (`RecordKernel.payloadOwned .remove`), so a
+    /// fresh set applies it too. A remove naming no tokens is the lattice bottom:
+    /// the local writer emits it for an absent element, and joining `⊥` on any
+    /// carrier is the correct application of that record, not a dropped one.
+    /// Nothing decodable is outside the carrier, so nothing is refused here.
+    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
+        Ok(())
+    }
+
     fn apply_delta(&mut self, delta: Self::Delta) {
         match delta {
             OrSetDelta::Add { element, token } => self.add(element, token),
@@ -632,6 +651,14 @@ impl<P: Ord + Clone, V: Ord + Clone> Mergeable for Rga<P, V> {
 impl<P: Ord + Clone, V: Ord + Clone> Crdt for Rga<P, V> {
     type Delta = RgaDelta<P, V>;
 
+    /// Accepts every record: an insert joins the placed set even at a
+    /// tombstoned position, and a delete tombstones its position whether or not
+    /// it was observed; a fresh sequence applies either. The records replay
+    /// ignores (a duplicate insert, a repeated delete) are join idempotence.
+    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
+        Ok(())
+    }
+
     fn apply_delta(&mut self, delta: Self::Delta) {
         match delta {
             RgaDelta::Insert { position, value } => self.insert(position, value),
@@ -720,6 +747,14 @@ impl<K: Ord + Clone> Mergeable for EnableWinsFlag<K> {
 
 impl<K: Ord + Clone> Crdt for EnableWinsFlag<K> {
     type Delta = EnableWinsFlagDelta<K>;
+
+    /// Accepts every record, by the same argument as [`OrSet`]: an enable joins
+    /// the enable set even when its token is tombstoned, a disable tombstones the
+    /// tokens it names whether observed or not, and a disable naming no tokens is
+    /// the lattice bottom. Every decodable record applies on a fresh flag.
+    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
+        Ok(())
+    }
 
     fn apply_delta(&mut self, delta: Self::Delta) {
         match delta {
@@ -811,6 +846,14 @@ impl<V: Ord + Clone> Mergeable for LwwRegister<V> {
 
 impl<V: Ord + Clone> Crdt for LwwRegister<V> {
     type Delta = LwwRegisterDelta<V>;
+
+    /// Accepts every record. A write that loses to the current entry under the
+    /// total order `(timestamp, replica, value)` is subsumed, which is convergence,
+    /// not loss: a fresh register applies the same write. Every
+    /// `(timestamp, replica, value)` is in the register's domain.
+    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
+        Ok(())
+    }
 
     fn apply_delta(&mut self, delta: Self::Delta) {
         self.set(delta.timestamp, delta.replica, delta.value);
@@ -943,6 +986,13 @@ impl<K: Ord + Clone, V: Ord + Clone> Mergeable for LwwMap<K, V> {
 
 impl<K: Ord + Clone, V: Ord + Clone> Crdt for LwwMap<K, V> {
     type Delta = LwwMapDelta<K, V>;
+
+    /// Accepts every record. Per key, a set or remove that loses to the current
+    /// dot is subsumed by the max-dot rule and applies on a fresh map; nothing a
+    /// decoder can produce is outside the map's domain.
+    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
+        Ok(())
+    }
 
     fn apply_delta(&mut self, delta: Self::Delta) {
         match delta {
