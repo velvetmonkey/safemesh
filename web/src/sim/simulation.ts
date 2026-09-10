@@ -237,10 +237,10 @@ export function convergence(sim: Simulation): {
     (peer) => replicaFor(peer, sim.peers.length).sameStateAs(firstReplica) && orsetStateKey(peer) === orsetStateKey(first),
   )
   const sameRawState = rawStateMatches.every(Boolean)
-  const firstGRead = Number(firstReplica.value())
+  const firstGRead = counterNumber(firstReplica.value())
   const firstORead = JSON.stringify(readORSet(first.orset))
   const readMatches = sim.peers.map(
-    (peer) => Number(replicaFor(peer, sim.peers.length).value()) === firstGRead && JSON.stringify(readORSet(peer.orset)) === firstORead,
+    (peer) => counterNumber(replicaFor(peer, sim.peers.length).value()) === firstGRead && JSON.stringify(readORSet(peer.orset)) === firstORead,
   )
   const sameReads = readMatches.every(Boolean)
 
@@ -251,7 +251,7 @@ export function convergence(sim: Simulation): {
     rawStateMatches,
     readMatches,
     gcounterValue: firstGRead,
-    gcounterValues: sim.peers.map((peer) => Number(replicaFor(peer, sim.peers.length).value())),
+    gcounterValues: sim.peers.map((peer) => counterNumber(replicaFor(peer, sim.peers.length).value())),
     orsetElements: readORSet(first.orset),
   }
 }
@@ -537,7 +537,7 @@ function buildAntiEntropyPackets(sim: Simulation): { packets: Packet[]; nextId: 
         delta: {
           kind: 'gcounter.bump',
           replica: source.id,
-          tally: Number(sourceCounter.value()),
+          tally: counterNumber(sourceCounter.value()),
           bytes: sourceCounter.logBytes(),
           payload: 'log',
         },
@@ -663,9 +663,9 @@ function replicaFor(peer: Peer, replicas: number): SafeMeshGCounterReplica {
 function snapshotGCounterPeer(peer: Peer, counter: SafeMeshGCounterReplica): Peer {
   return {
     ...peer,
-    gcounter: Array.from(counter.state(), Number),
+    gcounter: Array.from(counter.state(), counterNumber),
     gcounterLog: counter.logBytes(),
-    localTally: Math.max(peer.localTally, Number(counter.state()[peer.id] ?? 0n)),
+    localTally: Math.max(peer.localTally, counterNumber(counter.state()[peer.id] ?? 0n)),
   }
 }
 
@@ -717,4 +717,13 @@ function plainDrop(packet: Packet): string {
   }
   if (packet.delta.kind === 'orset.log') return `Camp ${packet.to} missed supply records (signal dropped)`
   return `Camp ${packet.to} missed removal notes (signal dropped)`
+}
+
+// The UI uses numbers; refuse a counter read that cannot be represented safely.
+function counterNumber(total: bigint): number {
+  const value = Number(total)
+  if (!Number.isSafeInteger(value)) {
+    throw new RangeError('Counter value exceeds the safe integer range; no numeric read is available')
+  }
+  return value
 }
