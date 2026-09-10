@@ -45,7 +45,7 @@ fn proc_value(file: &str, key: &str) -> u64 {
         })
         .unwrap_or(0)
 }
-fn measure<T>(op: &str, f: impl FnOnce() -> T) -> (T, Value) {
+fn measure<T>(crdt_type: &str, durability: &str, op: &str, f: impl FnOnce() -> T) -> (T, Value) {
     let writes = proc_value("/proc/self/io", "write_bytes:");
     let base = LIVE.load(Relaxed);
     PEAK.store(base, Relaxed);
@@ -61,7 +61,7 @@ fn measure<T>(op: &str, f: impl FnOnce() -> T) -> (T, Value) {
     let rss = proc_value("/proc/self/status", "VmHWM:") * 1024;
     (
         value,
-        json!({"op":op,"ns":ns,"allocator_peak_bytes":peak,"allocator_extra_peak_bytes":peak.saturating_sub(base),"allocation_bytes":bytes,"allocation_calls":count,"process_peak_rss_bytes":rss,"kernel_write_bytes":physical}),
+        json!({"crdt_type":crdt_type,"durability":durability,"op":op,"ns":ns,"allocator_peak_bytes":peak,"allocator_extra_peak_bytes":peak.saturating_sub(base),"allocation_bytes":bytes,"allocation_calls":count,"process_peak_rss_bytes":rss,"kernel_write_bytes":physical}),
     )
 }
 fn emit(mut row: Value, extra: Value) {
@@ -103,7 +103,12 @@ fn main() {
     if a.get(1).map(String::as_str) == Some("self-test") {
         assert_eq!(payload(42, 1, 64), payload(42, 1, 64));
         assert_ne!(payload(42, 1, 64), payload(43, 1, 64));
-        let (v, m) = measure("allocation-control", || vec![7u8; 1048576]);
+        let (v, m) = measure(
+            "instrument control",
+            "in-memory",
+            "allocation-control",
+            || vec![7u8; 1048576],
+        );
         black_box(&v);
         assert!(m["allocation_bytes"].as_u64().unwrap() >= 1048576);
         println!("self-test held");
@@ -145,7 +150,9 @@ fn main() {
                 let d = payload(seed, n + k, size);
                 let accepted = d.len();
                 let history = r.log().to_wire_bytes().unwrap().len();
-                let (_, m) = measure("append", || r.add(r.ticket(), d).unwrap());
+                let (_, m) = measure("OR-Set UTF-8", "durable", "append", || {
+                    r.add(r.ticket(), d).unwrap()
+                });
                 let tx = fs::metadata(root.join("writer-0.transaction"))
                     .unwrap()
                     .len();
@@ -171,6 +178,8 @@ fn main() {
                         })
                         .collect();
                     let (out, m) = measure(
+                        "OR-Set UTF-8",
+                        "durable",
                         if ratio == 100 {
                             "duplicate_batch"
                         } else {
@@ -205,7 +214,7 @@ fn main() {
                     if condition != "warm" {
                         evict(&root.join("writer-0.transaction"));
                     }
-                    let (next, m) = measure("restart", || {
+                    let (next, m) = measure("OR-Set UTF-8", "durable", "restart", || {
                         DurableReplica::restart_utf8_set(root, cfg).unwrap()
                     });
                     assert_eq!(next.state(), &state);
@@ -236,7 +245,9 @@ fn main() {
                 let mut transferred = 0;
                 let mut rounds = 0;
                 while dst.records().len() < n {
-                    let (missing, m) = measure("export", || src.since(dst.version()));
+                    let (missing, m) = measure("OR-Set UTF-8", "in-memory", "export", || {
+                        src.since(dst.version())
+                    });
                     emit(
                         m,
                         json!({"rep":k,"prefix":prefix,"round":rounds,"returned_records":missing.len(),"condition":"warm"}),
@@ -258,7 +269,7 @@ fn main() {
                     }
                     assert!(!chosen.is_empty(), "byte cap must fit one record");
                     let count = chosen.len();
-                    let (_, m) = measure("import", || {
+                    let (_, m) = measure("OR-Set UTF-8", "in-memory", "import", || {
                         for record in chosen {
                             assert_eq!(dst.insert_record(record), Admission::Accepted);
                         }
@@ -292,7 +303,7 @@ fn main() {
             }
             for remove_count in [n / 2, n] {
                 let start = if remove_count == n { n / 2 } else { 0 };
-                let (_, m) = measure("remove", || {
+                let (_, m) = measure("OR-Set UTF-8", "in-memory", "remove", || {
                     for i in start..remove_count {
                         let tokens = state
                             .observed_tokens(&payload(seed, i, size))
@@ -306,18 +317,27 @@ fn main() {
                 let live = state.elements().len();
                 let tomb = state.tombstones().len();
                 let bytes = log.to_wire_bytes().unwrap().len();
-                let (copy, sm) = measure("state_clone_memory", || state.clone());
+                let (copy, sm) = measure("OR-Set UTF-8", "in-memory", "state_clone_memory", || {
+                    state.clone()
+                });
                 black_box(&copy);
                 drop(copy);
-                let (copy, tm) = measure("tombstone_clone_memory", || state.tombstones().clone());
+                let (copy, tm) = measure(
+                    "OR-Set UTF-8",
+                    "in-memory",
+                    "tombstone_clone_memory",
+                    || state.tombstones().clone(),
+                );
                 black_box(&copy);
                 drop(copy);
-                let (copy, lm) = measure("log_clone_memory", || log.clone());
+                let (copy, lm) = measure("OR-Set UTF-8", "in-memory", "log_clone_memory", || {
+                    log.clone()
+                });
                 black_box(&copy);
                 drop(copy);
                 let extra = json!({"rep":k,"condition":"warm","live_entries":live,"retained_adds":state.adds().len(),"tombstones":tomb,"history_records":log.records().len(),"history_encoded_bytes":bytes,"operations":remove_count-start,"state_clone_allocation_bytes":sm["allocation_bytes"],"tombstone_clone_allocation_bytes":tm["allocation_bytes"],"log_clone_allocation_bytes":lm["allocation_bytes"],"encoded_bytes_per_operation":bytes as f64/log.records().len() as f64});
                 emit(m, extra.clone());
-                let (_, m) = measure("query", || {
+                let (_, m) = measure("OR-Set UTF-8", "in-memory", "query", || {
                     for i in 0..n {
                         assert_eq!(
                             black_box(state.contains(&payload(seed, i, size))),
@@ -350,7 +370,7 @@ fn main() {
                 _ => {}
             }
             for k in 0..reps {
-                let (result, m) = measure("decode", || {
+                let (result, m) = measure("OR-Set UTF-8", "in-memory", "decode", || {
                     EventLog::<Delta>::from_wire_bytes_for(&input, &Set::new())
                 });
                 if kind == "large-valid-frame" {
@@ -387,7 +407,7 @@ fn main() {
         for k in 0..reps {
             let tally = (n + k + 1) as u64;
             let history = r.log().to_wire_bytes().unwrap().len();
-            let (_, m) = measure("durable_counter_bump", || {
+            let (_, m) = measure("G-Counter", "durable", "durable_counter_bump", || {
                 r.bump(r.ticket(), tally).unwrap()
             });
             assert!(
