@@ -30,7 +30,7 @@ AUDIT_TRAIL = [
 class LogReplica(Protocol):
     def log_bytes(self) -> bytes: ...
 
-    def merge_log_bytes(self, payload: bytes) -> None: ...
+    def merge_log_bytes(self, payload: bytes) -> list[str]: ...
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,13 @@ def sync_logs(replicas: list[LogReplica]) -> None:
     payloads = [replica.log_bytes() for replica in replicas]
     for replica in replicas:
         for payload in payloads:
-            replica.merge_log_bytes(payload)
+            require_collision_free(replica, payload)
+
+
+def require_collision_free(replica: LogReplica, payload: bytes) -> None:
+    admissions = replica.merge_log_bytes(payload)
+    if "collision" in admissions:
+        raise RuntimeError(f"batch collision after admissions={admissions!r}")
 
 
 def log_digest(replicas: list[LogReplica]) -> str:
@@ -94,8 +100,8 @@ def run_scenario() -> Report:
     audit[0].append_bump(0, 1)
 
     # The courier receives the clinic log, then moves while offline.
-    holder[1].merge_log_bytes(holder[0].log_bytes())
-    audit[1].merge_log_bytes(audit[0].log_bytes())
+    require_collision_free(holder[1], holder[0].log_bytes())
+    require_collision_free(audit[1], audit[0].log_bytes())
     holder[1].append_set(SAMPLE_ID, 20, 2, COURIER)
     audit[1].append_bump(1, 1)
 

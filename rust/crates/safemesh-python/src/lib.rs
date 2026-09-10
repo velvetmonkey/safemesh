@@ -19,6 +19,15 @@ fn encode_bytes<'py>(
         .map_err(|_| pyo3::exceptions::PyValueError::new_err(message))
 }
 
+fn admission_name(admission: safemesh_crdt::Admission) -> String {
+    match admission {
+        safemesh_crdt::Admission::Accepted => "accepted",
+        safemesh_crdt::Admission::Duplicate => "duplicate",
+        safemesh_crdt::Admission::Collision => "collision",
+    }
+    .to_owned()
+}
+
 #[pyclass(name = "GCounter")]
 pub struct PyGCounter {
     inner: GCounter,
@@ -352,7 +361,8 @@ impl PyGCounterReplica {
         Ok(())
     }
 
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
+    /// Return one core admission verdict for every decoded input record.
+    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
         let log = EventLog::<GCounterDelta>::from_wire_bytes_for(bytes, &self.state).map_err(
             |error| {
                 pyo3::exceptions::PyValueError::new_err(match error {
@@ -374,17 +384,17 @@ impl PyGCounterReplica {
                 "counter coordinate out of range or not owned by record author",
             ));
         }
-        for record in log.records().iter().cloned() {
-            if self.log.admit_with(record, |delta| {
-                self.state.apply_delta(delta.clone());
-            }) == safemesh_crdt::Admission::Collision
-            {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "record ID collision",
-                ));
-            }
-        }
-        Ok(())
+        Ok(log
+            .records()
+            .iter()
+            .cloned()
+            .map(|record| {
+                self.log.admit_with(record, |delta| {
+                    self.state.apply_delta(delta.clone());
+                })
+            })
+            .map(admission_name)
+            .collect())
     }
 
     pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
@@ -475,7 +485,8 @@ impl PyEnableWinsFlagReplica {
         Ok(())
     }
 
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
+    /// Return one core admission verdict for every decoded input record.
+    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
         let log = EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes_for(bytes, &self.state)
             .map_err(|error| {
                 pyo3::exceptions::PyValueError::new_err(match error {
@@ -488,17 +499,17 @@ impl PyEnableWinsFlagReplica {
                     _ => "failed to decode event log",
                 })
             })?;
-        for record in log.records().iter().cloned() {
-            if self.log.admit_with(record, |delta| {
-                self.state.apply_delta(delta.clone());
-            }) == safemesh_crdt::Admission::Collision
-            {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "record ID collision",
-                ));
-            }
-        }
-        Ok(())
+        Ok(log
+            .records()
+            .iter()
+            .cloned()
+            .map(|record| {
+                self.log.admit_with(record, |delta| {
+                    self.state.apply_delta(delta.clone());
+                })
+            })
+            .map(admission_name)
+            .collect())
     }
 
     pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
@@ -606,7 +617,8 @@ impl PyLwwMapReplica {
         Ok(())
     }
 
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
+    /// Return one core admission verdict for every decoded input record.
+    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
         let log = EventLog::<LwwMapDelta<u64, u64>>::from_wire_bytes_for(bytes, &self.state)
             .map_err(|error| {
                 pyo3::exceptions::PyValueError::new_err(match error {
@@ -619,17 +631,17 @@ impl PyLwwMapReplica {
                     _ => "failed to decode event log",
                 })
             })?;
-        for record in log.records().iter().cloned() {
-            if self.log.admit_with(record, |delta| {
-                self.state.apply_delta(delta.clone());
-            }) == safemesh_crdt::Admission::Collision
-            {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "record ID collision",
-                ));
-            }
-        }
-        Ok(())
+        Ok(log
+            .records()
+            .iter()
+            .cloned()
+            .map(|record| {
+                self.log.admit_with(record, |delta| {
+                    self.state.apply_delta(delta.clone());
+                })
+            })
+            .map(admission_name)
+            .collect())
     }
 
     pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
@@ -718,7 +730,8 @@ impl PyLwwRegisterReplica {
         Ok(())
     }
 
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
+    /// Return one core admission verdict for every decoded input record.
+    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
         let log = EventLog::<LwwRegisterDelta<u64>>::from_wire_bytes_for(bytes, &self.state)
             .map_err(|error| {
                 pyo3::exceptions::PyValueError::new_err(match error {
@@ -731,17 +744,17 @@ impl PyLwwRegisterReplica {
                     _ => "failed to decode event log",
                 })
             })?;
-        for record in log.records().iter().cloned() {
-            if self.log.admit_with(record, |delta| {
-                self.state.apply_delta(delta.clone());
-            }) == safemesh_crdt::Admission::Collision
-            {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "record ID collision",
-                ));
-            }
-        }
-        Ok(())
+        Ok(log
+            .records()
+            .iter()
+            .cloned()
+            .map(|record| {
+                self.log.admit_with(record, |delta| {
+                    self.state.apply_delta(delta.clone());
+                })
+            })
+            .map(admission_name)
+            .collect())
     }
 
     pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
@@ -1185,7 +1198,7 @@ mod admission_tests {
     use safemesh_crdt::RecordId;
 
     #[test]
-    fn all_replica_bindings_reject_conflicting_records_and_logs() {
+    fn all_replica_bindings_reject_conflicting_records_and_report_log_collisions() {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|_| {
             macro_rules! check {
@@ -1220,9 +1233,12 @@ mod admission_tests {
                         incoming.insert_record(second),
                         safemesh_crdt::Admission::Accepted
                     );
-                    assert!(replica
-                        .merge_log_bytes(&incoming.to_wire_bytes().unwrap())
-                        .is_err());
+                    assert_eq!(
+                        replica
+                            .merge_log_bytes(&incoming.to_wire_bytes().unwrap())
+                            .unwrap(),
+                        vec!["collision"]
+                    );
                     assert_eq!(replica.state, state);
                     assert_eq!(replica.log, log);
                     // Conflicting entries inside a single wire log must not be silently deduped.
@@ -1287,6 +1303,109 @@ mod admission_tests {
                 "../tests/fixtures/map-collision.bin"
             );
         });
+    }
+
+    #[test]
+    fn python_batch_reports_every_admission() {
+        pyo3::prepare_freethreaded_python();
+
+        fn wire(records: impl IntoIterator<Item = Record<GCounterDelta>>) -> Vec<u8> {
+            let mut log = EventLog::with_replica_count(2);
+            for record in records {
+                assert_eq!(
+                    log.insert_record(record),
+                    safemesh_crdt::Admission::Accepted
+                );
+            }
+            log.to_wire_bytes().unwrap()
+        }
+
+        let existing = Record {
+            id: RecordId {
+                replica: 0,
+                sequence: 1,
+            },
+            delta: GCounterDelta {
+                replica: 0,
+                tally: 5,
+            },
+        };
+        let accepted = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 1,
+            },
+            delta: GCounterDelta {
+                replica: 1,
+                tally: 7,
+            },
+        };
+        let collision = Record {
+            id: existing.id,
+            delta: GCounterDelta {
+                replica: 0,
+                tally: 9,
+            },
+        };
+        let after_collision = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 2,
+            },
+            delta: GCounterDelta {
+                replica: 1,
+                tally: 8,
+            },
+        };
+
+        let mut target = PyGCounterReplica::new(0, 2);
+        target
+            .merge_record_bytes(&existing.to_wire_bytes().unwrap())
+            .unwrap();
+        assert_eq!(
+            target.merge_log_bytes(&wire([])).unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(target.state(), vec![5, 0]);
+
+        let mut one = PyGCounterReplica::new(0, 2);
+        assert_eq!(
+            one.merge_log_bytes(&wire([accepted.clone()])).unwrap(),
+            vec!["accepted"]
+        );
+        assert_eq!(one.state(), vec![0, 7]);
+
+        let before = target.state();
+        assert_eq!(
+            target.merge_log_bytes(&wire([collision.clone()])).unwrap(),
+            vec!["collision"]
+        );
+        assert_eq!(target.state(), before);
+
+        target
+            .merge_record_bytes(&accepted.to_wire_bytes().unwrap())
+            .unwrap();
+        let before = target.state();
+        assert_eq!(
+            target
+                .merge_log_bytes(&wire([existing.clone(), accepted.clone()]))
+                .unwrap(),
+            vec!["duplicate", "duplicate"]
+        );
+        assert_eq!(target.state(), before);
+
+        let mut late = PyGCounterReplica::new(0, 2);
+        late.merge_record_bytes(&existing.to_wire_bytes().unwrap())
+            .unwrap();
+        let before = late.state();
+        let admissions = late
+            .merge_log_bytes(&wire([accepted, collision, after_collision]))
+            .unwrap();
+        let after = late.state();
+        println!("PYTHON admissions={admissions:?} before_state={before:?} after_state={after:?}");
+        assert_eq!(admissions, vec!["accepted", "collision", "accepted"]);
+        assert_eq!(before, vec![5, 0]);
+        assert_eq!(after, vec![5, 8]);
     }
 
     #[test]
