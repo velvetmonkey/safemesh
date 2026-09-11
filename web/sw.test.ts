@@ -106,3 +106,146 @@ describe('service worker activation', () => {
     expect(config).toContain('cacheName: `safemesh-pwa-${scopeNamespace(base)}-')
   })
 })
+
+function fetchWorker() {
+  const origin = 'http://lab.example'
+  const key = (input: string | { url: string }) => new URL(typeof input === 'string' ? input : input.url, origin).href
+  const stores = new Map<string, Map<string, Response>>()
+  const writes: Promise<unknown>[] = []
+  let barrier = Promise.resolve()
+  let release: () => void = () => {}
+  const caches = {
+    async open(name: string) {
+      if (!stores.has(name)) stores.set(name, new Map())
+      const entries = stores.get(name)!
+      return {
+        async match(input: string | Request, options?: { ignoreVary?: boolean }) {
+          const response = entries.get(key(input))
+          if (response?.headers.has('vary') && !options?.ignoreVary) return undefined
+          return response?.clone()
+        },
+        put(input: string | Request, response: Response) {
+          const write = barrier.then(() => { entries.set(key(input), response.clone()) })
+          writes.push(write)
+          return write
+        },
+      }
+    },
+    async match(input: string | Request, options?: { cacheName?: string }) {
+      for (const name of options?.cacheName ? [options.cacheName] : stores.keys()) {
+        const response = await (await caches.open(name)).match(input)
+        if (response) return response
+      }
+    },
+  }
+  const listeners: Record<string, (event: unknown) => void> = {}
+  let online = true
+  let body = 'build A'
+  const self = {
+    location: { origin }, registration: { scope: `${origin}/lab/` },
+    addEventListener(type: string, listener: (event: unknown) => void) { listeners[type] = listener },
+  }
+  const requests: string[] = []
+  const fetch = async (request: Request) => {
+    requests.push(request.url)
+    if (!online) throw new Error('offline')
+    const response = new Response(body, { headers: { 'content-type': 'text/html' } })
+    Object.defineProperty(response, 'url', { value: request.url })
+    return response
+  }
+  const build = { cacheName: CURRENT, assets: ['/lab/', '/lab/assets/a.js', '/lab/README.md'] }
+  new Function('self', 'caches', 'fetch', `const BUILD = ${JSON.stringify(build)};\n${source}`)(self, caches, fetch)
+  return {
+    caches, requests, writes,
+    offline() { online = false },
+    body(value: string) { body = value },
+    block() { barrier = new Promise<void>((resolve) => { release = resolve }); return () => release() },
+    dispatch(path: string, mode = 'navigate', method = 'GET') {
+      let response: Promise<Response | undefined> | undefined
+      const lifetime: Promise<unknown>[] = []
+      listeners.fetch({ request: { url: key(path), mode, method },
+        respondWith(promise: Promise<Response | undefined>) { response = promise },
+        waitUntil(promise: Promise<unknown>) { lifetime.push(promise) },
+      })
+      return { response, lifetime, async finish() { await response; await Promise.all(lifetime); await Promise.all(writes) } }
+    },
+  }
+}
+
+describe('service worker fetch ownership', () => {
+  it('defect 1: deep HTML navigation cannot replace the installed shell', async () => {
+    const w = fetchWorker(), cache = await w.caches.open(CURRENT)
+    await cache.put('/lab/', new Response('build A'))
+    w.body('soft 404')
+    await w.dispatch('/lab/missing').finish()
+    expect(await (await cache.match('/lab/'))!.text()).toBe('build A')
+  })
+  it('defect 2: build B navigation cannot enter build A cache', async () => {
+    const w = fetchWorker(), cache = await w.caches.open(CURRENT)
+    await cache.put('/lab/', new Response('build A'))
+    w.body('build B')
+    await w.dispatch('/lab/').finish()
+    w.offline()
+    expect(await (await w.dispatch('/lab/').response)!.text()).toBe('build A')
+  })
+  it('defect 3: neither fallback reads orphan or foreign caches', async () => {
+    const w = fetchWorker(), orphan = await w.caches.open('safemesh-pwa-dev')
+    await orphan.put('/lab/', new Response('wrong shell'))
+    await orphan.put('/lab/data.json', new Response('wrong data'))
+    w.offline()
+    expect.soft(await w.dispatch('/lab/').response).toBeUndefined()
+    expect(await w.dispatch('/lab/data.json', 'cors').response).toBeUndefined()
+  })
+  it('defect 4: every runtime write is covered by the fetch event lifetime', async () => {
+    const w = fetchWorker(), release = w.block()
+    const event = w.dispatch('/lab/data.json', 'cors')
+    await event.response
+    let done = false
+    const lifetime = Promise.all(event.lifetime).then(() => { done = true })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const tracked = w.writes.length > 0 && !done
+    release()
+    await lifetime
+    await event.finish()
+    expect(tracked).toBe(true)
+  })
+  it('keeps ignoreVary for owned unqueried build assets', async () => {
+    const w = fetchWorker()
+    await (await w.caches.open(CURRENT)).put('/lab/assets/a.js', new Response('asset A', { headers: { vary: 'Origin' } }))
+    expect(await (await w.dispatch('/lab/assets/a.js', 'cors').response)!.text()).toBe('asset A')
+    expect(w.requests).toEqual([])
+    await w.dispatch('/lab/assets/a.js?v=1', 'cors').finish()
+    expect(w.requests).toContain('http://lab.example/lab/assets/a.js?v=1')
+  })
+  it('never caches another build asset or a queried asset in this build cache', async () => {
+    const w = fetchWorker(), cache = await w.caches.open(CURRENT)
+    for (const path of ['/lab/assets/b.js', '/lab/assets/a.js?v=1']) {
+      await w.dispatch(path, 'cors').finish()
+      expect(await cache.match(path)).toBeUndefined()
+    }
+  })
+  it('keeps non-navigation cache hits and online refresh', async () => {
+    const w = fetchWorker(), cache = await w.caches.open(CURRENT)
+    await cache.put('/lab/data.json', new Response('cached'))
+    w.body('fresh')
+    const event = w.dispatch('/lab/data.json', 'cors')
+    expect(await (await event.response)!.text()).toBe('cached')
+    await event.finish()
+    expect(await (await cache.match('/lab/data.json'))!.text()).toBe('fresh')
+  })
+  it('does not refresh an installed public file through a non-navigation fetch', async () => {
+    const w = fetchWorker(), cache = await w.caches.open(CURRENT)
+    await cache.put('/lab/README.md', new Response('installed A'))
+    w.body('deployed B')
+    const event = w.dispatch('/lab/README.md', 'cors')
+    expect(await (await event.response)!.text()).toBe('installed A')
+    await event.finish()
+    expect(await (await cache.match('/lab/README.md'))!.text()).toBe('installed A')
+    expect(w.requests).toEqual([])
+  })
+  it('leaves non-GET requests to the browser', () => {
+    const w = fetchWorker()
+    expect(w.dispatch('/lab/data.json', 'cors', 'POST').response).toBeUndefined()
+    expect(w.requests).toEqual([])
+  })
+})

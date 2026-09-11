@@ -67,11 +67,14 @@ export default defineConfig({
         const assets = [...new Set([...shell, ...Object.keys(bundle)].map((name) => base + name))].sort()
         // Version the complete artifact, including public files, with the build's own bytes.
         const hash = createHash('sha256').update(worker)
+        const integrity: Record<string, string> = {}
         for (const asset of assets) {
-          hash.update(asset).update(readFileSync(resolve(outDir, asset.slice(base.length) || 'index.html')))
+          const bytes = readFileSync(resolve(outDir, asset.slice(base.length) || 'index.html'))
+          hash.update(asset).update(bytes)
+          integrity[asset] = `sha256-${createHash('sha256').update(bytes).digest('base64')}`
         }
         // The name must carry the worker's CACHE_PREFIX (web/public/sw.js) or activation never sweeps it.
-        const build = { cacheName: `safemesh-pwa-${scopeNamespace(base)}-${hash.digest('hex')}`, assets }
+        const build = { cacheName: `safemesh-pwa-${scopeNamespace(base)}-${hash.digest('hex')}`, assets, integrity }
         writeFileSync(resolve(outDir, 'sw.js'), `const BUILD = ${JSON.stringify(build)}\n${worker}`)
       },
     },
