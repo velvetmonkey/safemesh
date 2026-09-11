@@ -21,6 +21,12 @@ fn typescript_surface_lists_the_public_binding() {
     assert!(DTS.contains("export class SafeMeshStringOrSetAddEntry"));
     assert!(DTS.contains("export class SafeMeshStringOrSetRecord"));
     assert!(DTS.contains("appendAdd(element: string, token: bigint): Uint8Array"));
+    assert!(DTS.contains(
+        "static createAllocated(writers: bigint, author: bigint): SafeMeshStringOrSetReplica"
+    ));
+    assert!(DTS.contains("appendAllocatedAdd(element: string): Uint8Array"));
+    assert!(DTS.contains("exportIdentity(): Uint8Array"));
+    assert!(DTS.contains("static importIdentity(bytes: Uint8Array): SafeMeshStringOrSetReplica"));
     assert!(DTS.contains("appendRemoveObserved(element: string): Uint8Array"));
     assert!(DTS.contains("mergeRecordBytes(bytes: Uint8Array): \"accepted\" | \"duplicate\""));
     assert!(DTS.contains("elements(): string[]"));
