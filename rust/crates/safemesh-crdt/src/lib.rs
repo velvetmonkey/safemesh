@@ -1115,20 +1115,10 @@ pub struct VersionVector {
     zero_replicas: BTreeSet<u64>,
 }
 
-/// Maximum accepted positive prefix value for one replica in a peer map.
-/// This preserves the peer-map acceptance policy; it does not bound reconstruction
-/// CPU or memory, which grow with the collection sizes.
-/// The caller must bound the number of authors (`r`) and zero acknowledgements
-/// (`z`) before accepting peer input; this constant caps neither.
-/// See [`VersionVector`] for the whole-input time and space costs.
-pub const MAX_PEER_PREFIX: u64 = 1_000_000;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VersionVectorError {
     /// Positive prefixes are canonical; sequence zero belongs in zero_replicas.
     ZeroPrefix { replica: u64 },
-    /// This prefix exceeds the per-replica acceptance limit.
-    PrefixTooLarge { replica: u64, prefix: u64, max: u64 },
 }
 
 impl core::fmt::Display for VersionVectorError {
@@ -1137,14 +1127,6 @@ impl core::fmt::Display for VersionVectorError {
             VersionVectorError::ZeroPrefix { replica } => {
                 write!(f, "replica {replica} has a noncanonical zero prefix")
             }
-            VersionVectorError::PrefixTooLarge {
-                replica,
-                prefix,
-                max,
-            } => write!(
-                f,
-                "replica {replica} prefix {prefix} exceeds reconstruction bound {max}"
-            ),
         }
     }
 }
@@ -1162,8 +1144,15 @@ impl VersionVector {
     /// Reconstruct a vector from a peer's canonical positive prefixes and
     /// independent sequence-zero acknowledgements.
     ///
-    /// [`MAX_PEER_PREFIX`] caps each positive prefix only; callers must bound
-    /// author and zero-acknowledgement counts to bound whole-input work.
+    /// Accepts every positive `u64` prefix, including `u64::MAX`, without
+    /// iterating over sequences. Zero remains noncanonical: use `zero_replicas`.
+    /// Callers must retain three application-owned input limits:
+    /// - author count bounds prefix validation and map cloning;
+    /// - zero-acknowledgement count bounds set cloning;
+    /// - encoded byte size, enforced before decoding, bounds input allocation
+    ///   and parsing (including duplicate entries before collection deduplication).
+    /// No built-in version wire codec or universal application budget is imposed.
+    /// Reconstruction takes O(entries.len() + zero_replicas.len()) time and space.
     pub fn from_peer_prefixes(
         entries: &BTreeMap<u64, u64>,
         zero_replicas: &BTreeSet<u64>,
@@ -1171,13 +1160,6 @@ impl VersionVector {
         for (&replica, &prefix) in entries {
             if prefix == 0 {
                 return Err(VersionVectorError::ZeroPrefix { replica });
-            }
-            if prefix > MAX_PEER_PREFIX {
-                return Err(VersionVectorError::PrefixTooLarge {
-                    replica,
-                    prefix,
-                    max: MAX_PEER_PREFIX,
-                });
             }
         }
 
@@ -2878,8 +2860,10 @@ mod version_vector_tests {
     fn large_peer_prefixes_are_copied_directly() {
         for (authors, prefix) in [
             (1024, 1000),
-            (1024, MAX_PEER_PREFIX),
-            (2048, MAX_PEER_PREFIX),
+            (1024, 1_000_000),
+            (1024, u64::MAX),
+            (2048, 1_000_000),
+            (2048, u64::MAX),
         ] {
             let entries = (0..authors).map(|r| (r, prefix)).collect();
             let zeros = (0..authors).collect();
@@ -2892,7 +2876,7 @@ mod version_vector_tests {
     use super::*;
 
     #[test]
-    fn planted_zero_acknowledgements_exceed_per_replica_prefix_cap() {
+    fn large_zero_acknowledgement_set_is_copied_directly() {
         let zeros: BTreeSet<u64> = (0..=1_000_000).collect();
         let vector = VersionVector::from_peer_prefixes(&BTreeMap::new(), &zeros).unwrap();
         assert_eq!(vector.zero_replicas().len(), 1_000_001);
@@ -2911,16 +2895,85 @@ mod version_vector_tests {
     }
 
     #[test]
-    fn planted_unbounded_prefix_is_rejected() {
-        let entries = BTreeMap::from([(7, MAX_PEER_PREFIX + 1)]);
-        let zeros = BTreeSet::new();
+    fn all_positive_u64_prefixes_are_accepted() {
+        for prefix in [1, 999_999, 1_000_000, 1_000_001, u64::MAX - 1, u64::MAX] {
+            let entries = BTreeMap::from([(0, prefix)]);
+            let zeros = BTreeSet::from([0]);
+            let vector = VersionVector::from_peer_prefixes(&entries, &zeros).unwrap();
+            assert_eq!(vector.entries(), &entries);
+            assert_eq!(vector.zero_replicas(), &zeros);
+            assert!(vector.includes(RecordId {
+                replica: 0,
+                sequence: prefix
+            }));
+        }
+    }
+
+    #[test]
+    fn million_plus_one_record_log_version_is_reconstructible() {
+        let mut log = EventLog::new();
+        for sequence in 1..=1_000_001 {
+            assert_eq!(
+                log.append(0, sequence),
+                RecordId {
+                    replica: 0,
+                    sequence
+                }
+            );
+        }
+        assert_eq!(log.records().len(), 1_000_001);
+        assert_eq!(log.version().get(0), 1_000_001);
+        let rebuilt = VersionVector::from_peer_prefixes(
+            log.version().entries(),
+            log.version().zero_replicas(),
+        )
+        .unwrap();
+        assert_eq!(&rebuilt, log.version());
+        assert!(log.since(&rebuilt).is_empty());
+    }
+
+    #[test]
+    fn terminal_log_prefix_is_reconstructible_without_overflow() {
+        let mut log = EventLog::new();
+        // Seed the boundary; materializing all 2^64 - 1 records is infeasible.
+        // This exercises the terminal transition, not a full retained history.
+        log.version.set(0, u64::MAX - 1);
+        let last = RecordId {
+            replica: 0,
+            sequence: u64::MAX,
+        };
         assert_eq!(
-            VersionVector::from_peer_prefixes(&entries, &zeros),
-            Err(VersionVectorError::PrefixTooLarge {
-                replica: 7,
-                prefix: MAX_PEER_PREFIX + 1,
-                max: MAX_PEER_PREFIX,
-            })
+            log.insert_record(Record {
+                id: last,
+                delta: 7u64
+            }),
+            Admission::Accepted
+        );
+        assert_eq!(log.version().get(0), u64::MAX);
+        let mut rebuilt = VersionVector::from_peer_prefixes(
+            log.version().entries(),
+            log.version().zero_replicas(),
+        )
+        .unwrap();
+        assert_eq!(&rebuilt, log.version());
+        assert!(rebuilt.includes(last));
+        assert!(log.since(&rebuilt).is_empty());
+        assert!(!rebuilt.includes(RecordId {
+            replica: 0,
+            sequence: 0
+        }));
+        rebuilt.observe(RecordId {
+            replica: 0,
+            sequence: 0,
+        });
+        assert_eq!(rebuilt.get(0), u64::MAX);
+        assert!(rebuilt.includes(RecordId {
+            replica: 0,
+            sequence: 0
+        }));
+        assert_eq!(
+            log.append_with(0, 8, |_| {}),
+            Err(AppendError::SequenceExhausted)
         );
     }
 
@@ -2930,7 +2983,7 @@ mod version_vector_tests {
             (BTreeMap::new(), BTreeSet::new()),
             (BTreeMap::from([(1, 1)]), BTreeSet::new()),
             (BTreeMap::new(), BTreeSet::from([2])),
-            (BTreeMap::from([(3, MAX_PEER_PREFIX)]), BTreeSet::new()),
+            (BTreeMap::from([(3, 1_000_000)]), BTreeSet::new()),
             (BTreeMap::from([(4, 2)]), BTreeSet::from([4, 5])),
             (BTreeMap::from([(0, 1)]), BTreeSet::new()),
             (BTreeMap::from([(u64::MAX, 3)]), BTreeSet::new()),
@@ -2941,10 +2994,10 @@ mod version_vector_tests {
             (BTreeMap::from([(0, 5)]), BTreeSet::from([0])),
             (BTreeMap::new(), BTreeSet::from([0, u64::MAX])),
             (
-                BTreeMap::from([(11, MAX_PEER_PREFIX), (12, MAX_PEER_PREFIX)]),
+                BTreeMap::from([(11, 1_000_000), (12, 1_000_000)]),
                 BTreeSet::new(),
             ),
-            (BTreeMap::from([(8, MAX_PEER_PREFIX - 1)]), BTreeSet::new()),
+            (BTreeMap::from([(8, 1_000_000 - 1)]), BTreeSet::new()),
             (BTreeMap::from([(1, 4), (3, 2)]), BTreeSet::from([2, 9])),
             (BTreeMap::from([(1, 2), (1, 4)]), BTreeSet::new()),
         ];
@@ -3013,17 +3066,7 @@ mod version_vector_tests {
         let remote_version =
             VersionVector::from_peer_prefixes(&BTreeMap::from([(7, 1)]), &BTreeSet::new()).unwrap();
         let before = local.since(&remote_version);
-        for (prefix, error) in [
-            (0, VersionVectorError::ZeroPrefix { replica: 7 }),
-            (
-                MAX_PEER_PREFIX + 1,
-                VersionVectorError::PrefixTooLarge {
-                    replica: 7,
-                    prefix: MAX_PEER_PREFIX + 1,
-                    max: MAX_PEER_PREFIX,
-                },
-            ),
-        ] {
+        for (prefix, error) in [(0, VersionVectorError::ZeroPrefix { replica: 7 })] {
             assert_eq!(
                 VersionVector::from_peer_prefixes(&BTreeMap::from([(7, prefix)]), &BTreeSet::new()),
                 Err(error)
@@ -3081,11 +3124,9 @@ mod version_vector_tests {
                 .unwrap();
         assert_eq!(local.since(&peer).len(), 4);
 
-        let malicious = VersionVector::from_peer_prefixes(
-            &BTreeMap::from([(1, MAX_PEER_PREFIX)]),
-            &BTreeSet::new(),
-        )
-        .unwrap();
+        let malicious =
+            VersionVector::from_peer_prefixes(&BTreeMap::from([(1, u64::MAX)]), &BTreeSet::new())
+                .unwrap();
         let mut transport = InMemoryTransport::new();
         transport.subscribe(1);
         transport.subscribe(2);
