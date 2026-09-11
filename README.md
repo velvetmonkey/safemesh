@@ -1,5 +1,8 @@
 <p align="center"><img src="assets/safemesh-logo.png" width="300" alt="SafeMesh"></p>
 
+**v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](https://velvetmonkey.github.io/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
+
+
 # SafeMesh
 
 [![SafeMesh CI](https://github.com/velvetmonkey/safemesh/actions/workflows/ci.yml/badge.svg)](https://github.com/velvetmonkey/safemesh/actions/workflows/ci.yml)
@@ -15,6 +18,10 @@ API present: SafeMesh v0.1 exposes one Rust core through Rust, C ABI, WASM/TypeS
 You bring the transport and application schema. SafeMesh gives you flat CRDT carriers, append/merge/since event-log plumbing, canonical bytes, and packaging smoke tests that keep the proof bridge visible in CI.
 
 Honest claim map: `CLAIMS.md`, `WHAT-IS-PROVEN.md`, and `ARCHITECTURE.md`.
+
+For contributors: the Cargo workspace lives in `rust/`. From the clone root,
+run `cd rust` before `cargo test`; bare `cargo test` at the clone root fails because
+there is no root `Cargo.toml`. Commands with `--manifest-path` name their own workspace.
 
 ## Persist, restore, partition and reconcile (Rust and TypeScript/Node)
 

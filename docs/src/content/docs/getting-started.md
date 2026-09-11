@@ -3,6 +3,9 @@ title: Getting started — main (unreleased)
 description: Add SafeMesh to a Rust or TypeScript program, save an edit, restart and sync a second replica.
 ---
 
+**v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
+
+
 Build a small field kit: an observation counter and a membership set. Save `3` and
 `compass`, exit the process, restore them, then make independent edits and exchange
 bytes with a second replica. The final count is `6`; membership is `compass`, `map`,
@@ -104,6 +107,105 @@ unchanged. Reject that input and inspect the sender/framing; do not apply its
 payload or reset your store.
 
 Read the [complete Rust source and storage boundary](/safemesh/using-safemesh/#rust).
+
+## Diagnose a failed Rust exercise
+
+The fixture uses `expect`/`unwrap`, so failures appear as a Rust panic (exit 101).
+`AlreadyExists` on a second `persist` means the exercise store already exists:
+keep it and run `restart` with its original writer configuration, or use a fresh
+checkout for a separate exercise. Never reset an existing writer's fence/history.
+`History(UnexpectedEof)` on restart means the stored transaction is truncated or
+incomplete. Retain the damaged store for inspection; restart does not salvage a
+torn record. Investigate the failed write/transfer and recover only from a known
+consistent history with its original identity and allocation metadata. Do not
+initialize over the damaged store. These are tested engineering outcomes, not
+proofs of crash safety. See the [recovery evidence](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md).
+
+## Predict, then run: a concurrent add and remove
+
+Predict whether `milk` remains after one replica removes its observed token while
+another adds `milk` with a fresh token. Then replace the Rust gold-path fixture's
+`examples/gold-path/rust/src/main.rs` in your disposable checkout with this complete
+program. Run it from the checkout root with
+`cargo run --quiet --locked --manifest-path examples/gold-path/rust/Cargo.toml`.
+It uses the same supported OR-Set carrier without touching the exercise stores.
+
+```rust
+use safemesh_crdt::OrSet;
+
+fn main() {
+    let mut left = OrSet::<String, u64>::new();
+    let milk = "milk".to_owned();
+    left.add(milk.clone(), 100);
+    let mut right = left.clone();
+    right.apply_remove(right.observed_tokens(&milk));
+    left.add(milk.clone(), 201);
+    left.merge(&right);
+    right.merge(&left);
+    assert!(left.contains(&milk) && right.contains(&milk));
+    assert_eq!(left.elements(), right.elements());
+    println!("milk remains=true; observed token removed, fresh token survives");
+}
+```
+
+Output:
+
+```text
+milk remains=true; observed token removed, fresh token survives
+```
+
+Token `100` was observed and removed; concurrent token `201` survives. Tokens here
+are fixed for this one-shot example. A real mutable writer must allocate unique
+tokens and preserve identity/allocation on restart as described in the
+[OR-Set lifecycle guide](/safemesh/using-safemesh/#rust).
+
+## Decrement with supported types
+
+PN-Counter is **experimental** in v0. Use two supported G-Counters for stock:
+one totals additions and the other totals removals. Replace the same disposable
+fixture's `src/main.rs` with this program and run the same Cargo command above.
+Each writer owns a distinct coordinate; each bump is its cumulative tally, not
+an increment amount. Merge both counters, including after offline edits.
+
+```rust
+use safemesh_crdt::GCounter;
+
+fn main() {
+    let mut added_a = GCounter::new(2);
+    let mut removed_a = GCounter::new(2);
+    added_a.try_apply_bump(0, 10).unwrap();
+    let mut added_b = added_a.clone();
+    let mut removed_b = removed_a.clone();
+    removed_a.try_apply_bump(0, 3).unwrap();
+    added_b.try_apply_bump(1, 2).unwrap();
+    removed_b.try_apply_bump(1, 1).unwrap();
+    added_a.try_merge(&added_b).unwrap();
+    removed_a.try_merge(&removed_b).unwrap();
+    added_b.try_merge(&added_a).unwrap();
+    removed_b.try_merge(&removed_a).unwrap();
+    assert_eq!(added_a.state(), added_b.state());
+    assert_eq!(removed_a.state(), removed_b.state());
+    // Checked conversion/subtraction: counter totals themselves are u128.
+    let stock = i128::try_from(added_a.value()).unwrap()
+        .checked_sub(i128::try_from(removed_a.value()).unwrap()).unwrap();
+    assert_eq!(stock, 8);
+    println!("added={} removed={} stock={stock}", added_a.value(), removed_a.value());
+}
+```
+
+Output:
+
+```text
+added=12 removed=4 stock=8
+```
+
+This demonstrates supported carrier semantics, not a proven inventory schema.
+Persist and exchange both totals; two durable stores do not commit atomically.
+Keyed stock, membership policy, overflow handling and nonnegative-stock enforcement
+remain application responsibilities. Offline decrements can oversell: convergence
+does not enforce a global availability constraint. PN/custom durable restart is
+outside v0; Rust's Linux durable paths cover G-Counter and UTF-8 OR-Set only.
+Restore the original fixture source before running its `persist`/`restart` journey again.
 
 ## TypeScript gold path (Node)
 

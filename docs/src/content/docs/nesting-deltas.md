@@ -3,6 +3,9 @@ title: Nesting deltas in your own record
 description: A compiled Rust composition pattern using public wire APIs and named decode errors.
 ---
 
+**v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
+
+
 SafeMesh's Rust crate floor for consumers is **Rust 1.89**. For the source builds,
 demos and locked wasm-pack 0.15.0 installation on this page, use **Rust 1.96.1**,
 the full-gate CI version. Install rustup first (Linux/Bash, with curl and a native

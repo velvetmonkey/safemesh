@@ -3,7 +3,20 @@ title: When not to use SafeMesh — main (unreleased)
 description: Decide whether the semantics and assurance boundary fit your application.
 ---
 
+**v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
+
+
 This guide follows **main (unreleased)**. Use it with the [claims ceiling](/safemesh/claims/), not as a release support policy.
+
+## A shopping list versus a bank ledger
+
+An offline shared shopping list fits OR-Set's supported add-wins membership semantics:
+a concurrent fresh add survives an observed remove. A bank ledger that must never
+accept an unauthorised transfer needs application authorisation and coordination
+of its financial invariants. SafeMesh convergence supplies neither transfer
+authorisation nor a no-overdraft guarantee; equal merged state does not mean a
+transfer was permitted. Paired counters can represent stock changes, but cannot
+prevent concurrent offline decrements from overselling.
 
 ## You need guaranteed delivery
 
@@ -27,7 +40,7 @@ The universal results are about Lean definitions. Rust is checked against a fini
 
 ## You need a map of PN-counters
 
-There is no built-in map of PN-counters keyed by SKU names. `LwwMap` chooses a winning value; using it for a stock total loses concurrent increments. A caller can define an application `Crdt` containing a `BTreeMap<String, PnCounter>`, with per-key deltas, consistent replica arity and explicit key creation/removal rules, then supply its wire schema and codecs. Alternatively, keep separate PN-counter logs per stable SKU and route them in the application. Neither composition inherits a SafeMesh proof. Evidence: [`PnCounter`](/safemesh/reference/rust/safemesh_crdt/struct.PnCounter.html), [`LwwMap`](/safemesh/reference/rust/safemesh_crdt/struct.LwwMap.html), and the extension contract [`Crdt`](/safemesh/reference/rust/safemesh_crdt/trait.Crdt.html).
+PN-Counter is **experimental** in v0. Prefer [paired supported G-Counters](/safemesh/getting-started/#decrement-with-supported-types) for added/removed totals, optionally with an OR-Set for membership. The keyed schema and its consistency rules remain application-owned. There is no built-in map of PN-counters keyed by SKU names. `LwwMap` chooses a winning value; using it for a stock total loses concurrent increments. A caller can define an application `Crdt` containing a `BTreeMap<String, PnCounter>`, with per-key deltas, consistent replica arity and explicit key creation/removal rules, then supply its wire schema and codecs. Alternatively, keep separate PN-counter logs per stable SKU and route them in the application. Neither composition inherits a SafeMesh proof. Evidence: [`PnCounter`](/safemesh/reference/rust/safemesh_crdt/struct.PnCounter.html), [`LwwMap`](/safemesh/reference/rust/safemesh_crdt/struct.LwwMap.html), and the extension contract [`Crdt`](/safemesh/reference/rust/safemesh_crdt/trait.Crdt.html).
 
 ## You need durable restart for a custom CRDT
 

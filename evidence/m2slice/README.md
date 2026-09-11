@@ -1,5 +1,8 @@
 # M2 public API journey
 
+**v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](https://velvetmonkey.github.io/safemesh/#v0-support).
+
+
 ## Durable walk: rerun refusal and recovery
 
 For the Linux `--features local-writer` journey, follow the

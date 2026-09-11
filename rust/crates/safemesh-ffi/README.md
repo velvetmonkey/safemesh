@@ -1,5 +1,8 @@
 # SafeMesh FFI
 
+**v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](https://velvetmonkey.github.io/safemesh/#v0-support).
+
+
 SafeMesh's Rust crate floor for consumers is **Rust 1.89**. For the source builds,
 demos and locked wasm-pack 0.15.0 installation on this page, use **Rust 1.96.1**,
 the full-gate CI version. Install rustup first (Linux/Bash, with curl and a native

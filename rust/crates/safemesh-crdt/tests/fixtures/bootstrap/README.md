@@ -1,5 +1,8 @@
 # Unreleased bootstrap preservation
 
+**v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](https://velvetmonkey.github.io/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
+
+
 Generating source: `3a9179b0cd98ae7e5c6803a6de014416320929ba`.
 Measured crate version: `safemesh-crdt 0.1.0`; this is not a published release.
 No support promise is made. Existing old-zero and collision fixtures remain separate.

@@ -1,5 +1,8 @@
 # Rust record admission
 
+**v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](https://velvetmonkey.github.io/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
+
+
 Base: `origin/main` = `437cb52dc233ff144e987b10543a82eb2864021a`.
 Worktree branch: `agent/recordadmit`.
 Specification read: `agent/record-kernel-r2:lean/SafeMesh/RecordKernel.lean`, especially `outcome`, `step`, and `RUST OBLIGATION`. This is Rust regression evidence, not a Lean proof of Rust or a claim that the specification's other divergences have been discharged. No Lean build was run.

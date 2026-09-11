@@ -3,6 +3,9 @@ title: Using SafeMesh in your code — main (unreleased)
 description: Rust, C ABI, WASM/TypeScript and Python integration, with transport and persistence responsibilities.
 ---
 
+**v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
+
+
 SafeMesh's Rust crate floor for consumers is **Rust 1.89**. For the source builds,
 demos and locked wasm-pack 0.15.0 installation on this page, use **Rust 1.96.1**,
 the full-gate CI version. Install rustup first (Linux/Bash, with curl and a native
@@ -216,6 +219,11 @@ safemesh-crdt = { git = "https://github.com/velvetmonkey/safemesh.git", rev = "6
 ```
 
 The pinned rev `6172d7ad` is older than current `main` and the gold path, which uses the current checkout.
+This is a historical, reproducible G-Counter example. The site's generated rustdoc
+uses the site's build commit and can describe APIs absent from this pin. For the
+canonical current-source install and matching APIs, follow [Getting started](https://velvetmonkey.github.io/safemesh/getting-started/)
+and its checkout-local path dependency. Do not mix the historical dependency with
+current-main API examples; keep the checkout and generated reference at the same commit.
 
 
 The full `rev` pins the source used by these examples: an unpinned Git dependency can resolve to newer main on a fresh resolution or update. Keep the application's `Cargo.lock` too. This is unreleased source, not a registry install.
