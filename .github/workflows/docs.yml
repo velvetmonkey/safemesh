@@ -57,6 +57,8 @@ jobs:
         run: |
           npm --prefix docs ci
           npm --prefix web ci
+      - name: Run Rust and compiled TypeScript first-use fixtures and check documentation drift
+        run: python3 scripts/check-gold-paths.py
       - name: Build documentation, search and the Lab at the deployment address
         run: npm --prefix docs run build:site
       - name: Crawl built pages, assets, anchors and external links

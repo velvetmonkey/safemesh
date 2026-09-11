@@ -1,0 +1,7 @@
+rust/target/
+typescript/node_modules/
+typescript/pkg/
+typescript/main.js
+.gold-rust/
+.gold-typescript/
+.checks/
