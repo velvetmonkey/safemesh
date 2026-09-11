@@ -20,10 +20,13 @@ C compiler/linker. The TypeScript path also needs Node.js and npm. The measured
 versions and exclusions are in [environments run](#environments-run). No Lean is
 needed. The first build downloads build dependencies and may take several minutes.
 
-Obtain the source in an empty working directory:
+While [PR 87](https://github.com/velvetmonkey/safemesh/pull/87) is draft,
+these fixtures live on its `lane/smgoldpath` preview branch. The default clone
+selects main, which does not yet contain them. Obtain the preview source in an
+empty working directory:
 
 ```sh
-git clone https://github.com/velvetmonkey/safemesh.git
+git clone --branch lane/smgoldpath https://github.com/velvetmonkey/safemesh.git
 cd safemesh
 ```
 
