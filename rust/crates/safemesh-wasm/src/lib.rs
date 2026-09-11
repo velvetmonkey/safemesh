@@ -1002,8 +1002,9 @@ impl SafeMeshStringOrSetRecord {
 /// event log so records can be replayed, deduplicated and repaired from a log.
 ///
 /// Every value is computed by `safemesh_crdt::OrSet<String, u64>` and
-/// `safemesh_crdt::EventLog`; this type only moves bytes and values across the
-/// boundary. Tokens are global to the set, exactly as in `SafeMeshOrSet`.
+/// `safemesh_crdt::EventLog`. The optional allocated lifecycle checks ownership
+/// and holds a live-author claim within this WASM instance. Tokens remain global
+/// to the set, exactly as in `SafeMeshOrSet`.
 #[wasm_bindgen]
 pub struct SafeMeshStringOrSetReplica {
     replica_id: u64,
