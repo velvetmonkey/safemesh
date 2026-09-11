@@ -125,14 +125,18 @@ export function bumpCounter(sim: Simulation, peerId: number): Simulation {
   if (!peer) return sim
   const tally = peer.localTally + 1
   const replica = replicaFor(peer, sim.peers.length)
-  const bytes = replica.appendBump(peerId, BigInt(tally))
-  return emitDelta(
-    sim,
-    peerId,
-    { kind: 'gcounter.bump', replica: peerId, tally, bytes, payload: 'record' },
-    `Camp ${peerId} increases headcount to ${tally}`,
-    `peer ${peerId} bumps G-Counter to ${tally}`,
-  )
+  try {
+    const bytes = replica.appendBump(peerId, BigInt(tally))
+    return emitDelta(
+      sim,
+      peerId,
+      { kind: 'gcounter.bump', replica: peerId, tally, bytes, payload: 'record' },
+      `Camp ${peerId} increases headcount to ${tally}`,
+      `peer ${peerId} bumps G-Counter to ${tally}`,
+    )
+  } finally {
+    replica.free()
+  }
 }
 
 export function addElement(sim: Simulation, peerId: number, element: string): Simulation {
@@ -160,18 +164,18 @@ export function removeElement(sim: Simulation, peerId: number, element: string):
   const peer = sim.peers[peerId]
   if (!peer) return sim
   const replica = orsetReplicaFor(peer)
-  const tokens = Array.from(replica.observedTokens(element))
-  if (tokens.length === 0) {
-    replica.free()
-    return appendLog(
-      sim,
-      `Camp ${peerId} cannot remove '${element}' because it has not seen it`,
-      'drop',
-      `peer ${peerId} remove skipped; "${element}" is not observed`,
-    )
-  }
+  let tokens: bigint[]
   let bytes: Uint8Array
   try {
+    tokens = Array.from(replica.observedTokens(element))
+    if (tokens.length === 0) {
+      return appendLog(
+        sim,
+        `Camp ${peerId} cannot remove '${element}' because it has not seen it`,
+        'drop',
+        `peer ${peerId} remove skipped; "${element}" is not observed`,
+      )
+    }
     bytes = replica.appendRemoveObserved(element)
   } finally {
     replica.free()
@@ -232,29 +236,47 @@ export function convergence(sim: Simulation): {
     return { converged: true, sameRawState: true, sameReads: true, rawStateMatches: [], readMatches: [], gcounterValue: 0, gcounterValues: [], orsetElements: [] }
   }
 
-  const firstReplica = replicaFor(first, sim.peers.length)
-  const rawStateMatches = sim.peers.map(
-    (peer) => replicaFor(peer, sim.peers.length).sameStateAs(firstReplica) && orsetStateKey(peer) === orsetStateKey(first),
-  )
-  const sameRawState = rawStateMatches.every(Boolean)
-  const firstGRead = counterNumber(firstReplica.value())
-  const firstORead = JSON.stringify(readORSet(first.orset))
-  const readMatches = sim.peers.map(
-    (peer) => counterNumber(replicaFor(peer, sim.peers.length).value()) === firstGRead && JSON.stringify(readORSet(peer.orset)) === firstORead,
-  )
-  const sameReads = readMatches.every(Boolean)
-
-  return {
-    converged: sameRawState && sim.queue.length === 0,
-    sameRawState,
-    sameReads,
-    rawStateMatches,
-    readMatches,
-    gcounterValue: firstGRead,
-    gcounterValues: sim.peers.map((peer) => counterNumber(replicaFor(peer, sim.peers.length).value())),
-    orsetElements: readORSet(first.orset),
+  let comparison = carrierComparisons.get(sim.peers)
+  if (!comparison) {
+    const counters: SafeMeshGCounterReplica[] = []
+    try {
+      for (const peer of sim.peers) counters.push(replicaFor(peer, sim.peers.length))
+      const firstReplica = counters[0]
+      const sets = sim.peers.map((peer) => orsetComparison(peer, sim.peers.length))
+      const firstOState = sets[0].key
+      const orsetElements = sets[0].elements
+      const firstORead = JSON.stringify(orsetElements)
+      const gcounterValues = counters.map((counter) => counterNumber(counter.value()))
+      const rawStateMatches = sim.peers.map((_, index) =>
+        counters[index].sameStateAs(firstReplica) && sets[index].key === firstOState,
+      )
+      const readMatches = sim.peers.map((_, index) =>
+        gcounterValues[index] === gcounterValues[0] && JSON.stringify(sets[index].elements) === firstORead,
+      )
+      comparison = {
+        sameRawState: rawStateMatches.every(Boolean),
+        sameReads: readMatches.every(Boolean),
+        rawStateMatches,
+        readMatches,
+        gcounterValue: gcounterValues[0],
+        gcounterValues,
+        orsetElements,
+      }
+      const counterVersions = counters.map((counter) => versionKey(counter, sim.peers.length))
+      if (counterVersions.every((key) => key === counterVersions[0]) &&
+        sets.every((set) => set.versions === sets[0].versions)) repairComplete.add(sim.peers)
+      carrierComparisons.set(sim.peers, comparison)
+    } finally {
+      for (const counter of counters) counter.free()
+    }
   }
+  return { ...comparison, converged: comparison.sameRawState && sim.queue.length === 0 }
 }
+
+// Peer arrays and their carriers are immutable. Clock and queue changes reuse them;
+// delivery replaces the array, invalidating comparisons on the same tick.
+const carrierComparisons = new WeakMap<Peer[], Omit<ReturnType<typeof convergence>, 'converged'>>()
+const repairComplete = new WeakSet<Peer[]>()
 
 export function runAntiEntropyNow(sim: Simulation): Simulation {
   return runAntiEntropy(sim)
@@ -421,9 +443,13 @@ function deliverPacket(sim: Simulation, packet: Packet): Simulation {
 function applyDeltaToPeer(peer: Peer, delta: MeshDelta): Peer {
   if (delta.kind === 'gcounter.bump') {
     const counter = replicaFor(peer, peer.gcounter.length)
-    if (delta.payload === 'record') counter.mergeRecordBytes(delta.bytes)
-    else mergeLogBytes(counter, delta.bytes)
-    return snapshotGCounterPeer(peer, counter)
+    try {
+      if (delta.payload === 'record') counter.mergeRecordBytes(delta.bytes)
+      else mergeLogBytes(counter, delta.bytes)
+      return snapshotGCounterPeer(peer, counter)
+    } finally {
+      counter.free()
+    }
   }
   const replica = orsetReplicaFor(peer)
   try {
@@ -451,6 +477,13 @@ function runAntiEntropy(sim: Simulation): Simulation {
     nextAntiEntropyAt: sim.antiEntropyMs > 0 ? sim.now + sim.antiEntropyMs : Number.POSITIVE_INFINITY,
   }
   let mergedAny = false
+  // Equal displayed/carrier states can still have different record histories.
+  // Matching core version vectors (cached by convergence), or identical logs,
+  // prove there is no backfill work without reconstructing native handles.
+  const [first] = peers
+  if (repairComplete.has(peers) || !first || peers.every((peer) =>
+    sameBytes(peer.gcounterLog, first.gcounterLog) && sameBytes(peer.orset, first.orset),
+  )) return next
 
   for (let i = 0; i < peers.length; i += 1) {
     for (let j = i + 1; j < peers.length; j += 1) {
@@ -463,27 +496,36 @@ function runAntiEntropy(sim: Simulation): Simulation {
       mergedAny = true
 
       const leftCounter = replicaFor(left, peers.length)
-      const rightCounter = replicaFor(right, peers.length)
-      mergeLogBytes(leftCounter, rightCounter.logBytes())
-      mergeLogBytes(rightCounter, leftCounter.logBytes())
-      const leftSet = orsetReplicaFor(left)
-      const rightSet = orsetReplicaFor(right)
-      let leftLog: Uint8Array
-      let rightLog: Uint8Array
       try {
-        mergeLogBytes(leftSet, rightSet.logBytes())
-        mergeLogBytes(rightSet, leftSet.logBytes())
-        leftLog = leftSet.logBytes()
-        rightLog = rightSet.logBytes()
+        const rightCounter = replicaFor(right, peers.length)
+        try {
+          mergeLogBytes(leftCounter, rightCounter.logBytes())
+          mergeLogBytes(rightCounter, leftCounter.logBytes())
+          const leftSet = orsetReplicaFor(left)
+          let rightSet: SafeMeshStringOrSetReplica | undefined
+          let leftLog: Uint8Array
+          let rightLog: Uint8Array
+          try {
+            rightSet = orsetReplicaFor(right)
+            mergeLogBytes(leftSet, rightSet.logBytes())
+            mergeLogBytes(rightSet, leftSet.logBytes())
+            leftLog = leftSet.logBytes()
+            rightLog = rightSet.logBytes()
+          } finally {
+            leftSet.free()
+            rightSet?.free()
+          }
+          peers = peers.map((peer) => {
+            if (peer.id === left.id) return normalizePeer({ ...snapshotGCounterPeer(left, leftCounter), orset: leftLog })
+            if (peer.id === right.id) return normalizePeer({ ...snapshotGCounterPeer(right, rightCounter), orset: rightLog })
+            return peer
+          })
+        } finally {
+          rightCounter.free()
+        }
       } finally {
-        leftSet.free()
-        rightSet.free()
+        leftCounter.free()
       }
-      peers = peers.map((peer) => {
-        if (peer.id === left.id) return normalizePeer({ ...snapshotGCounterPeer(left, leftCounter), orset: leftLog })
-        if (peer.id === right.id) return normalizePeer({ ...snapshotGCounterPeer(right, rightCounter), orset: rightLog })
-        return peer
-      })
 
       for (const item of rightToLeft) {
         next = appendLog(
@@ -504,11 +546,16 @@ function runAntiEntropy(sim: Simulation): Simulation {
     }
   }
 
+  if (!mergedAny) repairComplete.add(peers)
   return {
     ...next,
     peers,
     lastAntiEntropyAt: mergedAny ? sim.now : sim.lastAntiEntropyAt,
   }
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return left.length === right.length && left.every((byte, index) => byte === right[index])
 }
 
 function nextPacketIndex(queue: Packet[]): number {
@@ -529,28 +576,36 @@ function buildAntiEntropyPackets(sim: Simulation): { packets: Packet[]; nextId: 
     for (const source of sim.peers) {
       if (source.id === target.id) continue
       const sourceCounter = replicaFor(source, sim.peers.length)
-      const targetCounter = replicaFor(target, sim.peers.length)
-      const hasMissingRecords = Array.from({ length: sim.peers.length }, (_, replica) =>
-        sourceCounter.versionFor(BigInt(replica)) > targetCounter.versionFor(BigInt(replica)),
-      ).some(Boolean)
-      if (!hasMissingRecords) continue
-      packets.push({
-        id: `r${nextId}-${repairIndex}`,
-        from: source.id,
-        to: target.id,
-        delta: {
-          kind: 'gcounter.bump',
-          replica: source.id,
-          tally: counterNumber(sourceCounter.value()),
-          bytes: sourceCounter.logBytes(),
-          payload: 'log',
-        },
-        sentAt: sim.now,
-        deliverAt: sim.now + sim.latencyMs + 160 + repairIndex * 210,
-        phase: 'repair',
-      })
-      nextId += 1
-      repairIndex += 1
+      try {
+        const targetCounter = replicaFor(target, sim.peers.length)
+        try {
+          const hasMissingRecords = Array.from({ length: sim.peers.length }, (_, replica) =>
+            sourceCounter.versionFor(BigInt(replica)) > targetCounter.versionFor(BigInt(replica)),
+          ).some(Boolean)
+          if (!hasMissingRecords) continue
+          packets.push({
+            id: `r${nextId}-${repairIndex}`,
+            from: source.id,
+            to: target.id,
+            delta: {
+              kind: 'gcounter.bump',
+              replica: source.id,
+              tally: counterNumber(sourceCounter.value()),
+              bytes: sourceCounter.logBytes(),
+              payload: 'log',
+            },
+            sentAt: sim.now,
+            deliverAt: sim.now + sim.latencyMs + 160 + repairIndex * 210,
+            phase: 'repair',
+          })
+          nextId += 1
+          repairIndex += 1
+        } finally {
+          targetCounter.free()
+        }
+      } finally {
+        sourceCounter.free()
+      }
     }
 
     for (const source of sim.peers) {
@@ -586,11 +641,19 @@ function backfillDescriptions(
   const items: Array<{ plain: string; technical: string }> = []
 
   const sourceCounter = replicaFor(source, source.gcounter.length)
-  const targetCounter = replicaFor(target, target.gcounter.length)
-  for (let replica = 0; replica < source.gcounter.length; replica += 1) {
-    if (sourceCounter.versionFor(BigInt(replica)) > targetCounter.versionFor(BigInt(replica))) {
-      items.push({ plain: `headcount from Camp ${replica}`, technical: `G(log ${replica})` })
+  try {
+    const targetCounter = replicaFor(target, target.gcounter.length)
+    try {
+      for (let replica = 0; replica < source.gcounter.length; replica += 1) {
+        if (sourceCounter.versionFor(BigInt(replica)) > targetCounter.versionFor(BigInt(replica))) {
+          items.push({ plain: `headcount from Camp ${replica}`, technical: `G(log ${replica})` })
+        }
+      }
+    } finally {
+      targetCounter.free()
     }
+  } finally {
+    sourceCounter.free()
   }
 
   if (missingOrSetRecords(target, source, source.gcounter.length)) {
@@ -621,17 +684,26 @@ export function readORSet(log: Uint8Array): string[] {
 }
 
 // Compare the core's ordered raw snapshots, without deriving membership or merging.
-function orsetStateKey(peer: Peer): string {
+function versionKey(replica: { versionFor(id: bigint): bigint }, peerCount: number): string {
+  return JSON.stringify(Array.from({ length: peerCount }, (_, id) => replica.versionFor(BigInt(id)).toString()))
+}
+
+function orsetComparison(peer: Peer, peerCount: number): { key: string; elements: string[]; versions: string } {
   const replica = orsetReplicaFor(peer)
   try {
-    const entries = replica.addEntries().map((entry) => {
-      try {
-        return [entry.element(), entry.token().toString()]
-      } finally {
-        entry.free()
+    const entries = replica.addEntries()
+    try {
+      return {
+        key: JSON.stringify([
+          entries.map((entry) => [entry.element(), entry.token().toString()]),
+          Array.from(replica.tombstones(), String),
+        ]),
+        elements: replica.elements(),
+        versions: versionKey(replica, peerCount),
       }
-    })
-    return JSON.stringify([entries, Array.from(replica.tombstones(), String)])
+    } finally {
+      for (const entry of entries) entry.free()
+    }
   } finally {
     replica.free()
   }
@@ -639,14 +711,16 @@ function orsetStateKey(peer: Peer): string {
 
 function missingOrSetRecords(target: Peer, source: Peer, peerCount: number): boolean {
   const sourceSet = orsetReplicaFor(source)
-  const targetSet = orsetReplicaFor(target)
+  let targetSet: SafeMeshStringOrSetReplica | undefined
   try {
+    targetSet = orsetReplicaFor(target)
+    const reconstructedTarget = targetSet
     return Array.from({ length: peerCount }, (_, id) =>
-      sourceSet.versionFor(BigInt(id)) > targetSet.versionFor(BigInt(id)),
+      sourceSet.versionFor(BigInt(id)) > reconstructedTarget.versionFor(BigInt(id)),
     ).some(Boolean)
   } finally {
     sourceSet.free()
-    targetSet.free()
+    targetSet?.free()
   }
 }
 
@@ -655,13 +729,23 @@ function normalizePeer(peer: Peer): Peer {
 }
 
 function emptyGCounterPeer(id: number, replicas: number): Pick<Peer, 'gcounter' | 'gcounterLog'> {
-  return snapshotGCounterPeer({ id, gcounter: [], gcounterLog: new Uint8Array(), orset: new Uint8Array(), localTally: 0 }, new SafeMeshGCounterReplica(BigInt(id), replicas))
+  const counter = new SafeMeshGCounterReplica(BigInt(id), replicas)
+  try {
+    return snapshotGCounterPeer({ id, gcounter: [], gcounterLog: new Uint8Array(), orset: new Uint8Array(), localTally: 0 }, counter)
+  } finally {
+    counter.free()
+  }
 }
 
 function replicaFor(peer: Peer, replicas: number): SafeMeshGCounterReplica {
   const replica = new SafeMeshGCounterReplica(BigInt(peer.id), replicas)
-  if (peer.gcounterLog.length > 0) mergeLogBytes(replica, peer.gcounterLog)
-  return replica
+  try {
+    if (peer.gcounterLog.length > 0) mergeLogBytes(replica, peer.gcounterLog)
+    return replica
+  } catch (error) {
+    replica.free()
+    throw error
+  }
 }
 
 function mergeLogBytes(
