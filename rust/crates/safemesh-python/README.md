@@ -91,7 +91,7 @@ Run `./scripts/package-smoke.sh` from the repository root to build the wheel, in
 ## Checked coordinates and OR-Set
 
 `GCounter.try_apply_bump(replica, tally)` raises `IndexError` for an invalid
-coordinate without changing state. `apply_bump` retains its silent behavior.
+coordinate without changing state. `apply_bump` uses the same checked path.
 
 ```python
 left, right = sm.OrSet(), sm.OrSet()
