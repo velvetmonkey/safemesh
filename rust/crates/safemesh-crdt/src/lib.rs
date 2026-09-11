@@ -9,7 +9,9 @@
 //! `lean/SafeMesh/` (carrier = join-semilattice, merge = join, delta =
 //! single-coordinate bump), held to those proofs by a differential
 //! conformance test (`tests/conformance.rs`) that replays a Lean-emitted
-//! corpus through this code and requires byte-identical outputs.
+//! JSON corpus through this code and compares state vectors, sets, read vectors,
+//! numeric values, ownership decisions and optional allocation/sequence results
+//! with the parsed expectations.
 //!
 //! What is PROVEN (in Lean, kernel-checked) vs what is TESTED (here): the
 //! Lean theorems are universal; this crate is checked against them over a
@@ -35,12 +37,32 @@ use alloc::vec::Vec;
 ///
 /// For in-house types, this contract is backed by the Lean proof suite and
 /// differential conformance corpus. For user-defined types, it is a tested
-/// contract enforced by the laws harness, not a proof.
+/// contract enforced by the laws harness, not a proof. Admission is a separate
+/// obligation: user-defined CRDTs must implement [`Crdt::validate_record`].
 pub trait Mergeable {
     fn merge(&mut self, other: &Self);
 }
 
 /// Delta application surface for CRDT product types.
+///
+/// Every implementation, including user-defined types, must explicitly provide
+/// [`Crdt::validate_record`]. The compiler checks its presence; behavioral tests
+/// must check its contract (the merge laws alone do not establish admission).
+/// An implementation in another module cannot inherit permissive admission:
+///
+/// ```compile_fail,E0046
+/// mod downstream {
+///     use safemesh_crdt::{Crdt, Mergeable};
+///     pub struct MissingValidation;
+///     impl Mergeable for MissingValidation {
+///         fn merge(&mut self, _: &Self) {}
+///     }
+///     impl Crdt for MissingValidation {
+///         type Delta = ();
+///         fn apply_delta(&mut self, _: ()) {}
+///     }
+/// }
+/// ```
 pub trait Crdt: Mergeable {
     type Delta;
 
@@ -49,10 +71,22 @@ pub trait Crdt: Mergeable {
         None
     }
 
-    /// Validate decoded records before admission or replay into this carrier.
-    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
-        Ok(())
-    }
+    /// Validate a decoded record before admission or replay into this carrier.
+    ///
+    /// Refuse records outside the carrier's shape or ownership domain: no
+    /// carrier of that same shape may legitimately apply such a record. For
+    /// example, a fixed-width counter refuses an out-of-range coordinate or a
+    /// coordinate belonging to a different record author.
+    ///
+    /// Accept legitimate replay even when the current state absorbs the delta
+    /// (duplicates, lower tallies, losing writes, or existing tombstones). On a
+    /// fresh carrier of the same shape, it must yield the state the record
+    /// denotes, including lattice bottom for an empty remove. A lack of visible
+    /// change is not evidence of invalidity. Types with a total typed delta
+    /// domain may explicitly return `Ok(())`; they have no domain refusal case.
+    /// This check must not mutate state. Wire decoding and log-shape validation
+    /// are separate checks performed before this method.
+    fn validate_record(&self, id: RecordId, delta: &Self::Delta) -> Result<(), WireError>;
 
     fn apply_delta(&mut self, delta: Self::Delta);
 }
@@ -282,6 +316,13 @@ impl<T: Ord + Clone> Mergeable for GSet<T> {
 
 impl<T: Ord + Clone> Crdt for GSet<T> {
     type Delta = T;
+
+    /// Accepts every record: every `T` is in a G-Set's domain, and a fresh set
+    /// inserts it. The only record replay ignores is an element already present,
+    /// and ignoring it is set idempotence (join with a member), not loss.
+    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
+        Ok(())
+    }
 
     fn apply_delta(&mut self, delta: Self::Delta) {
         self.insert(delta);
@@ -533,6 +574,18 @@ impl<T: Ord + Clone, K: Ord + Clone> Mergeable for OrSet<T, K> {
 impl<T: Ord + Clone, K: Ord + Clone> Crdt for OrSet<T, K> {
     type Delta = OrSetDelta<T, K>;
 
+    /// Accepts every record. An add always joins the add set, even when its
+    /// token is already tombstoned (that is the observed-remove rule, and a fresh
+    /// set applies it). A remove tombstones every token it names whether or not
+    /// this replica observed them (`RecordKernel.payloadOwned .remove`), so a
+    /// fresh set applies it too. A remove naming no tokens is the lattice bottom:
+    /// the local writer emits it for an absent element, and joining `⊥` on any
+    /// carrier is the correct application of that record, not a dropped one.
+    /// Nothing decodable is outside the carrier, so nothing is refused here.
+    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
+        Ok(())
+    }
+
     fn apply_delta(&mut self, delta: Self::Delta) {
         match delta {
             OrSetDelta::Add { element, token } => self.add(element, token),
@@ -632,6 +685,14 @@ impl<P: Ord + Clone, V: Ord + Clone> Mergeable for Rga<P, V> {
 impl<P: Ord + Clone, V: Ord + Clone> Crdt for Rga<P, V> {
     type Delta = RgaDelta<P, V>;
 
+    /// Accepts every record: an insert joins the placed set even at a
+    /// tombstoned position, and a delete tombstones its position whether or not
+    /// it was observed; a fresh sequence applies either. The records replay
+    /// ignores (a duplicate insert, a repeated delete) are join idempotence.
+    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
+        Ok(())
+    }
+
     fn apply_delta(&mut self, delta: Self::Delta) {
         match delta {
             RgaDelta::Insert { position, value } => self.insert(position, value),
@@ -720,6 +781,14 @@ impl<K: Ord + Clone> Mergeable for EnableWinsFlag<K> {
 
 impl<K: Ord + Clone> Crdt for EnableWinsFlag<K> {
     type Delta = EnableWinsFlagDelta<K>;
+
+    /// Accepts every record, by the same argument as [`OrSet`]: an enable joins
+    /// the enable set even when its token is tombstoned, a disable tombstones the
+    /// tokens it names whether observed or not, and a disable naming no tokens is
+    /// the lattice bottom. Every decodable record applies on a fresh flag.
+    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
+        Ok(())
+    }
 
     fn apply_delta(&mut self, delta: Self::Delta) {
         match delta {
@@ -811,6 +880,14 @@ impl<V: Ord + Clone> Mergeable for LwwRegister<V> {
 
 impl<V: Ord + Clone> Crdt for LwwRegister<V> {
     type Delta = LwwRegisterDelta<V>;
+
+    /// Accepts every record. A write that loses to the current entry under the
+    /// total order `(timestamp, replica, value)` is subsumed, which is convergence,
+    /// not loss: a fresh register applies the same write. Every
+    /// `(timestamp, replica, value)` is in the register's domain.
+    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
+        Ok(())
+    }
 
     fn apply_delta(&mut self, delta: Self::Delta) {
         self.set(delta.timestamp, delta.replica, delta.value);
@@ -944,6 +1021,13 @@ impl<K: Ord + Clone, V: Ord + Clone> Mergeable for LwwMap<K, V> {
 impl<K: Ord + Clone, V: Ord + Clone> Crdt for LwwMap<K, V> {
     type Delta = LwwMapDelta<K, V>;
 
+    /// Accepts every record. Per key, a set or remove that loses to the current
+    /// dot is subsumed by the max-dot rule and applies on a fresh map; nothing a
+    /// decoder can produce is outside the map's domain.
+    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
+        Ok(())
+    }
+
     fn apply_delta(&mut self, delta: Self::Delta) {
         match delta {
             LwwMapDelta::Set {
@@ -983,8 +1067,8 @@ pub struct Record<D> {
 /// independently by `zero_replicas`; it is not implied by a positive prefix.
 /// There is no built-in version wire codec. Custom version exchanges must carry
 /// both [`Self::entries`] and [`Self::zero_replicas`]. A receiver can rebuild
-/// the vector with [`Self::observe`] by supplying each positive prefix's IDs in
-/// sequence order and each zero ID, as below; record payloads are not required.
+/// the vector with [`Self::from_peer_prefixes`] after checking application-owned
+/// author and zero-acknowledgement budgets, as below; record payloads are not required.
 /// Legacy prefix-only exchanges cannot acknowledge zeros and will keep receiving
 /// them until upgraded.
 ///
@@ -993,32 +1077,35 @@ pub struct Record<D> {
 /// Fabricated IDs can acknowledge missing records and cause `since` to omit them.
 /// Use [`EventLog::version`] to derive claims from records actually admitted.
 ///
-/// Reconstruction visits every sequence in every prefix, not just each map
-/// entry: for `r` authors and `s` total acknowledged positive sequences it takes
-/// O((s + z) log(r + z + 1)) time and O(r + z) space, where `z` is the number of
-/// zero acknowledgements. Bound peer input before replay; a prefix of `u64::MAX`
-/// is representable but impractical to reconstruct this way. Zero-valued prefix
-/// entries are noncanonical and should be rejected by the custom exchange;
-/// only `zero_replicas()` acknowledges sequence zero.
+/// Checked reconstruction validates each positive prefix, then clones both
+/// collections: for `r` authors and `z` zero acknowledgements it takes O(r + z)
+/// time and O(r + z) additional space, independently of the claimed sequences.
+/// Bound both collection sizes before reconstruction and enforce transport byte
+/// limits before decoding to bound the input allocation itself.
+/// Zero-valued prefix entries are noncanonical and are rejected by the checked
+/// constructor; only `zero_replicas()` acknowledges sequence zero.
 ///
 /// ```
-/// use safemesh_crdt::{EventLog, RecordId, VersionVector};
+/// use safemesh_crdt::{EventLog, VersionVector};
+/// use std::collections::{BTreeMap, BTreeSet};
+///
+/// fn receive(
+///     prefixes: &BTreeMap<u64, u64>, zeros: &BTreeSet<u64>,
+///     author_budget: usize, zero_budget: usize,
+/// ) -> Result<VersionVector, &'static str> {
+///     if prefixes.len() > author_budget || zeros.len() > zero_budget {
+///         return Err("peer version exceeds application budget");
+///     }
+///     VersionVector::from_peer_prefixes(prefixes, zeros).map_err(|_| "invalid prefix")
+/// }
 ///
 /// let mut peer = EventLog::new();
 /// peer.append(7, 42u64);
 /// // Carry both collections over the application's transport.
 /// let prefixes = peer.version().entries().clone();
 /// let zeros = peer.version().zero_replicas().clone();
-/// let mut received = VersionVector::new();
-/// for (replica, prefix) in prefixes {
-///     assert!(prefix > 0, "reject noncanonical zero prefix entries");
-///     for sequence in 1..=prefix {
-///         received.observe(RecordId { replica, sequence });
-///     }
-/// }
-/// for replica in zeros {
-///     received.observe(RecordId { replica, sequence: 0 });
-/// }
+/// // This example has one publisher and allocates no sequence-zero records.
+/// let received = receive(&prefixes, &zeros, 1, 0).unwrap();
 /// assert_eq!(&received, peer.version());
 /// assert_eq!(peer.since(&received), peer.since(peer.version()));
 /// ```
@@ -1028,16 +1115,19 @@ pub struct VersionVector {
     zero_replicas: BTreeSet<u64>,
 }
 
-/// Maximum number of sequence IDs reconstructed for one replica from a peer map.
-/// This bounds CPU and memory work at an untrusted reconstruction boundary while
-/// leaving room for the ordinary peer histories this crate targets.
+/// Maximum accepted positive prefix value for one replica in a peer map.
+/// This preserves the peer-map acceptance policy; it does not bound reconstruction
+/// CPU or memory, which grow with the collection sizes.
+/// The caller must bound the number of authors (`r`) and zero acknowledgements
+/// (`z`) before accepting peer input; this constant caps neither.
+/// See [`VersionVector`] for the whole-input time and space costs.
 pub const MAX_PEER_PREFIX: u64 = 1_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VersionVectorError {
     /// Positive prefixes are canonical; sequence zero belongs in zero_replicas.
     ZeroPrefix { replica: u64 },
-    /// Reconstructing this prefix would exceed the per-replica work bound.
+    /// This prefix exceeds the per-replica acceptance limit.
     PrefixTooLarge { replica: u64, prefix: u64, max: u64 },
 }
 
@@ -1071,6 +1161,9 @@ impl VersionVector {
 
     /// Reconstruct a vector from a peer's canonical positive prefixes and
     /// independent sequence-zero acknowledgements.
+    ///
+    /// [`MAX_PEER_PREFIX`] caps each positive prefix only; callers must bound
+    /// author and zero-acknowledgement counts to bound whole-input work.
     pub fn from_peer_prefixes(
         entries: &BTreeMap<u64, u64>,
         zero_replicas: &BTreeSet<u64>,
@@ -1088,19 +1181,10 @@ impl VersionVector {
             }
         }
 
-        let mut vector = Self::new();
-        for (&replica, &prefix) in entries {
-            for sequence in 1..=prefix {
-                vector.observe(RecordId { replica, sequence });
-            }
-        }
-        for &replica in zero_replicas {
-            vector.observe(RecordId {
-                replica,
-                sequence: 0,
-            });
-        }
-        Ok(vector)
+        Ok(Self {
+            entries: entries.clone(),
+            zero_replicas: zero_replicas.clone(),
+        })
     }
 
     pub fn get(&self, replica: u64) -> u64 {
@@ -2790,7 +2874,31 @@ mod frame_tests {
 
 #[cfg(test)]
 mod version_vector_tests {
+    #[test]
+    fn large_peer_prefixes_are_copied_directly() {
+        for (authors, prefix) in [
+            (1024, 1000),
+            (1024, MAX_PEER_PREFIX),
+            (2048, MAX_PEER_PREFIX),
+        ] {
+            let entries = (0..authors).map(|r| (r, prefix)).collect();
+            let zeros = (0..authors).collect();
+            let vector = VersionVector::from_peer_prefixes(&entries, &zeros).unwrap();
+            assert_eq!(vector.entries(), &entries);
+            assert_eq!(vector.zero_replicas(), &zeros);
+        }
+    }
+
     use super::*;
+
+    #[test]
+    fn planted_zero_acknowledgements_exceed_per_replica_prefix_cap() {
+        let zeros: BTreeSet<u64> = (0..=1_000_000).collect();
+        let vector = VersionVector::from_peer_prefixes(&BTreeMap::new(), &zeros).unwrap();
+        assert_eq!(vector.zero_replicas().len(), 1_000_001);
+        assert_eq!(vector.zero_replicas(), &zeros);
+        assert!(vector.entries().is_empty());
+    }
 
     #[test]
     fn planted_zero_prefix_is_rejected() {
@@ -2824,6 +2932,21 @@ mod version_vector_tests {
             (BTreeMap::new(), BTreeSet::from([2])),
             (BTreeMap::from([(3, MAX_PEER_PREFIX)]), BTreeSet::new()),
             (BTreeMap::from([(4, 2)]), BTreeSet::from([4, 5])),
+            (BTreeMap::from([(0, 1)]), BTreeSet::new()),
+            (BTreeMap::from([(u64::MAX, 3)]), BTreeSet::new()),
+            (
+                (1..=32).map(|replica| (replica, replica)).collect(),
+                BTreeSet::new(),
+            ),
+            (BTreeMap::from([(0, 5)]), BTreeSet::from([0])),
+            (BTreeMap::new(), BTreeSet::from([0, u64::MAX])),
+            (
+                BTreeMap::from([(11, MAX_PEER_PREFIX), (12, MAX_PEER_PREFIX)]),
+                BTreeSet::new(),
+            ),
+            (BTreeMap::from([(8, MAX_PEER_PREFIX - 1)]), BTreeSet::new()),
+            (BTreeMap::from([(1, 4), (3, 2)]), BTreeSet::from([2, 9])),
+            (BTreeMap::from([(1, 2), (1, 4)]), BTreeSet::new()),
         ];
         let mut constructed = 0;
         for (entries, zeros) in cases {
@@ -2841,9 +2964,78 @@ mod version_vector_tests {
                 });
             }
             assert_eq!(actual, expected);
+            assert_eq!(actual.entries(), &entries);
+            assert_eq!(actual.zero_replicas(), &zeros);
+            let mut local = EventLog::new();
+            let replicas: BTreeSet<_> = entries
+                .keys()
+                .chain(zeros.iter())
+                .copied()
+                .chain([0, 99, u64::MAX])
+                .collect();
+            for replica in replicas {
+                let prefix = entries.get(&replica).copied().unwrap_or(0);
+                let sequences = BTreeSet::from([0, 1, prefix, prefix + 1, u64::MAX]);
+                for sequence in sequences {
+                    let id = RecordId { replica, sequence };
+                    assert_eq!(
+                        local.insert_record(Record {
+                            id,
+                            delta: sequence
+                        }),
+                        Admission::Accepted
+                    );
+                }
+            }
+            assert_eq!(local.since(&actual), local.since(&expected));
+            // Subsequent contiguous, gap, repeated and zero observations agree too.
+            let mut actual_next = actual.clone();
+            let mut expected_next = expected.clone();
+            for sequence in [0, 1, 3, 2, 2, 0] {
+                let id = RecordId {
+                    replica: 99,
+                    sequence,
+                };
+                actual_next.observe(id);
+                expected_next.observe(id);
+                assert_eq!(actual_next, expected_next);
+            }
             constructed += 1;
         }
-        assert_eq!(constructed, 5);
+        assert_eq!(constructed, 14);
+    }
+
+    #[test]
+    fn refused_peer_map_leaves_since_on_previous_version_unchanged() {
+        let mut local = EventLog::new();
+        let acknowledged = local.append(7, 10u64);
+        let missing = local.append(7, 20u64);
+        let remote_version =
+            VersionVector::from_peer_prefixes(&BTreeMap::from([(7, 1)]), &BTreeSet::new()).unwrap();
+        let before = local.since(&remote_version);
+        for (prefix, error) in [
+            (0, VersionVectorError::ZeroPrefix { replica: 7 }),
+            (
+                MAX_PEER_PREFIX + 1,
+                VersionVectorError::PrefixTooLarge {
+                    replica: 7,
+                    prefix: MAX_PEER_PREFIX + 1,
+                    max: MAX_PEER_PREFIX,
+                },
+            ),
+        ] {
+            assert_eq!(
+                VersionVector::from_peer_prefixes(&BTreeMap::from([(7, prefix)]), &BTreeSet::new()),
+                Err(error)
+            );
+            let after = local.since(&remote_version);
+            assert_eq!(after, before);
+            assert_eq!(after.len(), 1);
+            assert_eq!(after[0].id, missing);
+            assert!(remote_version.includes(acknowledged));
+            assert!(!remote_version.includes(missing));
+        }
+        assert_eq!(local.since(&VersionVector::new()).len(), 2);
     }
 
     #[test]
