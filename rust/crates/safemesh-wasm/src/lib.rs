@@ -11,6 +11,19 @@ use std::{cell::RefCell, collections::BTreeSet};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(inline_js = r#"
+// Installed during module initialization, before any consumer can call merge.
+// The identity check must precede the generated call: that call borrows both
+// arguments before entering the Rust method, so a Rust-body guard is too late.
+export function installOrSetSelfMergeGuard(sample) {
+    const prototype = Object.getPrototypeOf(sample);
+    const merge = prototype.merge;
+    prototype.merge = function(other) {
+        if (this === other) return;
+        return merge.call(this, other);
+    };
+    sample.free();
+}
+
 export class SafeMeshError extends Error {
     constructor(code, message) {
         super(message);
@@ -31,11 +44,21 @@ export function checkedTokens(value) {
 extern "C" {
     pub type SafeMeshError;
 
+    #[wasm_bindgen(js_name = installOrSetSelfMergeGuard)]
+    fn install_orset_self_merge_guard(sample: JsValue);
+
     #[wasm_bindgen(constructor)]
     fn new(code: u32, message: &str) -> SafeMeshError;
 
     #[wasm_bindgen(catch, js_name = checkedTokens)]
     fn checked_tokens(value: JsValue) -> Result<Vec<u64>, JsValue>;
+}
+
+// Exporting the sample uses wasm-bindgen's own class wrapper on every target.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(start)]
+pub fn initialize_bindings() {
+    install_orset_self_merge_guard(SafeMeshOrSet::new().into());
 }
 
 fn safe_mesh_error(code: u32, message: &str) -> JsValue {
