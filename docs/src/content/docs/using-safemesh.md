@@ -20,6 +20,8 @@ For an event-log integration, follow this sequence:
 
 Evidence for this sequence: the public-API [`m2slice.rs` walkthrough](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/examples/m2slice.rs), [its explanation](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md#persist-restore-partition-and-reconcile), and [`EventLog` implementation](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/lib.rs).
 
+For an application-owned record containing multiple deltas, see [Nesting deltas](/safemesh/nesting-deltas/) for a compiled length-prefix pattern and its decode errors.
+
 ## Rust
 
 Run the [Rust gold path](/safemesh/getting-started/#rust-gold-path) first. Its
