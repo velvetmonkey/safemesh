@@ -23,7 +23,7 @@ From the checkout's `rust/` directory, run the complete public-API example:
 cargo run -p safemesh-crdt --example nested_deltas --locked
 ```
 
-The source is [`nested_deltas.rs`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/examples/nested_deltas.rs). It checks all decoded values, both OR-Set and both PN-Counter variants, every truncated prefix, and the failures below. The complete copyable program is:
+The source is [`nested_deltas.rs`](https://github.com/velvetmonkey/safemesh/blob/5c0b3bb1d21b85bc2c66e0611b838b14ea8f738f/rust/crates/safemesh-crdt/examples/nested_deltas.rs). It checks all decoded values, both OR-Set and both PN-Counter variants, every truncated prefix, and the failures below. The complete copyable program is:
 
 ```rust
 //! An application-owned record; see the Nesting deltas guide.
