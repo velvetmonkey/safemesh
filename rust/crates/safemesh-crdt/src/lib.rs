@@ -1340,12 +1340,9 @@ impl<D> EventLog<D> {
         D: PartialEq,
         F: FnOnce(&D),
     {
-        if let Some(&index) = self.seen.get(&record.id) {
-            return if self.records[index].delta == record.delta {
-                Admission::Duplicate
-            } else {
-                Admission::Collision
-            };
+        let outcome = self.admission(&record);
+        if outcome != Admission::Accepted {
+            return outcome;
         }
         let id = record.id;
         self.seen.insert(id, self.records.len());
@@ -1354,6 +1351,19 @@ impl<D> EventLog<D> {
         self.advance_contiguous_version(id.replica);
         apply(&self.records.last().expect("accepted record").delta);
         Admission::Accepted
+    }
+
+    // Shared read-only decision for admission and transactional preflight.
+    // Consult the identity index without copying any admitted payloads.
+    fn admission(&self, record: &Record<D>) -> Admission
+    where
+        D: PartialEq,
+    {
+        match self.seen.get(&record.id) {
+            Some(&index) if self.records[index].delta == record.delta => Admission::Duplicate,
+            Some(_) => Admission::Collision,
+            None => Admission::Accepted,
+        }
     }
 
     pub fn version(&self) -> &VersionVector {

@@ -19,6 +19,68 @@ import {
 } from './simulation'
 
 describe('mesh simulation', () => {
+  it.each([0, 5000])('Heal reconnects and repairs immediately with interval %i', (interval) => {
+    let sim = setPartitioned(setAntiEntropyMs(setDropRate(createSimulation(2), 0), interval), true)
+    sim = dropNextPacket(bumpCounter(sim, 0))
+    expect(convergence(sim).gcounterValues).toEqual([1, 0])
+
+    sim = runAntiEntropyNow(setPartitioned(sim, false))
+
+    expect(sim.partitioned).toBe(false)
+    expect(convergence(sim).gcounterValues).toEqual([1, 1])
+    expect(sim.antiEntropyMs).toBe(interval)
+    expect(sim.now).toBe(0)
+    expect(sim.nextAntiEntropyAt).toBe(interval || Number.POSITIVE_INFINITY)
+  })
+
+  it.each([0, 5000])('manual repair respects a partition with interval %i', (interval) => {
+    let sim = setPartitioned(setAntiEntropyMs(createSimulation(2), interval), true)
+    sim = dropNextPacket(bumpCounter(sim, 0))
+    sim = runAntiEntropyNow(sim)
+    expect(convergence(sim).gcounterValues).toEqual([1, 0])
+    expect(sim.antiEntropyMs).toBe(interval)
+  })
+
+  it('runs scheduled repair at each deadline, never before it', () => {
+    let sim = setAntiEntropyMs(setDropRate(createSimulation(2), 0), 5000)
+    sim = dropNextPacket(bumpCounter(sim, 0))
+    sim = tick(sim, 4999)
+    expect(convergence(sim).gcounterValues).toEqual([1, 0])
+    sim = tick(sim, 1)
+    expect(convergence(sim).gcounterValues).toEqual([1, 1])
+    expect(sim.nextAntiEntropyAt).toBe(10000)
+    sim = dropNextPacket(bumpCounter(sim, 0))
+    sim = tick(sim, 4999)
+    expect(convergence(sim).gcounterValues).toEqual([2, 1])
+    sim = tick(sim, 1)
+    expect(convergence(sim).gcounterValues).toEqual([2, 2])
+    expect(sim.nextAntiEntropyAt).toBe(15000)
+  })
+
+  it('keeps scheduled repair disabled before and after Heal', () => {
+    let sim = setAntiEntropyMs(setDropRate(createSimulation(2), 0), 0)
+    sim = dropNextPacket(bumpCounter(sim, 0))
+    sim = tick(sim, 60000)
+    expect(convergence(sim).gcounterValues).toEqual([1, 0])
+    sim = runAntiEntropyNow(setPartitioned(sim, false))
+    expect(convergence(sim).gcounterValues).toEqual([1, 1])
+    sim = dropNextPacket(bumpCounter(sim, 0))
+    sim = tick(sim, 60000)
+    expect(convergence(sim).gcounterValues).toEqual([2, 1])
+    expect(sim.antiEntropyMs).toBe(0)
+    expect(sim.nextAntiEntropyAt).toBe(Number.POSITIVE_INFINITY)
+  })
+
+  it('defers scheduled repair across a partition until reconnect', () => {
+    let sim = setPartitioned(setAntiEntropyMs(createSimulation(2), 5000), true)
+    sim = dropNextPacket(bumpCounter(sim, 0))
+    sim = tick(sim, 5000)
+    expect(convergence(sim).gcounterValues).toEqual([1, 0])
+    sim = tick(setPartitioned(sim, false), 0)
+    expect(convergence(sim).gcounterValues).toEqual([1, 1])
+    expect(sim.nextAntiEntropyAt).toBe(10000)
+  })
+
   it('diverges under partition and converges after reconnect', () => {
     let sim = setDropRate(createSimulation(4), 0)
     sim = setPartitioned(sim, true)
