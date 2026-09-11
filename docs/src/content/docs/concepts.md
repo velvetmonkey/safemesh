@@ -3,6 +3,9 @@ title: Concepts — main (unreleased)
 description: Replicas, convergence, deltas and the five Lean-backed CRDT carriers.
 ---
 
+**v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
+
+
 These concepts describe **main (unreleased)**. The five carriers below have Lean models and finite Rust differential evidence; the Rust implementation is not itself a Lean proof. [Evidence: assurance scope](https://github.com/velvetmonkey/safemesh/blob/main/WHAT-IS-PROVEN.md).
 
 ## CRDT

@@ -1,5 +1,8 @@
 # SafeMesh for builders: demos
 
+**v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](https://velvetmonkey.github.io/safemesh/#v0-support).
+
+
 These are the v0.1 showcase demos. They are meant to be run, inspected, and used as evidence in CI, not treated as marketing mockups.
 
 ## Before you run

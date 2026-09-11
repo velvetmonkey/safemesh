@@ -1,5 +1,8 @@
 # SafeMesh kill-test: field-science cold chain
 
+**v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](https://velvetmonkey.github.io/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
+
+
 Reproduction commands use **Rust 1.96.1**, the full-gate CI and demo toolchain; the consumer crate floor is **Rust 1.89**. Install rustup and select the toolchain using the [build toolchain setup](README.md#build-toolchain) before running them.
 
 
