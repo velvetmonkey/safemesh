@@ -4,6 +4,21 @@ These are the v0.1 showcase demos. They are meant to be run, inspected, and used
 
 ## Before you run
 
+SafeMesh's Rust crate floor for consumers is **Rust 1.89**. For the source builds,
+demos and locked wasm-pack 0.15.0 installation on this page, use **Rust 1.96.1**,
+the full-gate CI version. Install rustup first (Linux/Bash, with curl and a native
+C compiler/linker), then select that toolchain:
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.96.1
+. "$HOME/.cargo/env"
+rustup default 1.96.1
+```
+
+The default applies to your user account; the repository's `rust-toolchain.toml`
+also selects 1.96.1 inside this checkout. An outside application's toolchain remains
+its own choice; consuming the crate requires at least 1.89.
+
 Use a shell with Git and internet access. Install the tools for your chosen demo first:
 
 - Rust: Rust and Cargo through rustup, plus a native C compiler/linker.
@@ -32,11 +47,12 @@ Captured images live in `demos/assets/`. The [Python terminal image](python-cold
 
 ## Quick Gate
 
-This is a contributor check, with additional prerequisites beyond the demos: `lake` and the Lean toolchain selected by `lean/lean-toolchain`, cbindgen, maturin, and the Rust, Python, and web tools above. It installs additional Rust targets, builds Lean, and runs packaging checks; allow extra downloads and build time. Read `scripts/ci.sh` and `scripts/package-smoke.sh` before running it.
+This is a contributor check, with additional prerequisites beyond the demos: `lake` and Lean **4.28.0** (`leanprover/lean4:v4.28.0` in `lean/lean-toolchain`, installed through [elan](https://github.com/leanprover/elan#installation)), cbindgen, maturin, and the Rust, Python, and web tools above. It installs additional Rust targets, builds Lean, and runs packaging checks; allow extra downloads and build time. Read `scripts/ci.sh` and `scripts/package-smoke.sh` before running it.
 
 Run the same local gate the GitHub Actions workflow runs:
 
 ```sh
+cargo install cbindgen --version 0.28.0 --locked
 ./scripts/ci.sh
 ```
 

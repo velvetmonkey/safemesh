@@ -3,6 +3,22 @@ title: Using SafeMesh in your code — main (unreleased)
 description: Rust, C ABI, WASM/TypeScript and Python integration, with transport and persistence responsibilities.
 ---
 
+SafeMesh's Rust crate floor for consumers is **Rust 1.89**. For the source builds,
+demos and locked wasm-pack 0.15.0 installation on this page, use **Rust 1.96.1**,
+the full-gate CI version. Install rustup first (Linux/Bash, with curl and a native
+C compiler/linker), then select that toolchain:
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.96.1
+. "$HOME/.cargo/env"
+rustup default 1.96.1
+```
+
+The default applies to your user account; the repository's `rust-toolchain.toml`
+also selects 1.96.1 inside this checkout. An outside application's toolchain remains
+its own choice; consuming the crate requires at least 1.89.
+
+
 This guide uses **main (unreleased)** source. These are local build paths, not registry installation promises. **The Lean proof applies to the models; bindings, bytes and transport are TESTED engineering surfaces.** Maintainer support is **UNKNOWN** for all four surfaces. [Evidence: install matrix and status](https://github.com/velvetmonkey/safemesh/blob/main/README.md#install-matrix).
 
 ## You bring the transport
@@ -199,6 +215,9 @@ Add this dependency to the generated `Cargo.toml` (it already has a `[dependenci
 safemesh-crdt = { git = "https://github.com/velvetmonkey/safemesh.git", rev = "6172d7ad7b950e3238f372f378cf8617dcd86984" }
 ```
 
+The pinned rev `6172d7ad` is older than current `main` and the gold path, which uses the current checkout.
+
+
 The full `rev` pins the source used by these examples: an unpinned Git dependency can resolve to newer main on a fresh resolution or update. Keep the application's `Cargo.lock` too. This is unreleased source, not a registry install.
 
 Cargo searches the Git repository for the package named `safemesh-crdt`; it finds `rust/crates/safemesh-crdt/Cargo.toml` even though there is no root manifest. Use the repository URL, without a subdirectory or `path` field. Evidence: [Cargo's Git dependency rules](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies-from-git-repositories), [the pinned package manifest](https://github.com/velvetmonkey/safemesh/blob/6172d7ad7b950e3238f372f378cf8617dcd86984/rust/crates/safemesh-crdt/Cargo.toml), and the [`GCounter` rustdoc item](/safemesh/reference/rust/safemesh_crdt/struct.GCounter.html) exercised below.
@@ -327,7 +346,7 @@ Only use the output when the returned status is `Ok`; on any other status, repor
 
 Release each owned handle once. OR-Set queries return owned `SafeMeshU64s` arrays, released with `safemesh_u64s_free`; sets use `safemesh_orset_free`. The caller supplies fresh set tokens. [Evidence: FFI contract](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-ffi/README.md) and [header](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-ffi/include/safemesh.h).
 
-The C ABI has carrier operations and a G-Counter delta-to-wire helper, **no replica/event-log surface**. Do not assume the Python or WASM record-exchange examples translate directly to C. The documented repository checks call ABI functions from Rust and check header drift; those checks do not contain an external C compile/link/run test. [Evidence: root surface description](https://github.com/velvetmonkey/safemesh/blob/main/README.md) and [FFI assurance scope](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-ffi/README.md#claim-boundary).
+The C ABI has carrier operations and a G-Counter delta-to-wire helper, **no replica/event-log surface**. Do not assume the Python or WASM record-exchange examples translate directly to C. The repository checks call ABI functions from Rust, check header drift, and run `scripts/ffi-c-smoke.sh`, which compiles, links and runs an external C caller against the built library on Linux; this is not a platform matrix. [Evidence: root surface description](https://github.com/velvetmonkey/safemesh/blob/main/README.md) and [FFI assurance scope](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-ffi/README.md#claim-boundary).
 
 ## WASM / TypeScript
 

@@ -1,5 +1,28 @@
 # Persist, restore, partition and reconcile (TypeScript / Node)
 
+SafeMesh's Rust crate floor for consumers is **Rust 1.89**. For the source builds,
+demos and locked wasm-pack 0.15.0 installation on this page, use **Rust 1.96.1**,
+the full-gate CI version. Install rustup first (Linux/Bash, with curl and a native
+C compiler/linker), then select that toolchain:
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.96.1
+. "$HOME/.cargo/env"
+rustup default 1.96.1
+```
+
+The default applies to your user account; the repository's `rust-toolchain.toml`
+also selects 1.96.1 inside this checkout. An outside application's toolchain remains
+its own choice; consuming the crate requires at least 1.89.
+
+Before the WASM builds, install their target and build tool:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack --version 0.15.0 --locked
+```
+
+
 This page walks the same four steps as the [Rust walkthrough](../safemesh-crdt/README.md#persist-restore-partition-and-reconcile),
 in Node, against the `safemesh-wasm` package that `wasm-pack` builds for the
 `nodejs` target. Two replicas each hold a G-Counter and a UTF-8 OR-Set. You write

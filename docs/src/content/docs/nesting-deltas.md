@@ -3,6 +3,22 @@ title: Nesting deltas in your own record
 description: A compiled Rust composition pattern using public wire APIs and named decode errors.
 ---
 
+SafeMesh's Rust crate floor for consumers is **Rust 1.89**. For the source builds,
+demos and locked wasm-pack 0.15.0 installation on this page, use **Rust 1.96.1**,
+the full-gate CI version. Install rustup first (Linux/Bash, with curl and a native
+C compiler/linker), then select that toolchain:
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.96.1
+. "$HOME/.cargo/env"
+rustup default 1.96.1
+```
+
+The default applies to your user account; the repository's `rust-toolchain.toml`
+also selects 1.96.1 inside this checkout. An outside application's toolchain remains
+its own choice; consuming the crate requires at least 1.89.
+
+
 Use a length prefix around each delta's `to_wire_bytes()` output, then decode each bounded slice with that delta type's `from_wire_bytes()`. Public `WireCursor` reads and Rust's `u32::to_le_bytes` / `Vec::extend_from_slice` already provide everything required, so no new SafeMesh write helper or knowledge of inner byte layouts is needed.
 
 This application-owned `InventoryRecord` contains an `OrSetDelta<String, u64>` followed by a `GCounterDelta` and a `PnCounterDelta`. Its layout is `[u32 little-endian item byte length][item bytes][u32 little-endian count byte length][count bytes][u32 little-endian adjustment byte length][adjustment bytes]`; lengths exclude their own four-byte fields. This adds an outer application format and changes no SafeMesh wire format. The fields have fixed, agreed types and order; length prefixes do not identify arbitrary types or versions.
