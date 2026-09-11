@@ -183,6 +183,120 @@ These are tested engineering contracts, not a proof of storage durability.
 See the [longer durable walkthrough](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md#persist-restore-partition-and-reconcile)
 and the [generated Rust reference](/safemesh/reference/).
 
+### Pinned Git dependency for a separate application
+
+After the [first-result example](/safemesh/getting-started/), create an application (Git, Cargo and a Rust toolchain required):
+
+```sh
+cargo new --bin --vcs none safemesh-app
+cd safemesh-app
+```
+
+Add this dependency to the generated `Cargo.toml` (it already has a `[dependencies]` heading):
+
+```toml
+[dependencies]
+safemesh-crdt = { git = "https://github.com/velvetmonkey/safemesh.git", rev = "6172d7ad7b950e3238f372f378cf8617dcd86984" }
+```
+
+The full `rev` pins the source used by these examples: an unpinned Git dependency can resolve to newer main on a fresh resolution or update. Keep the application's `Cargo.lock` too. This is unreleased source, not a registry install.
+
+Cargo searches the Git repository for the package named `safemesh-crdt`; it finds `rust/crates/safemesh-crdt/Cargo.toml` even though there is no root manifest. Use the repository URL, without a subdirectory or `path` field. Evidence: [Cargo's Git dependency rules](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies-from-git-repositories), [the pinned package manifest](https://github.com/velvetmonkey/safemesh/blob/6172d7ad7b950e3238f372f378cf8617dcd86984/rust/crates/safemesh-crdt/Cargo.toml), and the [`GCounter` rustdoc item](/safemesh/reference/rust/safemesh_crdt/struct.GCounter.html) exercised below.
+
+Replace `src/main.rs` with this complete program, then run `cargo run --quiet` from `safemesh-app`. It prints `counter=5`:
+
+```rust
+use safemesh_crdt::GCounter;
+
+fn main() {
+    let mut left = GCounter::new(2);
+    let mut right = GCounter::new(2);
+    left.try_apply_bump(0, 3).unwrap();
+    right.try_apply_bump(1, 2).unwrap();
+    left.try_merge(&right).unwrap();
+    right.try_merge(&left).unwrap();
+    assert_eq!(left.value(), 5);
+    assert_eq!(left.state(), right.state());
+    println!("counter={}", left.value());
+}
+```
+
+This is an in-process state merge. Tallies are cumulative, so resending the same bump does not increment again. `try_apply_bump` rejects an out-of-range coordinate; `try_merge` rejects incompatible replica counts. Handle these errors at your input boundary rather than copying the example's `unwrap` into an untrusted-input path. [Evidence: `GCounter` API](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/lib.rs) and [counter model](https://github.com/velvetmonkey/safemesh/blob/main/lean/SafeMesh/DeltaGCounter.lean).
+
+For record exchange, persistence, a child-process exit and restart, follow the [durable Rust walkthrough](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md#persist-restore-partition-and-reconcile). It uses `local::DurableReplica` with `local-writer` on Linux and requires filesystem locks and file/directory sync. Preserve its fence and transaction files; use restart for an existing store, not a fresh constructor. This engineering evidence does not prove storage durability. The [generated reference](/safemesh/reference/) covers the Rust API present in this build.
+
+### OR-Set tokens across restart without `local-writer`
+
+Raw `OrSet` and `EventLog` do not allocate or durably reserve add tokens for you. Choose a fixed writer count and distinct writer IDs in `0..writers`. One possible application policy is `token = sequence * writers + writer`, using checked arithmetic and the next local **record** sequence. Removes consume record sequences too. Never change this assignment within the same set's history.
+
+On restart, decode the complete retained log, replay every delta (including removes), and recover the next sequence from **all** records by this writer, not just visible elements or the version vector's contiguous prefix. This keeps removed tokens from being reused. The following program uses writer 0 of 2 and no optional features. Replace `src/main.rs` in the application above, then run `cargo run --quiet` twice. The first run adds and removes token 2; the second replays that history and uses token 6. Run it in a fresh application directory with no `tokens.log`:
+
+```rust
+use safemesh_crdt::{Crdt, EventLog, OrSet, OrSetDelta, WireEncode};
+use std::{fs, io::ErrorKind};
+
+fn main() {
+    // Persist these assignments as application metadata; never reassign a writer.
+    let (writers, writer) = (2_u64, 0_u64);
+    assert!(writer < writers);
+    let mut state = OrSet::<String, u64>::new();
+    let mut log = match fs::read("tokens.log") {
+        Ok(bytes) => EventLog::from_wire_bytes_for(&bytes, &state).unwrap(),
+        Err(e) if e.kind() == ErrorKind::NotFound => EventLog::for_crdt(&state),
+        Err(e) => panic!("read failed: {e}"),
+    };
+    for record in log.records() {
+        state.apply_delta(record.delta.clone());
+    }
+    let sequence = log.records().iter()
+        .filter(|record| record.id.replica == writer)
+        .map(|record| record.id.sequence).max().unwrap_or(0)
+        .checked_add(1).expect("record sequence exhausted");
+    let token = sequence.checked_mul(writers)
+        .and_then(|n| n.checked_add(writer)).expect("token space exhausted");
+    let id = log.append_with(writer, OrSetDelta::Add {
+        element: "water".to_owned(), token,
+    }, |delta| state.apply_delta(delta.clone())).unwrap();
+    assert_eq!(id.sequence, sequence);
+    log.append_with(writer, OrSetDelta::Remove { tokens: vec![token] },
+        |delta| state.apply_delta(delta.clone())).unwrap();
+    // Demonstrates ordinary process restart only; not a durable commit protocol.
+    fs::write("tokens.log", log.to_wire_bytes().unwrap()).unwrap();
+    println!("allocated token={token}; records={}", log.records().len());
+}
+```
+
+Only treat a missing file as a new set when provisioning a genuinely new writer/store. For an existing store, missing or corrupt history must stop writes. The application must exclusively own its writer, validate incoming ownership, and persist identity, allocation state and history consistently **before acknowledging or exporting edits**. The simple `fs::write` above does not provide that durability or a lock. Complete history means every previously allocated/exported token is accounted for; a stale backup or a peer missing local edits is insufficient. Preserve a durable high-water mark if tokens can be reserved outside the log; never reset it after loss. Without trustworthy history or allocation metadata, do not resume with the old writer identity.
+
+Evidence: [`EventLog::append_with`](/safemesh/reference/rust/safemesh_crdt/struct.EventLog.html#method.append_with), [`EventLog::records`](/safemesh/reference/rust/safemesh_crdt/struct.EventLog.html#method.records), [`OrSetDelta`](/safemesh/reference/rust/safemesh_crdt/enum.OrSetDelta.html), and the checked adapter's [`DurableReplica::add`](/safemesh/reference/rust/safemesh_crdt/local/struct.DurableReplica.html#method.add). This is caller policy using those APIs, not a public allocator or generic durable restart API. See the [custom restart limit](/safemesh/limits/#you-need-durable-restart-for-a-custom-crdt).
+
+### LWW map wire types
+
+The built-in `WireEncode`, `WireDecode` and `WireSchema` implementations support **`LwwMap<u64, u64>` and `LwwMapDelta<u64, u64>` only**. String keys or values can be used in the generic in-memory map (with its `Ord`/`Clone` bounds), but have no built-in wire codec. For strings on the wire, define an application-owned wrapper/schema and codec, or an agreed stable numeric-ID mapping; do not assign IDs independently at each replica. LWW picks a winning value per key; it does not merge concurrent counter increments.
+
+Replace `src/main.rs` in the application above with this program and run `cargo run --quiet`. It prints `map wire roundtrip=42`:
+
+```rust
+use safemesh_crdt::{Crdt, LwwMap, LwwMapDelta, WireDecode, WireEncode};
+
+fn main() {
+    let delta = LwwMapDelta::Set {
+        key: 7_u64, timestamp: 9, replica: 0, value: 42_u64,
+    };
+    let bytes = delta.to_wire_bytes().unwrap();
+    let decoded = LwwMapDelta::<u64, u64>::from_wire_bytes(&bytes).unwrap();
+    let mut map = LwwMap::<u64, u64>::new();
+    map.apply_delta(decoded);
+    let restored = LwwMap::<u64, u64>::from_wire_bytes(
+        &map.to_wire_bytes().unwrap()).unwrap();
+    assert_eq!(restored, map);
+    assert_eq!(restored.get(&7), Some(&42));
+    println!("map wire roundtrip=42");
+}
+```
+
+Evidence: the trait implementations on [`LwwMap`](/safemesh/reference/rust/safemesh_crdt/struct.LwwMap.html) and [`LwwMapDelta`](/safemesh/reference/rust/safemesh_crdt/enum.LwwMapDelta.html), and [`lww_map_wire_is_stable_and_roundtrips`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/tests/wire.rs). This map is TESTED, not Lean-proved.
+
 ## C ABI
 
 From the repository root, build the local library:

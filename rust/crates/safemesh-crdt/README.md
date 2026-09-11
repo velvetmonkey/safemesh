@@ -14,10 +14,22 @@ See the repository `CLAIMS.md` and `WHAT-IS-PROVEN.md` for the full wording rule
 
 ```toml
 [dependencies]
-safemesh-crdt = { git = "https://github.com/velvetmonkey/safemesh.git" }
+safemesh-crdt = { git = "https://github.com/velvetmonkey/safemesh.git", rev = "6172d7ad7b950e3238f372f378cf8617dcd86984" }
 ```
 
-A registry release of `safemesh-crdt` has not yet been made.
+A registry release of `safemesh-crdt` has not yet been made. The full `rev` pins
+these examples' source independently of future main changes; keep your application's
+`Cargo.lock` as well. Cargo finds the package under `rust/crates/safemesh-crdt/`
+by searching the Git repository for its manifest, so the Git URL needs neither a
+subdirectory nor a root `Cargo.toml`. See [Cargo's Git dependency rules](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies-from-git-repositories)
+and the [package manifest](Cargo.toml).
+
+The [integration guide](https://velvetmonkey.github.io/safemesh/using-safemesh/#rust)
+provides complete runnable programs and rustdoc evidence for this install,
+OR-Set token recovery without `local-writer`, and the `u64`-key/`u64`-value LWW
+map wire surface. The [limits guide](https://velvetmonkey.github.io/safemesh/limits/)
+explains caller responsibilities for a map of PN-counters, custom CRDT restart,
+nested wire layouts, and history growth without snapshots or compaction.
 
 ## Quickstart
 
