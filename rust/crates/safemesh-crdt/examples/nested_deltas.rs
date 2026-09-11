@@ -1,10 +1,13 @@
 //! An application-owned record; see the Nesting deltas guide.
-use safemesh_crdt::{GCounterDelta, OrSetDelta, WireCursor, WireDecode, WireEncode, WireError};
+use safemesh_crdt::{
+    GCounterDelta, OrSetDelta, PnCounterDelta, WireCursor, WireDecode, WireEncode, WireError,
+};
 
 #[derive(Debug, PartialEq, Eq)]
 struct InventoryRecord {
     item: OrSetDelta<String, u64>,
     count: GCounterDelta,
+    adjustment: PnCounterDelta,
 }
 
 // These are application functions, not additions to SafeMesh's public API.
@@ -24,7 +27,8 @@ fn read_field<T: WireDecode>(cursor: &mut WireCursor<'_>) -> Result<T, WireError
 impl WireEncode for InventoryRecord {
     fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
         write_field(out, &self.item)?;
-        write_field(out, &self.count)
+        write_field(out, &self.count)?;
+        write_field(out, &self.adjustment)
     }
 }
 
@@ -33,6 +37,7 @@ impl WireDecode for InventoryRecord {
         Ok(Self {
             item: read_field(cursor)?,
             count: read_field(cursor)?,
+            adjustment: read_field(cursor)?,
         })
     }
 }
@@ -53,10 +58,14 @@ fn main() -> Result<(), WireError> {
             replica: 0,
             tally: 7,
         },
+        adjustment: PnCounterDelta::Inc {
+            replica: 0,
+            tally: 3,
+        },
     };
     let bytes = original.to_wire_bytes()?;
     let decoded = InventoryRecord::from_wire_bytes(&bytes)?;
-    assert_eq!(decoded, original); // Checks element, token, replica and tally.
+    assert_eq!(decoded, original); // Checks every field, including the PN-Counter variant.
     println!("round trip: {decoded:?}");
 
     reject(
@@ -89,6 +98,7 @@ fn main() -> Result<(), WireError> {
     let mut wrong_type = Vec::new();
     write_field(&mut wrong_type, &original.count)?;
     write_field(&mut wrong_type, &original.count)?;
+    write_field(&mut wrong_type, &original.adjustment)?;
     reject("wrong inner delta type", &wrong_type, WireError::InvalidTag);
 
     // Inner slices also require exact consumption, independently of the outer record.
@@ -99,6 +109,7 @@ fn main() -> Result<(), WireError> {
     inner_trailing.extend_from_slice(&len.to_le_bytes());
     inner_trailing.extend_from_slice(&item);
     write_field(&mut inner_trailing, &original.count)?;
+    write_field(&mut inner_trailing, &original.adjustment)?;
     reject(
         "trailing bytes inside field",
         &inner_trailing,
@@ -112,6 +123,10 @@ fn main() -> Result<(), WireError> {
             count: GCounterDelta {
                 replica: 1,
                 tally: 9,
+            },
+            adjustment: PnCounterDelta::Dec {
+                replica: 1,
+                tally: 2,
             },
         };
         assert_eq!(
