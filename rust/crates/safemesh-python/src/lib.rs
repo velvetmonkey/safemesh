@@ -42,8 +42,8 @@ impl PyGCounter {
         }
     }
 
-    pub fn apply_bump(&mut self, replica: usize, tally: u64) {
-        self.inner.apply_bump(replica, tally);
+    pub fn apply_bump(&mut self, replica: usize, tally: u64) -> PyResult<()> {
+        self.try_apply_bump(replica, tally)
     }
 
     /// Apply a coordinate delta, raising IndexError without mutation for a bad index.
@@ -872,7 +872,22 @@ mod tests {
                 "IndexError: ReplicaOutOfRange { replica: 2, replica_count: 2 }"
             );
             assert_eq!(counter.state(), vec![0, 0]);
-            counter.apply_bump(2, 9);
+            let error = counter.apply_bump(2, 9).unwrap_err();
+            assert!(error.is_instance_of::<pyo3::exceptions::PyIndexError>(py));
+            // Exercise PyO3 extraction as well as the native shape guard.
+            let exported = Py::new(py, PyGCounter::new(2)).unwrap();
+            for replica in [1u64 << 32, 1u64 << 53] {
+                let error = exported
+                    .bind(py)
+                    .call_method1("apply_bump", (replica, 9))
+                    .unwrap_err();
+                assert!(
+                    error.is_instance_of::<pyo3::exceptions::PyIndexError>(py)
+                        || error.is_instance_of::<pyo3::exceptions::PyOverflowError>(py)
+                );
+                assert_eq!(exported.borrow(py).state(), vec![0, 0]);
+                assert_eq!(exported.borrow(py).value(), 0);
+            }
             assert_eq!(counter.state(), vec![0, 0]);
             counter.try_apply_bump(1, 9).unwrap();
             counter.try_apply_bump(1, 2).unwrap();
@@ -926,8 +941,8 @@ mod tests {
     #[test]
     fn python_counter_calls_rust_core() {
         let mut counter = PyGCounter::new(3);
-        counter.apply_bump(1, 5);
-        counter.apply_bump(1, 2);
+        counter.apply_bump(1, 5).unwrap();
+        counter.apply_bump(1, 2).unwrap();
         assert_eq!(counter.value(), 5);
         assert_eq!(counter.state(), vec![0, 5, 0]);
     }
