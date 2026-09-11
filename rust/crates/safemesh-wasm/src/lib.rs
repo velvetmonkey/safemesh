@@ -446,8 +446,8 @@ impl SafeMeshGCounterReplica {
         unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
     )]
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
-        let log = EventLog::<GCounterDelta>::from_wire_bytes_for(bytes, &self.state).map_err(
-            |error| {
+        let log = EventLog::<GCounterDelta>::records_from_wire_bytes_for(bytes, &self.state)
+            .map_err(|error| {
                 safe_mesh_error(
                     1,
                     match error {
@@ -460,9 +460,8 @@ impl SafeMeshGCounterReplica {
                         _ => "failed to decode event log",
                     },
                 )
-            },
-        )?;
-        if log.records().iter().any(|r| {
+            })?;
+        if log.iter().any(|r| {
             safemesh_crdt::ownership::check_counter_record(self.state.len(), r.id, &r.delta)
                 .is_err()
         }) {
@@ -472,7 +471,6 @@ impl SafeMeshGCounterReplica {
             ));
         }
         Ok(log
-            .records()
             .iter()
             .cloned()
             .map(|record| {
@@ -585,8 +583,9 @@ impl SafeMeshEnableWinsFlagReplica {
         unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
     )]
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
-        let log = EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes_for(bytes, &self.state)
-            .map_err(|error| {
+        let log =
+            EventLog::<EnableWinsFlagDelta<u64>>::records_from_wire_bytes_for(bytes, &self.state)
+                .map_err(|error| {
                 safe_mesh_error(
                     1,
                     match error {
@@ -601,7 +600,6 @@ impl SafeMeshEnableWinsFlagReplica {
                 )
             })?;
         Ok(log
-            .records()
             .iter()
             .cloned()
             .map(|record| {
@@ -708,23 +706,23 @@ impl SafeMeshLwwMapReplica {
         unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
     )]
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
-        let log = EventLog::<LwwMapDelta<u64, u64>>::from_wire_bytes_for(bytes, &self.state)
-            .map_err(|error| {
-                safe_mesh_error(
-                    1,
-                    match error {
-                        safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                        safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
-                            "replica count mismatch"
-                        }
-                        safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
-                        safemesh_crdt::WireError::MissingShape => "event log missing shape",
-                        _ => "failed to decode event log",
-                    },
-                )
-            })?;
+        let log =
+            EventLog::<LwwMapDelta<u64, u64>>::records_from_wire_bytes_for(bytes, &self.state)
+                .map_err(|error| {
+                    safe_mesh_error(
+                        1,
+                        match error {
+                            safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                            safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
+                                "replica count mismatch"
+                            }
+                            safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
+                            safemesh_crdt::WireError::MissingShape => "event log missing shape",
+                            _ => "failed to decode event log",
+                        },
+                    )
+                })?;
         Ok(log
-            .records()
             .iter()
             .cloned()
             .map(|record| {
@@ -837,23 +835,23 @@ impl SafeMeshLwwRegisterReplica {
         unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
     )]
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
-        let log = EventLog::<LwwRegisterDelta<u64>>::from_wire_bytes_for(bytes, &self.state)
-            .map_err(|error| {
-                safe_mesh_error(
-                    1,
-                    match error {
-                        safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                        safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
-                            "replica count mismatch"
-                        }
-                        safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
-                        safemesh_crdt::WireError::MissingShape => "event log missing shape",
-                        _ => "failed to decode event log",
-                    },
-                )
-            })?;
+        let log =
+            EventLog::<LwwRegisterDelta<u64>>::records_from_wire_bytes_for(bytes, &self.state)
+                .map_err(|error| {
+                    safe_mesh_error(
+                        1,
+                        match error {
+                            safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                            safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
+                                "replica count mismatch"
+                            }
+                            safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
+                            safemesh_crdt::WireError::MissingShape => "event log missing shape",
+                            _ => "failed to decode event log",
+                        },
+                    )
+                })?;
         Ok(log
-            .records()
             .iter()
             .cloned()
             .map(|record| {
@@ -1310,13 +1308,13 @@ impl SafeMeshStringOrSetReplica {
     }
 
     fn try_merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, BindingError> {
-        let log = EventLog::<OrSetDelta<String, u64>>::from_wire_bytes_for(bytes, &self.state)
-            .map_err(event_log_decode_error)?;
-        for record in log.records() {
+        let log =
+            EventLog::<OrSetDelta<String, u64>>::records_from_wire_bytes_for(bytes, &self.state)
+                .map_err(event_log_decode_error)?;
+        for record in &log {
             self.check_incoming(record)?;
         }
         Ok(log
-            .records()
             .iter()
             .cloned()
             .map(|record| {

@@ -9,6 +9,25 @@ use safemesh_crdt::{
     LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, Record, WireDecode, WireEncode,
 };
 
+// Reject bool at the Python boundary before any method body can mutate state.
+// Ordinary extraction retains PyO3's TypeError/OverflowError behavior.
+fn numeric<'py, T: FromPyObject<'py>>(value: &Bound<'py, PyAny>) -> PyResult<T> {
+    if value.is_instance_of::<pyo3::types::PyBool>() {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "expected an integer, got bool",
+        ));
+    }
+    value.extract()
+}
+
+fn numeric_tokens(value: &Bound<'_, PyAny>) -> PyResult<Vec<u64>> {
+    value
+        .extract::<Vec<Bound<'_, PyAny>>>()?
+        .iter()
+        .map(numeric)
+        .collect()
+}
+
 fn encode_bytes<'py>(
     py: Python<'py>,
     bytes: Result<Vec<u8>, safemesh_crdt::WireError>,
@@ -36,18 +55,26 @@ pub struct PyGCounter {
 #[pymethods]
 impl PyGCounter {
     #[new]
-    pub fn new(replicas: usize) -> Self {
+    pub fn new(#[pyo3(from_py_with = "numeric")] replicas: usize) -> Self {
         PyGCounter {
             inner: GCounter::new(replicas),
         }
     }
 
-    pub fn apply_bump(&mut self, replica: usize, tally: u64) -> PyResult<()> {
+    pub fn apply_bump(
+        &mut self,
+        #[pyo3(from_py_with = "numeric")] replica: usize,
+        #[pyo3(from_py_with = "numeric")] tally: u64,
+    ) -> PyResult<()> {
         self.try_apply_bump(replica, tally)
     }
 
     /// Apply a coordinate delta, raising IndexError without mutation for a bad index.
-    pub fn try_apply_bump(&mut self, replica: usize, tally: u64) -> PyResult<()> {
+    pub fn try_apply_bump(
+        &mut self,
+        #[pyo3(from_py_with = "numeric")] replica: usize,
+        #[pyo3(from_py_with = "numeric")] tally: u64,
+    ) -> PyResult<()> {
         self.inner
             .try_apply_bump(replica, tally)
             .map_err(|error| pyo3::exceptions::PyIndexError::new_err(format!("{error:?}")))
@@ -66,8 +93,8 @@ impl PyGCounter {
 #[pyfunction]
 pub fn gcounter_delta_to_wire(
     py: Python<'_>,
-    replica: usize,
-    tally: u64,
+    #[pyo3(from_py_with = "numeric")] replica: usize,
+    #[pyo3(from_py_with = "numeric")] tally: u64,
 ) -> PyResult<Bound<'_, PyBytes>> {
     encode_bytes(
         py,
@@ -90,7 +117,12 @@ impl PyLwwRegister {
         }
     }
 
-    pub fn set(&mut self, timestamp: u64, replica: u64, value: u64) {
+    pub fn set(
+        &mut self,
+        #[pyo3(from_py_with = "numeric")] timestamp: u64,
+        #[pyo3(from_py_with = "numeric")] replica: u64,
+        #[pyo3(from_py_with = "numeric")] value: u64,
+    ) {
         self.inner.set(timestamp, replica, value);
     }
 
@@ -98,18 +130,18 @@ impl PyLwwRegister {
         self.inner.value().is_some()
     }
 
-    pub fn value_or(&self, default_value: u64) -> u64 {
+    pub fn value_or(&self, #[pyo3(from_py_with = "numeric")] default_value: u64) -> u64 {
         self.inner.value().copied().unwrap_or(default_value)
     }
 
-    pub fn timestamp_or(&self, default_value: u64) -> u64 {
+    pub fn timestamp_or(&self, #[pyo3(from_py_with = "numeric")] default_value: u64) -> u64 {
         self.inner
             .entry()
             .map(|entry| entry.dot.timestamp)
             .unwrap_or(default_value)
     }
 
-    pub fn writer_replica_or(&self, default_value: u64) -> u64 {
+    pub fn writer_replica_or(&self, #[pyo3(from_py_with = "numeric")] default_value: u64) -> u64 {
         self.inner
             .entry()
             .map(|entry| entry.dot.replica)
@@ -120,9 +152,9 @@ impl PyLwwRegister {
 #[pyfunction]
 pub fn lww_register_delta_to_wire(
     py: Python<'_>,
-    timestamp: u64,
-    replica: u64,
-    value: u64,
+    #[pyo3(from_py_with = "numeric")] timestamp: u64,
+    #[pyo3(from_py_with = "numeric")] replica: u64,
+    #[pyo3(from_py_with = "numeric")] value: u64,
 ) -> PyResult<Bound<'_, PyBytes>> {
     encode_bytes(
         py,
@@ -150,19 +182,34 @@ impl PyLwwMap {
         }
     }
 
-    pub fn set(&mut self, key: u64, timestamp: u64, replica: u64, value: u64) {
+    pub fn set(
+        &mut self,
+        #[pyo3(from_py_with = "numeric")] key: u64,
+        #[pyo3(from_py_with = "numeric")] timestamp: u64,
+        #[pyo3(from_py_with = "numeric")] replica: u64,
+        #[pyo3(from_py_with = "numeric")] value: u64,
+    ) {
         self.inner.set(key, timestamp, replica, value);
     }
 
-    pub fn remove(&mut self, key: u64, timestamp: u64, replica: u64) {
+    pub fn remove(
+        &mut self,
+        #[pyo3(from_py_with = "numeric")] key: u64,
+        #[pyo3(from_py_with = "numeric")] timestamp: u64,
+        #[pyo3(from_py_with = "numeric")] replica: u64,
+    ) {
         self.inner.remove(key, timestamp, replica);
     }
 
-    pub fn has_key(&self, key: u64) -> bool {
+    pub fn has_key(&self, #[pyo3(from_py_with = "numeric")] key: u64) -> bool {
         self.inner.get(&key).is_some()
     }
 
-    pub fn value_or(&self, key: u64, default_value: u64) -> u64 {
+    pub fn value_or(
+        &self,
+        #[pyo3(from_py_with = "numeric")] key: u64,
+        #[pyo3(from_py_with = "numeric")] default_value: u64,
+    ) -> u64 {
         self.inner.get(&key).copied().unwrap_or(default_value)
     }
 
@@ -182,10 +229,10 @@ impl PyLwwMap {
 #[pyfunction]
 pub fn lww_map_set_delta_to_wire(
     py: Python<'_>,
-    key: u64,
-    timestamp: u64,
-    replica: u64,
-    value: u64,
+    #[pyo3(from_py_with = "numeric")] key: u64,
+    #[pyo3(from_py_with = "numeric")] timestamp: u64,
+    #[pyo3(from_py_with = "numeric")] replica: u64,
+    #[pyo3(from_py_with = "numeric")] value: u64,
 ) -> PyResult<Bound<'_, PyBytes>> {
     encode_bytes(
         py,
@@ -203,9 +250,9 @@ pub fn lww_map_set_delta_to_wire(
 #[pyfunction]
 pub fn lww_map_remove_delta_to_wire(
     py: Python<'_>,
-    key: u64,
-    timestamp: u64,
-    replica: u64,
+    #[pyo3(from_py_with = "numeric")] key: u64,
+    #[pyo3(from_py_with = "numeric")] timestamp: u64,
+    #[pyo3(from_py_with = "numeric")] replica: u64,
 ) -> PyResult<Bound<'_, PyBytes>> {
     encode_bytes(
         py,
@@ -233,7 +280,7 @@ impl PyEnableWinsFlag {
         }
     }
 
-    pub fn enable(&mut self, token: u64) {
+    pub fn enable(&mut self, #[pyo3(from_py_with = "numeric")] token: u64) {
         self.inner.enable(token);
     }
 
@@ -258,7 +305,7 @@ impl PyEnableWinsFlag {
 #[pyfunction]
 pub fn enable_wins_flag_enable_delta_to_wire(
     py: Python<'_>,
-    token: u64,
+    #[pyo3(from_py_with = "numeric")] token: u64,
 ) -> PyResult<Bound<'_, PyBytes>> {
     encode_bytes(
         py,
@@ -270,7 +317,7 @@ pub fn enable_wins_flag_enable_delta_to_wire(
 #[pyfunction]
 pub fn enable_wins_flag_disable_delta_to_wire(
     py: Python<'_>,
-    tokens: Vec<u64>,
+    #[pyo3(from_py_with = "numeric_tokens")] tokens: Vec<u64>,
 ) -> PyResult<Bound<'_, PyBytes>> {
     encode_bytes(
         py,
@@ -289,7 +336,10 @@ pub struct PyGCounterReplica {
 #[pymethods]
 impl PyGCounterReplica {
     #[new]
-    pub fn new(replica_id: u64, replicas: usize) -> Self {
+    pub fn new(
+        #[pyo3(from_py_with = "numeric")] replica_id: u64,
+        #[pyo3(from_py_with = "numeric")] replicas: usize,
+    ) -> Self {
         PyGCounterReplica {
             replica_id,
             state: GCounter::new(replicas),
@@ -300,8 +350,8 @@ impl PyGCounterReplica {
     pub fn append_bump<'py>(
         &mut self,
         py: Python<'py>,
-        counter_replica: usize,
-        tally: u64,
+        #[pyo3(from_py_with = "numeric")] counter_replica: usize,
+        #[pyo3(from_py_with = "numeric")] tally: u64,
     ) -> PyResult<Bound<'py, PyBytes>> {
         if safemesh_crdt::ownership::check_counter_record(
             self.state.len(),
@@ -364,8 +414,8 @@ impl PyGCounterReplica {
 
     /// Return one core admission verdict for every decoded input record.
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
-        let log = EventLog::<GCounterDelta>::from_wire_bytes_for(bytes, &self.state).map_err(
-            |error| {
+        let log = EventLog::<GCounterDelta>::records_from_wire_bytes_for(bytes, &self.state)
+            .map_err(|error| {
                 pyo3::exceptions::PyValueError::new_err(match error {
                     safemesh_crdt::WireError::RecordCollision => "record ID collision",
                     safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
@@ -375,9 +425,8 @@ impl PyGCounterReplica {
                     safemesh_crdt::WireError::MissingShape => "event log missing shape",
                     _ => "failed to decode event log",
                 })
-            },
-        )?;
-        if log.records().iter().any(|r| {
+            })?;
+        if log.iter().any(|r| {
             safemesh_crdt::ownership::check_counter_record(self.state.len(), r.id, &r.delta)
                 .is_err()
         }) {
@@ -386,7 +435,6 @@ impl PyGCounterReplica {
             ));
         }
         Ok(log
-            .records()
             .iter()
             .cloned()
             .map(|record| {
@@ -402,7 +450,7 @@ impl PyGCounterReplica {
         encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
     }
 
-    pub fn version_for(&self, replica: u64) -> u64 {
+    pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
         self.log.version().get(replica)
     }
 
@@ -426,7 +474,7 @@ pub struct PyEnableWinsFlagReplica {
 #[pymethods]
 impl PyEnableWinsFlagReplica {
     #[new]
-    pub fn new(replica_id: u64) -> Self {
+    pub fn new(#[pyo3(from_py_with = "numeric")] replica_id: u64) -> Self {
         PyEnableWinsFlagReplica {
             replica_id,
             state: EnableWinsFlag::new(),
@@ -437,7 +485,7 @@ impl PyEnableWinsFlagReplica {
     pub fn append_enable<'py>(
         &mut self,
         py: Python<'py>,
-        token: u64,
+        #[pyo3(from_py_with = "numeric")] token: u64,
     ) -> PyResult<Bound<'py, PyBytes>> {
         let delta = EnableWinsFlagDelta::Enable { token };
         let id = self
@@ -489,8 +537,9 @@ impl PyEnableWinsFlagReplica {
 
     /// Return one core admission verdict for every decoded input record.
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
-        let log = EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes_for(bytes, &self.state)
-            .map_err(|error| {
+        let log =
+            EventLog::<EnableWinsFlagDelta<u64>>::records_from_wire_bytes_for(bytes, &self.state)
+                .map_err(|error| {
                 pyo3::exceptions::PyValueError::new_err(match error {
                     safemesh_crdt::WireError::RecordCollision => "record ID collision",
                     safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
@@ -502,7 +551,6 @@ impl PyEnableWinsFlagReplica {
                 })
             })?;
         Ok(log
-            .records()
             .iter()
             .cloned()
             .map(|record| {
@@ -518,7 +566,7 @@ impl PyEnableWinsFlagReplica {
         encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
     }
 
-    pub fn version_for(&self, replica: u64) -> u64 {
+    pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
         self.log.version().get(replica)
     }
 
@@ -545,7 +593,7 @@ pub struct PyLwwMapReplica {
 #[pymethods]
 impl PyLwwMapReplica {
     #[new]
-    pub fn new(replica_id: u64) -> Self {
+    pub fn new(#[pyo3(from_py_with = "numeric")] replica_id: u64) -> Self {
         PyLwwMapReplica {
             replica_id,
             state: LwwMap::new(),
@@ -556,10 +604,10 @@ impl PyLwwMapReplica {
     pub fn append_set<'py>(
         &mut self,
         py: Python<'py>,
-        key: u64,
-        timestamp: u64,
-        writer_replica: u64,
-        value: u64,
+        #[pyo3(from_py_with = "numeric")] key: u64,
+        #[pyo3(from_py_with = "numeric")] timestamp: u64,
+        #[pyo3(from_py_with = "numeric")] writer_replica: u64,
+        #[pyo3(from_py_with = "numeric")] value: u64,
     ) -> PyResult<Bound<'py, PyBytes>> {
         let delta = LwwMapDelta::Set {
             key,
@@ -583,9 +631,9 @@ impl PyLwwMapReplica {
     pub fn append_remove<'py>(
         &mut self,
         py: Python<'py>,
-        key: u64,
-        timestamp: u64,
-        writer_replica: u64,
+        #[pyo3(from_py_with = "numeric")] key: u64,
+        #[pyo3(from_py_with = "numeric")] timestamp: u64,
+        #[pyo3(from_py_with = "numeric")] writer_replica: u64,
     ) -> PyResult<Bound<'py, PyBytes>> {
         let delta = LwwMapDelta::Remove {
             key,
@@ -621,20 +669,20 @@ impl PyLwwMapReplica {
 
     /// Return one core admission verdict for every decoded input record.
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
-        let log = EventLog::<LwwMapDelta<u64, u64>>::from_wire_bytes_for(bytes, &self.state)
-            .map_err(|error| {
-                pyo3::exceptions::PyValueError::new_err(match error {
-                    safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                    safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
-                        "replica count mismatch"
-                    }
-                    safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
-                    safemesh_crdt::WireError::MissingShape => "event log missing shape",
-                    _ => "failed to decode event log",
-                })
-            })?;
+        let log =
+            EventLog::<LwwMapDelta<u64, u64>>::records_from_wire_bytes_for(bytes, &self.state)
+                .map_err(|error| {
+                    pyo3::exceptions::PyValueError::new_err(match error {
+                        safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                        safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
+                            "replica count mismatch"
+                        }
+                        safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
+                        safemesh_crdt::WireError::MissingShape => "event log missing shape",
+                        _ => "failed to decode event log",
+                    })
+                })?;
         Ok(log
-            .records()
             .iter()
             .cloned()
             .map(|record| {
@@ -650,15 +698,19 @@ impl PyLwwMapReplica {
         encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
     }
 
-    pub fn version_for(&self, replica: u64) -> u64 {
+    pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
         self.log.version().get(replica)
     }
 
-    pub fn has_key(&self, key: u64) -> bool {
+    pub fn has_key(&self, #[pyo3(from_py_with = "numeric")] key: u64) -> bool {
         self.state.get(&key).is_some()
     }
 
-    pub fn value_or(&self, key: u64, default_value: u64) -> u64 {
+    pub fn value_or(
+        &self,
+        #[pyo3(from_py_with = "numeric")] key: u64,
+        #[pyo3(from_py_with = "numeric")] default_value: u64,
+    ) -> u64 {
         self.state.get(&key).copied().unwrap_or(default_value)
     }
 
@@ -685,7 +737,7 @@ pub struct PyLwwRegisterReplica {
 #[pymethods]
 impl PyLwwRegisterReplica {
     #[new]
-    pub fn new(replica_id: u64) -> Self {
+    pub fn new(#[pyo3(from_py_with = "numeric")] replica_id: u64) -> Self {
         PyLwwRegisterReplica {
             replica_id,
             state: LwwRegister::new(),
@@ -696,9 +748,9 @@ impl PyLwwRegisterReplica {
     pub fn append_set<'py>(
         &mut self,
         py: Python<'py>,
-        timestamp: u64,
-        writer_replica: u64,
-        value: u64,
+        #[pyo3(from_py_with = "numeric")] timestamp: u64,
+        #[pyo3(from_py_with = "numeric")] writer_replica: u64,
+        #[pyo3(from_py_with = "numeric")] value: u64,
     ) -> PyResult<Bound<'py, PyBytes>> {
         let delta = LwwRegisterDelta {
             timestamp,
@@ -734,20 +786,20 @@ impl PyLwwRegisterReplica {
 
     /// Return one core admission verdict for every decoded input record.
     pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
-        let log = EventLog::<LwwRegisterDelta<u64>>::from_wire_bytes_for(bytes, &self.state)
-            .map_err(|error| {
-                pyo3::exceptions::PyValueError::new_err(match error {
-                    safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                    safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
-                        "replica count mismatch"
-                    }
-                    safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
-                    safemesh_crdt::WireError::MissingShape => "event log missing shape",
-                    _ => "failed to decode event log",
-                })
-            })?;
+        let log =
+            EventLog::<LwwRegisterDelta<u64>>::records_from_wire_bytes_for(bytes, &self.state)
+                .map_err(|error| {
+                    pyo3::exceptions::PyValueError::new_err(match error {
+                        safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                        safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
+                            "replica count mismatch"
+                        }
+                        safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
+                        safemesh_crdt::WireError::MissingShape => "event log missing shape",
+                        _ => "failed to decode event log",
+                    })
+                })?;
         Ok(log
-            .records()
             .iter()
             .cloned()
             .map(|record| {
@@ -763,7 +815,7 @@ impl PyLwwRegisterReplica {
         encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
     }
 
-    pub fn version_for(&self, replica: u64) -> u64 {
+    pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
         self.log.version().get(replica)
     }
 
@@ -771,18 +823,18 @@ impl PyLwwRegisterReplica {
         self.state.value().is_some()
     }
 
-    pub fn value_or(&self, default_value: u64) -> u64 {
+    pub fn value_or(&self, #[pyo3(from_py_with = "numeric")] default_value: u64) -> u64 {
         self.state.value().copied().unwrap_or(default_value)
     }
 
-    pub fn timestamp_or(&self, default_value: u64) -> u64 {
+    pub fn timestamp_or(&self, #[pyo3(from_py_with = "numeric")] default_value: u64) -> u64 {
         self.state
             .entry()
             .map(|entry| entry.dot.timestamp)
             .unwrap_or(default_value)
     }
 
-    pub fn writer_replica_or(&self, default_value: u64) -> u64 {
+    pub fn writer_replica_or(&self, #[pyo3(from_py_with = "numeric")] default_value: u64) -> u64 {
         self.state
             .entry()
             .map(|entry| entry.dot.replica)
@@ -826,21 +878,25 @@ impl PyOrSet {
     }
 
     /// Add an element with a caller-supplied token, exactly as in the Rust core.
-    pub fn add(&mut self, element: u64, token: u64) {
+    pub fn add(
+        &mut self,
+        #[pyo3(from_py_with = "numeric")] element: u64,
+        #[pyo3(from_py_with = "numeric")] token: u64,
+    ) {
         self.inner.add(element, token);
     }
     /// Tombstone tokens globally, including tokens whose adds have not arrived yet.
-    pub fn apply_remove(&mut self, tokens: Vec<u64>) {
+    pub fn apply_remove(&mut self, #[pyo3(from_py_with = "numeric_tokens")] tokens: Vec<u64>) {
         self.inner.apply_remove(tokens);
     }
 
-    pub fn observed_tokens(&self, element: u64) -> Vec<u64> {
+    pub fn observed_tokens(&self, #[pyo3(from_py_with = "numeric")] element: u64) -> Vec<u64> {
         self.inner.observed_tokens(&element).into_iter().collect()
     }
     pub fn elements(&self) -> Vec<u64> {
         self.inner.elements().into_iter().collect()
     }
-    pub fn contains(&self, element: u64) -> bool {
+    pub fn contains(&self, #[pyo3(from_py_with = "numeric")] element: u64) -> bool {
         self.inner.contains(&element)
     }
     pub fn tombstones(&self) -> Vec<u64> {
@@ -859,6 +915,99 @@ mod tests {
     fn with_python<T>(f: impl FnOnce(Python<'_>) -> T) -> T {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(f)
+    }
+
+    #[test]
+    fn python_numeric_bools_and_batch_occurrences() {
+        with_python(|py| {
+            let module = PyModule::new_bound(py, "safemesh_python").unwrap();
+            safemesh_python(&module).unwrap();
+            let globals = pyo3::types::PyDict::new_bound(py);
+            globals.set_item("sm", module).unwrap();
+            py.run_bound(r#"
+import struct, zlib
+
+def refused(fn, args, snapshot=lambda: None):
+    before = snapshot()
+    try:
+        fn(*args)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError((fn, args, 'accepted bool'))
+    assert snapshot() == before, (fn, args, 'mutated')
+
+constructors = [(sm.GCounter, [2]), (sm.GCounterReplica, [0, 2]),
+                (sm.EnableWinsFlagReplica, [0]), (sm.LwwMapReplica, [0]),
+                (sm.LwwRegisterReplica, [0])]
+functions = [(sm.gcounter_delta_to_wire, [0, 1]),
+             (sm.lww_register_delta_to_wire, [1, 0, 1]),
+             (sm.lww_map_set_delta_to_wire, [1, 1, 0, 1]),
+             (sm.lww_map_remove_delta_to_wire, [1, 1, 0]),
+             (sm.enable_wins_flag_enable_delta_to_wire, [1])]
+for fn, args in constructors + functions:
+    for i in range(len(args)):
+        for b in [True, False]:
+            bad = args.copy(); bad[i] = b
+            refused(fn, bad)
+
+cases = [
+ (sm.GCounter(2), [('apply_bump',[0,1]), ('try_apply_bump',[0,1])], lambda o: o.state()),
+ (sm.LwwRegister(), [('set',[1,0,1]), ('value_or',[0]), ('timestamp_or',[0]), ('writer_replica_or',[0])], lambda o: (o.value_or(0),o.timestamp_or(0),o.writer_replica_or(0))),
+ (sm.LwwMap(), [('set',[1,1,0,1]), ('remove',[1,1,0]), ('has_key',[1]), ('value_or',[1,0])], lambda o: (o.visible_keys(),o.entry_keys(),o.removal_keys(),o.value_or(1,0))),
+ (sm.EnableWinsFlag(), [('enable',[1])], lambda o: (o.enabled_tokens(),o.tombstone_tokens())),
+ (sm.OrSet(), [('add',[1,1]), ('observed_tokens',[1]), ('contains',[1])], lambda o: (o.elements(),o.observed_tokens(1),o.tombstones())),
+ (sm.GCounterReplica(0,2), [('append_bump',[0,1]), ('version_for',[0])], lambda o: (o.log_bytes(),o.state())),
+ (sm.EnableWinsFlagReplica(0), [('append_enable',[1]), ('version_for',[0])], lambda o: (o.log_bytes(),o.enabled_tokens(),o.tombstone_tokens())),
+ (sm.LwwMapReplica(0), [('append_set',[1,1,0,1]), ('append_remove',[1,1,0]), ('version_for',[0]), ('has_key',[1]), ('value_or',[1,0])], lambda o: (o.log_bytes(),o.visible_keys(),o.removal_keys())),
+ (sm.LwwRegisterReplica(0), [('append_set',[1,0,1]), ('version_for',[0]), ('value_or',[0]), ('timestamp_or',[0]), ('writer_replica_or',[0])], lambda o: (o.log_bytes(),o.value_or(0),o.timestamp_or(0),o.writer_replica_or(0))),
+]
+for obj, methods, snapshot in cases:
+    for name, args in methods:
+        for i in range(len(args)):
+            for b in [True, False]:
+                bad=args.copy(); bad[i]=b
+                refused(getattr(obj,name),bad,lambda: snapshot(obj))
+for b in [True, False]:
+    obj=sm.OrSet(); obj.add(1,1)
+    refused(obj.apply_remove, [[1,b]], lambda: (obj.elements(),obj.tombstones()))
+    refused(sm.enable_wins_flag_disable_delta_to_wire, [[1,b]])
+
+# Recompute framing with the same documented CRC and lengths; no fixtures changed.
+def occurrences(frame, order):
+    body=frame[9:-4]
+    arity=8+struct.unpack_from('<I',body,4)[0]
+    offset=arity+1+(8 if body[arity] == 1 else 0)
+    pos=offset+4; records=[]
+    while pos<len(body):
+        n=4+struct.unpack_from('<I',body,pos)[0]
+        records.append(body[pos:pos+n]); pos+=n
+    body=body[:offset]+struct.pack('<I',len(order))+b''.join(records[i] for i in order)
+    checked=struct.pack('<II',len(body),len(body)^0xffffffff)+body
+    return b'\x03'+checked+struct.pack('<I',zlib.crc32(checked))
+for make, append in [
+    (lambda: sm.GCounterReplica(0,2), lambda r: r.append_bump(0,1)),
+    (lambda: sm.EnableWinsFlagReplica(0), lambda r: r.append_enable(1)),
+    (lambda: sm.LwwMapReplica(0), lambda r: r.append_set(1,1,0,1)),
+    (lambda: sm.LwwRegisterReplica(0), lambda r: r.append_set(1,0,1)),
+]:
+    sender=make(); append(sender); append(sender)
+    for order, expected in [([0,0,1],['accepted','duplicate','accepted']),
+                            ([0,0,0],['accepted','duplicate','duplicate']),
+                            ([0,1,0],['accepted','accepted','duplicate'])]:
+        receiver=make(); frame=occurrences(sender.log_bytes(),order)
+        assert receiver.merge_log_bytes(frame)==expected
+        canonical=receiver.log_bytes()
+        assert receiver.merge_log_bytes(frame)==['duplicate']*3
+        assert receiver.log_bytes()==canonical
+        assert receiver.merge_log_bytes(canonical)==['duplicate']*len(set(order))
+        untouched=make(); before=untouched.log_bytes()
+        try: untouched.merge_log_bytes(frame+b'\x00')
+        except ValueError: pass
+        else: raise AssertionError('accepted trailing bytes')
+        assert untouched.log_bytes()==before
+"#, Some(&globals), None).unwrap();
+        });
     }
 
     #[test]

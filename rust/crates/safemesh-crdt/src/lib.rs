@@ -1699,17 +1699,42 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
         state: &C,
     ) -> Result<Self, WireError> {
         let log = Self::from_wire_bytes(bytes)?;
-        match (state.replica_count(), log.replica_count) {
+        log.validate_for(state)?;
+        Ok(log)
+    }
+
+    /// Decode all input occurrences in order for per-record admission reporting.
+    /// Validate the entire frame, collisions and destination shape before returning.
+    /// The ordinary log loaders continue to deduplicate identical records.
+    pub fn records_from_wire_bytes_for<C: Crdt<Delta = D>>(
+        bytes: &[u8],
+        state: &C,
+    ) -> Result<Vec<Record<D>>, WireError>
+    where
+        D: Clone,
+    {
+        let mut records = Vec::new();
+        let mut cursor = WireCursor::new(bytes);
+        let log = Self::decode_with(&mut cursor, |record| records.push(record.clone()))?;
+        if !cursor.is_empty() {
+            return Err(WireError::TrailingBytes);
+        }
+        log.validate_for(state)?;
+        Ok(records)
+    }
+
+    fn validate_for<C: Crdt<Delta = D>>(&self, state: &C) -> Result<(), WireError> {
+        match (state.replica_count(), self.replica_count) {
             (Some(expected), Some(actual)) if expected != actual => {
                 return Err(WireError::ReplicaCountMismatch { expected, actual })
             }
             (None, Some(_)) | (Some(_), None) => return Err(WireError::ArityKindMismatch),
             _ => {}
         }
-        for record in log.records() {
+        for record in self.records() {
             state.validate_record(record.id, &record.delta)?;
         }
-        Ok(log)
+        Ok(())
     }
 }
 
@@ -2187,6 +2212,15 @@ impl<D: WireEncode + WireSchema> WireEncode for EventLog<D> {
 
 impl<D: WireDecode + WireSchema + PartialEq> WireDecode for EventLog<D> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        Self::decode_with(cursor, |_| {})
+    }
+}
+
+impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
+    fn decode_with(
+        cursor: &mut WireCursor<'_>,
+        mut occurrence: impl FnMut(&Record<D>),
+    ) -> Result<Self, WireError> {
         read_tag(cursor, TAG_EVENT_LOG)?;
         let start = cursor.offset;
         let len = cursor.read_u32()?;
@@ -2220,9 +2254,9 @@ impl<D: WireDecode + WireSchema + PartialEq> WireDecode for EventLog<D> {
         for _ in 0..body.read_len()? {
             let record_len = body.read_len()?;
             let record_bytes = body.read_exact(record_len)?;
-            if log.insert_record(Record::<D>::from_wire_bytes(record_bytes)?)
-                == Admission::Collision
-            {
+            let record = Record::<D>::from_wire_bytes(record_bytes)?;
+            occurrence(&record);
+            if log.insert_record(record) == Admission::Collision {
                 return Err(WireError::RecordCollision);
             }
         }
@@ -2869,6 +2903,34 @@ mod frame_tests {
             EventLog::<GCounterDelta>::from_wire_bytes(&wire_log(&[record(1, 5), record(1, 5)]))
                 .unwrap();
         assert_eq!(decoded.records(), &[record(1, 5)]);
+        for records in [
+            vec![record(1, 5), record(1, 5), record(1, 5)],
+            vec![record(1, 5), record(2, 7), record(1, 5)],
+        ] {
+            let bytes = wire_log(&records);
+            let state = GCounter::new(2);
+            let plain = EventLog::<GCounterDelta>::from_wire_bytes(&bytes).unwrap();
+            let shaped = EventLog::<GCounterDelta>::from_wire_bytes_for(&bytes, &state).unwrap();
+            assert_eq!(plain, shaped);
+            let expected = if records[1] == records[0] {
+                &records[..1]
+            } else {
+                &records[..2]
+            };
+            assert_eq!(plain.records(), expected);
+            assert_eq!(plain.version(), shaped.version());
+            assert_eq!(plain.to_wire_bytes(), shaped.to_wire_bytes());
+            assert_eq!(
+                EventLog::<GCounterDelta>::records_from_wire_bytes_for(&bytes, &state).unwrap(),
+                records
+            );
+            let mut trailing = bytes;
+            trailing.push(0);
+            assert_eq!(
+                EventLog::<GCounterDelta>::records_from_wire_bytes_for(&trailing, &state),
+                Err(WireError::TrailingBytes)
+            );
+        }
     }
 }
 

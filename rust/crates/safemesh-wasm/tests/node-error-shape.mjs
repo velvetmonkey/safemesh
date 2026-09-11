@@ -217,3 +217,58 @@ for (const method of ["applyBump", "tryApplyBump", "appendBump"]) {
   object.free();
 }
 console.log("NUMERIC_SHAPE_REFUSALS=6");
+
+// Exercise input positions independently of the deduplicating log encoder.
+function frameOccurrences(frame, order) {
+  const body = Buffer.from(frame).subarray(9, -4);
+  const arity = 8 + body.readUInt32LE(4);
+  const countOffset = arity + 1 + (body[arity] === 1 ? 8 : 0);
+  const records = [];
+  for (let pos = countOffset + 4; pos < body.length;) {
+    const end = pos + 4 + body.readUInt32LE(pos);
+    records.push(body.subarray(pos, end));
+    pos = end;
+  }
+  const word = n => { const b = Buffer.alloc(4); b.writeUInt32LE(n >>> 0); return b; };
+  const next = Buffer.concat([body.subarray(0, countOffset), word(order.length), ...order.map(i => records[i])]);
+  const checked = Buffer.concat([word(next.length), word(~next.length), next]);
+  let crc = 0xffffffff;
+  for (const byte of checked) {
+    crc ^= byte;
+    for (let i = 0; i < 8; i++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return Buffer.concat([Buffer.from([3]), checked, word(~crc)]);
+}
+let occurrenceCases = 0;
+for (const [make, append] of [
+  [() => new wasm.SafeMeshGCounterReplica(0n, 2), r => r.appendBump(0, 1n)],
+  [() => new wasm.SafeMeshEnableWinsFlagReplica(0n), r => r.appendEnable(1n)],
+  [() => new wasm.SafeMeshLwwMapReplica(0n), r => r.appendSet(1n, 1n, 0n, 1n)],
+  [() => new wasm.SafeMeshLwwRegisterReplica(0n), r => r.appendSet(1n, 0n, 1n)],
+  [() => new wasm.SafeMeshStringOrSetReplica(0n), r => r.appendAdd("water", 1n)],
+]) {
+  const sender = make();
+  try {
+    append(sender); append(sender);
+    for (const [order, expected] of [
+      [[0, 0, 1], ["accepted", "duplicate", "accepted"]],
+      [[0, 0, 0], ["accepted", "duplicate", "duplicate"]],
+      [[0, 1, 0], ["accepted", "accepted", "duplicate"]],
+    ]) {
+      const receiver = make(), untouched = make();
+      try {
+        const frame = frameOccurrences(sender.logBytes(), order);
+        assert.deepEqual(receiver.mergeLogBytes(frame), expected);
+        const canonical = receiver.logBytes();
+        assert.deepEqual(receiver.mergeLogBytes(frame), ["duplicate", "duplicate", "duplicate"]);
+        assert.deepEqual(receiver.logBytes(), canonical);
+        assert.deepEqual(receiver.mergeLogBytes(canonical), Array(new Set(order).size).fill("duplicate"));
+        const before = snapshot(untouched);
+        assert.throws(() => untouched.mergeLogBytes(Buffer.concat([frame, Buffer.from([0])])), error => error.name === "SafeMeshError" && error.code === 1);
+        assert.deepEqual(snapshot(untouched), before);
+        occurrenceCases++;
+      } finally { receiver.free(); untouched.free(); }
+    }
+  } finally { sender.free(); }
+}
+console.log(`BATCH_OCCURRENCE_CASES=${occurrenceCases}`);
