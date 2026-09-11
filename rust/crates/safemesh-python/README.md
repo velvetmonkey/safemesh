@@ -1,5 +1,29 @@
 # SafeMesh Python
 
+SafeMesh's Rust crate floor for consumers is **Rust 1.89**. For the source builds,
+demos and locked wasm-pack 0.15.0 installation on this page, use **Rust 1.96.1**,
+the full-gate CI version. Install rustup first (Linux/Bash, with curl and a native
+C compiler/linker), then select that toolchain:
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.96.1
+. "$HOME/.cargo/env"
+rustup default 1.96.1
+```
+
+The default applies to your user account; the repository's `rust-toolchain.toml`
+also selects 1.96.1 inside this checkout. An outside application's toolchain remains
+its own choice; consuming the crate requires at least 1.89.
+
+Install the Python build tool in an activated virtual environment before building:
+
+```sh
+python3 -m venv .venv-build
+. .venv-build/bin/activate
+python3 -m pip install 'maturin>=1.7,<2'
+```
+
+
 `safemesh-python` is the PyO3/maturin wrapper over the SafeMesh Rust core. It exposes byte-oriented replica/event-log helpers for Python code while keeping merge behavior in one Rust implementation.
 
 ## Claim boundary

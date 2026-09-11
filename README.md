@@ -31,6 +31,41 @@ Python also exchanges replica and event-log bytes and runs an in-memory partitio
 process restore walk. The C ABI exposes the types and a G-Counter delta-to-wire helper,
 with no replica or event-log surface.
 
+## Build toolchain
+
+SafeMesh's Rust crate floor for consumers is **Rust 1.89**. For the source builds,
+demos and locked wasm-pack 0.15.0 installation on this page, use **Rust 1.96.1**,
+the full-gate CI version. Install rustup first (Linux/Bash, with curl and a native
+C compiler/linker), then select that toolchain:
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.96.1
+. "$HOME/.cargo/env"
+rustup default 1.96.1
+```
+
+The default applies to your user account; the repository's `rust-toolchain.toml`
+also selects 1.96.1 inside this checkout. An outside application's toolchain remains
+its own choice; consuming the crate requires at least 1.89.
+
+For WASM commands, install the target and pinned build tool:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack --version 0.15.0 --locked
+```
+
+For Python wheel commands, install Python 3 with venv/pip and activate a build environment:
+
+```sh
+python3 -m venv .venv-build
+. .venv-build/bin/activate
+python3 -m pip install 'maturin>=1.7,<2'
+```
+
+The WASM/Node commands also need Node.js and npm; browser prerequisites are in
+[the web guide](web/README.md#run). Start each table command at the repository root.
+
 ## Install matrix
 
 Artifact available: the install flows below produce local Rust packages, WASM/TypeScript packages, and Python wheels. Registry artifact availability is not established by these local flows. Maintainer-supported status is unknown for Rust, C ABI, WASM/TypeScript, and Python. These commands are dry-run or local wheel/package flows; this branch does not publish to any registry.
@@ -94,12 +129,22 @@ See `ARCHITECTURE.md`, `CLAIMS.md`, and `WHAT-IS-PROVEN.md`.
 
 ## CI Gate
 
-For the product-level Rust check, run:
+Use the Rust 1.96.1 and binding-tool setup above. For the product-level Rust check, run:
 
 ```sh
 cd rust
 cargo test -p safemesh-crdt --features laws
 ```
+
+For the full gate, install cbindgen before invoking `./scripts/ci.sh`:
+
+```sh
+cargo install cbindgen --version 0.28.0 --locked
+```
+
+The full gate also needs Lean **4.28.0** (`leanprover/lean4:v4.28.0` in
+`lean/lean-toolchain`), available through [elan](https://github.com/leanprover/elan#installation),
+and Node/npm plus the Python/WASM setup above.
 
 This Lean-free check runs the CRDT tests and laws harness. For the full-repository check, run `./scripts/ci.sh` with the Lean toolchain (`lake`), Rust/rustup, cbindgen, maturin, and the web Node/npm toolchain. Build checked: the script includes Lean, Rust formatting, embedded and WASM cross-builds, the FFI header check, and the web production build. Runtime tested: it runs host Rust tests/features/examples, the break-it and cold-chain demos, and the Node-hosted web tests. Integration tested: its FFI smoke script compiles, links, and runs an external C caller against the built library, and its package smoke flow runs the installed Python wheel and the generated WASM package in Node on the CI Linux runner. Hardware and browser runtime coverage is not established by these cross-builds or Node-hosted tests.
 

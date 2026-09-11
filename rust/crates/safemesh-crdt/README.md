@@ -1,5 +1,21 @@
 # SafeMesh CRDT
 
+SafeMesh's Rust crate floor for consumers is **Rust 1.89**. For the source builds,
+demos and locked wasm-pack 0.15.0 installation on this page, use **Rust 1.96.1**,
+the full-gate CI version. Install rustup first (Linux/Bash, with curl and a native
+C compiler/linker), then select that toolchain:
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.96.1
+. "$HOME/.cargo/env"
+rustup default 1.96.1
+```
+
+The default applies to your user account; the repository's `rust-toolchain.toml`
+also selects 1.96.1 inside this checkout. An outside application's toolchain remains
+its own choice; consuming the crate requires at least 1.89.
+
+
 `safemesh-crdt` is the Rust core of SafeMesh: a `no_std + alloc` delta-state CRDT library with an engineered event log for append, merge, `since`, and version-vector sync.
 
 ## Claim boundary
@@ -16,6 +32,9 @@ See the repository `CLAIMS.md` and `WHAT-IS-PROVEN.md` for the full wording rule
 [dependencies]
 safemesh-crdt = { git = "https://github.com/velvetmonkey/safemesh.git", rev = "6172d7ad7b950e3238f372f378cf8617dcd86984" }
 ```
+
+The pinned rev `6172d7ad` is older than current `main` and the gold path, which uses the current checkout.
+
 
 A registry release of `safemesh-crdt` has not yet been made. The full `rev` pins
 these examples' source independently of future main changes; keep your application's
