@@ -6,6 +6,14 @@ description: Clone the source and run Rust, Python, and browser demonstrations.
 These examples use **main (unreleased)** source. They exercise modeled convergence;
 they do not establish real transport delivery, storage durability, or maintainer support.
 
+## Put SafeMesh in your program
+
+Start with the [Rust and TypeScript gold paths](/safemesh/getting-started/) to add
+the local library/package, make an edit, save it, restart in another process and
+sync a second replica. Those complete, CI-executed consumer fixtures include
+asserted output and ordinary malformed-record errors. The examples below explore
+modeled delivery failures after that first integration.
+
 ## Before you start
 
 Use Linux with Git, internet access, Rust and Cargo installed through rustup, and a

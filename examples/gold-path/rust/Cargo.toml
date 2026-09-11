@@ -1,0 +1,8 @@
+[package]
+name = "safemesh-first-use"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+safemesh-crdt = { path = "../../../rust/crates/safemesh-crdt", features = ["local-writer"] }
