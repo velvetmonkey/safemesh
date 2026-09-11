@@ -190,11 +190,12 @@ where
         ) {
             return Err(LocalError::Refused);
         }
-        let mut candidate = self.log.clone();
-        let outcome = candidate.insert_record(record.clone());
+        let outcome = self.log.admission(&record);
         if outcome != Admission::Accepted {
             return Ok(outcome);
         }
+        let mut candidate = self.log.clone();
+        let outcome = candidate.insert_record(record.clone());
         let sequence = if record.id.replica == self.config.writer {
             self.last_sequence.max(record.id.sequence)
         } else {
@@ -210,6 +211,29 @@ where
         self.held = true;
         Ok(outcome)
     }
+    // Only for the private restart candidate. Failure discards the entire
+    // candidate, so replay can admit in place without cloning a growing log.
+    fn replay_validated(&mut self, record: Record<C::Delta>) -> Result<(), LocalError> {
+        if refuses(
+            self.context(self.ticket(), false),
+            record.id,
+            record.delta.owned_payload(),
+        ) {
+            return Err(LocalError::Refused);
+        }
+        let id = record.id;
+        let outcome = self
+            .log
+            .admit_with(record, |delta| self.state.apply_delta(delta.clone()));
+        if outcome != Admission::Accepted {
+            return Err(LocalError::InvalidHistory);
+        }
+        if id.replica == self.config.writer {
+            self.last_sequence = self.last_sequence.max(id.sequence);
+        }
+        Ok(())
+    }
+
     /// Append an existing delta in the configured writer's space. No allocation
     /// or state mutation occurs on refusal, exhaustion, duplicate or collision.
     pub fn append(
@@ -471,9 +495,7 @@ where
         // Compose packet A's corpus-bound ownedStep with M1 admission/replay.
         // This candidate is private until every record and allocation check passes.
         for record in log.records() {
-            if inner.admit(inner.ticket(), record.clone(), false)? != Admission::Accepted {
-                return Err(LocalError::InvalidHistory);
-            }
+            inner.replay_validated(record.clone())?;
         }
         if inner.last_sequence != transaction.last_sequence {
             return Err(LocalError::InvalidHistory);
@@ -792,6 +814,79 @@ mod durable_tests {
             writer: 0,
         }
     }
+    #[test]
+    fn duplicate_and_replay_do_not_clone_history() {
+        use std::{cell::Cell, rc::Rc};
+
+        struct Delta(u64, Rc<Cell<usize>>);
+        impl Clone for Delta {
+            fn clone(&self) -> Self {
+                self.1.set(self.1.get() + 1);
+                Self(self.0, self.1.clone())
+            }
+        }
+        impl PartialEq for Delta {
+            fn eq(&self, other: &Self) -> bool {
+                self.0 == other.0
+            }
+        }
+        impl OwnedDelta for Delta {
+            fn owned_payload(&self) -> OwnedPayload {
+                OwnedPayload::Remove
+            }
+        }
+        struct State(u64);
+        impl crate::Mergeable for State {
+            fn merge(&mut self, other: &Self) {
+                self.0 = self.0.max(other.0);
+            }
+        }
+        impl Crdt for State {
+            type Delta = Delta;
+            fn validate_record(&self, _: RecordId, _: &Delta) -> Result<(), WireError> {
+                Ok(())
+            }
+            fn apply_delta(&mut self, delta: Delta) {
+                self.0 = self.0.max(delta.0);
+            }
+        }
+
+        let clones = Rc::new(Cell::new(0));
+        let record = |sequence, value| Record {
+            id: RecordId {
+                replica: 0,
+                sequence,
+            },
+            delta: Delta(value, clones.clone()),
+        };
+        let mut r = LocalReplica::fresh(&root(), config(), State(0)).unwrap();
+        for sequence in 1..=128 {
+            r.replay_validated(record(sequence, sequence)).unwrap();
+        }
+        // Only the current delta is copied for application, never the prefix.
+        assert_eq!(clones.get(), 128);
+        assert_eq!(r.last_sequence, 128);
+        assert_eq!(r.state().0, 128);
+        clones.set(0);
+        for (value, expected) in [(128, Admission::Duplicate), (999, Admission::Collision)] {
+            assert_eq!(
+                r.admit_committed(r.ticket(), record(128, value), false, |_, _| {
+                    panic!("non-admission must not commit")
+                })
+                .unwrap(),
+                expected
+            );
+            assert!(matches!(
+                r.replay_validated(record(128, value)),
+                Err(LocalError::InvalidHistory)
+            ));
+        }
+        assert_eq!(clones.get(), 0);
+        assert_eq!(r.log().records().len(), 128);
+        assert_eq!(r.last_sequence, 128);
+        assert_eq!(r.state().0, 128);
+    }
+
     fn read(root: &Path) -> CommittedTransaction {
         CommittedTransaction::read(root, config()).unwrap()
     }
