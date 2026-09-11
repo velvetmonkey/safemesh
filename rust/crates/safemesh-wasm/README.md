@@ -103,8 +103,15 @@ Run `./scripts/package-smoke.sh` from the repository root to build the bundler p
 ## Checked coordinates and OR-Set
 
 `SafeMeshGCounter.tryApplyBump(replica, tally)` throws an `Error` with the message
-`replica out of range` for an invalid coordinate
-without changing state. `applyBump` retains its silent behavior.
+`replica out of range` for an integer coordinate outside the counter shape,
+without changing state. `applyBump` uses the same checked path.
+
+Numeric inputs are checked before WASM conversion. Coordinates must be finite,
+nonnegative integer `number` values within the wasm32 range (negative zero is
+refused); counter writes must also fit the counter shape. Unsigned 64-bit inputs
+must be `bigint` values from `0n` through `(1n << 64n) - 1n`. These checks also
+apply to readers and wire helpers. Token arrays must be `BigUint64Array` values.
+Invalid inputs raise `SafeMeshError` with code 2 before state or log mutation.
 
 Build a Node package from this crate directory with
 `wasm-pack build . --target nodejs --out-dir pkg-node --release`. Save this as
