@@ -1,10 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="96" fill="#f7f7f4"/>
-  <path d="M112 274c54-86 234-86 288 0" fill="none" stroke="#2563eb" stroke-width="34" stroke-linecap="round"/>
-  <path d="M142 350c64 48 164 48 228 0" fill="none" stroke="#16803c" stroke-width="34" stroke-linecap="round"/>
-  <circle cx="128" cy="224" r="42" fill="#171717"/>
-  <circle cx="256" cy="172" r="42" fill="#171717"/>
-  <circle cx="384" cy="224" r="42" fill="#171717"/>
-  <circle cx="192" cy="336" r="30" fill="#b42318"/>
-  <circle cx="320" cy="336" r="30" fill="#b42318"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>SafeMesh</title>
+  <rect width="64" height="64" rx="13" fill="#0d1c33"/>
+  <g stroke="#eaf7ff" stroke-width="5" stroke-linecap="round">
+    <path d="M32 31 14 31"/>
+    <path d="M32 31 47 15"/>
+    <path d="M32 31 46 47"/>
+  </g>
+  <g stroke="#0d1c33" stroke-width="2.5">
+    <circle cx="14" cy="31" r="7.5" fill="#2b8ce8"/>
+    <circle cx="47" cy="15" r="8" fill="#2ad4f0"/>
+    <circle cx="46" cy="47" r="7" fill="#24e3f6"/>
+    <circle cx="32" cy="31" r="8" fill="#f2fbff"/>
+  </g>
 </svg>
