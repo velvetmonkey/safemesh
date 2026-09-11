@@ -5,7 +5,7 @@ SafeMesh follows verification-guided development:
 1. Lean definitions state the semantics.
 2. Lean theorems prove convergence properties over those definitions.
 3. A Lean executable emits an oracle corpus from the same definitions.
-4. Rust product code replays that corpus and must match it byte-for-byte.
+4. Rust product code replays that JSON corpus and compares state vectors, sets, read vectors, numeric values, ownership decisions and optional allocation/sequence results with the parsed expectations.
 
 The proof is in Lean. The Rust crate is a second implementation held to the proof by differential conformance.
 
