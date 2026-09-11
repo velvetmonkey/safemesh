@@ -1,10 +1,12 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import assurance from './assurance.mjs';
 import { siteUrl } from './site-url.mjs';
 
 const site = siteUrl();
 
 export default defineConfig({
+  markdown: { remarkPlugins: [assurance] },
   outDir: './dist',
   site: site.origin,
   base: site.pathname.replace(/\/$/, '') || '/',
