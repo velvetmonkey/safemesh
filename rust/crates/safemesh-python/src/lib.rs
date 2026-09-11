@@ -846,6 +846,19 @@ impl PyOrSet {
     pub fn tombstones(&self) -> Vec<u64> {
         self.inner.tombstones().iter().copied().collect()
     }
+    /// Check Python identity before extracting either Rust borrow.
+    #[pyo3(name = "merge")]
+    pub fn merge_py(slf: &Bound<'_, Self>, other: &Bound<'_, Self>) -> PyResult<()> {
+        if slf.is(other) {
+            return Ok(());
+        }
+        let other = other.try_borrow()?;
+        slf.try_borrow_mut()?.merge(&other);
+        Ok(())
+    }
+}
+
+impl PyOrSet {
     pub fn merge(&mut self, other: &PyOrSet) {
         self.inner.merge(&other.inner);
     }
@@ -859,6 +872,50 @@ mod tests {
     fn with_python<T>(f: impl FnOnce(Python<'_>) -> T) -> T {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(f)
+    }
+
+    #[test]
+    fn orset_self_merge_keeps_python_handle_usable() {
+        with_python(|py| {
+            let set = Py::new(py, PyOrSet::new()).unwrap();
+            let set = set.bind(py);
+            set.call_method1("add", (42u64, 7u64)).unwrap();
+            set.call_method1("apply_remove", (vec![8u64],)).unwrap();
+            set.call_method1("merge", (set,)).unwrap();
+            assert_eq!(
+                set.call_method0("elements")
+                    .unwrap()
+                    .extract::<Vec<u64>>()
+                    .unwrap(),
+                vec![42]
+            );
+            assert_eq!(
+                set.call_method0("tombstones")
+                    .unwrap()
+                    .extract::<Vec<u64>>()
+                    .unwrap(),
+                vec![8]
+            );
+            set.call_method1("add", (43u64, 9u64)).unwrap();
+            assert_eq!(
+                set.call_method0("elements")
+                    .unwrap()
+                    .extract::<Vec<u64>>()
+                    .unwrap(),
+                vec![42, 43]
+            );
+            let other = Py::new(py, PyOrSet::new()).unwrap();
+            other.bind(py).call_method1("add", (99u64, 10u64)).unwrap();
+            set.call_method1("merge", (other.bind(py),)).unwrap();
+            set.call_method1("merge", (other.bind(py),)).unwrap();
+            assert_eq!(
+                set.call_method0("elements")
+                    .unwrap()
+                    .extract::<Vec<u64>>()
+                    .unwrap(),
+                vec![42, 43, 99]
+            );
+        });
     }
 
     #[test]
