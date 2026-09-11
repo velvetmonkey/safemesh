@@ -26,7 +26,7 @@ selects main, which does not yet contain them. Obtain the preview source in an
 empty working directory:
 
 ```sh
-git clone --branch lane/smgoldpath https://github.com/velvetmonkey/safemesh.git
+git clone --branch main https://github.com/velvetmonkey/safemesh.git
 cd safemesh
 ```
 
