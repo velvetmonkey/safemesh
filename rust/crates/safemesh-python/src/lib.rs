@@ -42,8 +42,8 @@ impl PyGCounter {
         }
     }
 
-    pub fn apply_bump(&mut self, replica: usize, tally: u64) {
-        self.inner.apply_bump(replica, tally);
+    pub fn apply_bump(&mut self, replica: usize, tally: u64) -> PyResult<()> {
+        self.try_apply_bump(replica, tally)
     }
 
     /// Apply a coordinate delta, raising IndexError without mutation for a bad index.
@@ -846,6 +846,19 @@ impl PyOrSet {
     pub fn tombstones(&self) -> Vec<u64> {
         self.inner.tombstones().iter().copied().collect()
     }
+    /// Check Python identity before extracting either Rust borrow.
+    #[pyo3(name = "merge")]
+    pub fn merge_py(slf: &Bound<'_, Self>, other: &Bound<'_, Self>) -> PyResult<()> {
+        if slf.is(other) {
+            return Ok(());
+        }
+        let other = other.try_borrow()?;
+        slf.try_borrow_mut()?.merge(&other);
+        Ok(())
+    }
+}
+
+impl PyOrSet {
     pub fn merge(&mut self, other: &PyOrSet) {
         self.inner.merge(&other.inner);
     }
@@ -862,6 +875,50 @@ mod tests {
     }
 
     #[test]
+    fn orset_self_merge_keeps_python_handle_usable() {
+        with_python(|py| {
+            let set = Py::new(py, PyOrSet::new()).unwrap();
+            let set = set.bind(py);
+            set.call_method1("add", (42u64, 7u64)).unwrap();
+            set.call_method1("apply_remove", (vec![8u64],)).unwrap();
+            set.call_method1("merge", (set,)).unwrap();
+            assert_eq!(
+                set.call_method0("elements")
+                    .unwrap()
+                    .extract::<Vec<u64>>()
+                    .unwrap(),
+                vec![42]
+            );
+            assert_eq!(
+                set.call_method0("tombstones")
+                    .unwrap()
+                    .extract::<Vec<u64>>()
+                    .unwrap(),
+                vec![8]
+            );
+            set.call_method1("add", (43u64, 9u64)).unwrap();
+            assert_eq!(
+                set.call_method0("elements")
+                    .unwrap()
+                    .extract::<Vec<u64>>()
+                    .unwrap(),
+                vec![42, 43]
+            );
+            let other = Py::new(py, PyOrSet::new()).unwrap();
+            other.bind(py).call_method1("add", (99u64, 10u64)).unwrap();
+            set.call_method1("merge", (other.bind(py),)).unwrap();
+            set.call_method1("merge", (other.bind(py),)).unwrap();
+            assert_eq!(
+                set.call_method0("elements")
+                    .unwrap()
+                    .extract::<Vec<u64>>()
+                    .unwrap(),
+                vec![42, 43, 99]
+            );
+        });
+    }
+
+    #[test]
     fn checked_counter_raises_index_error_without_mutation() {
         with_python(|py| {
             let mut counter = PyGCounter::new(2);
@@ -872,7 +929,22 @@ mod tests {
                 "IndexError: ReplicaOutOfRange { replica: 2, replica_count: 2 }"
             );
             assert_eq!(counter.state(), vec![0, 0]);
-            counter.apply_bump(2, 9);
+            let error = counter.apply_bump(2, 9).unwrap_err();
+            assert!(error.is_instance_of::<pyo3::exceptions::PyIndexError>(py));
+            // Exercise PyO3 extraction as well as the native shape guard.
+            let exported = Py::new(py, PyGCounter::new(2)).unwrap();
+            for replica in [1u64 << 32, 1u64 << 53] {
+                let error = exported
+                    .bind(py)
+                    .call_method1("apply_bump", (replica, 9))
+                    .unwrap_err();
+                assert!(
+                    error.is_instance_of::<pyo3::exceptions::PyIndexError>(py)
+                        || error.is_instance_of::<pyo3::exceptions::PyOverflowError>(py)
+                );
+                assert_eq!(exported.borrow(py).state(), vec![0, 0]);
+                assert_eq!(exported.borrow(py).value(), 0);
+            }
             assert_eq!(counter.state(), vec![0, 0]);
             counter.try_apply_bump(1, 9).unwrap();
             counter.try_apply_bump(1, 2).unwrap();
@@ -926,8 +998,8 @@ mod tests {
     #[test]
     fn python_counter_calls_rust_core() {
         let mut counter = PyGCounter::new(3);
-        counter.apply_bump(1, 5);
-        counter.apply_bump(1, 2);
+        counter.apply_bump(1, 5).unwrap();
+        counter.apply_bump(1, 2).unwrap();
         assert_eq!(counter.value(), 5);
         assert_eq!(counter.state(), vec![0, 5, 0]);
     }

@@ -10,14 +10,55 @@ use safemesh_crdt::{
 use std::{cell::RefCell, collections::BTreeSet};
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen(
-    inline_js = "export class SafeMeshError extends Error { constructor(code, message) { super(message); this.name = 'SafeMeshError'; this.code = code; } }"
-)]
+#[wasm_bindgen(inline_js = r#"
+// Installed during module initialization, before any consumer can call merge.
+// The identity check must precede the generated call: that call borrows both
+// arguments before entering the Rust method, so a Rust-body guard is too late.
+export function installOrSetSelfMergeGuard(sample) {
+    const prototype = Object.getPrototypeOf(sample);
+    const merge = prototype.merge;
+    prototype.merge = function(other) {
+        if (this === other) return;
+        return merge.call(this, other);
+    };
+    sample.free();
+}
+
+export class SafeMeshError extends Error {
+    constructor(code, message) {
+        super(message);
+        this.name = 'SafeMeshError';
+        this.code = code;
+    }
+}
+
+// Reject array-like inputs before wasm-bindgen's BigUint64Array copy can wrap
+// their elements. The declared typed array already contains exact u64 values.
+export function checkedTokens(value) {
+    if (!(value instanceof BigUint64Array)) {
+        throw new SafeMeshError(2, 'tokens must be a BigUint64Array');
+    }
+    return value;
+}
+"#)]
 extern "C" {
     pub type SafeMeshError;
 
+    #[wasm_bindgen(js_name = installOrSetSelfMergeGuard)]
+    fn install_orset_self_merge_guard(sample: JsValue);
+
     #[wasm_bindgen(constructor)]
     fn new(code: u32, message: &str) -> SafeMeshError;
+
+    #[wasm_bindgen(catch, js_name = checkedTokens)]
+    fn checked_tokens(value: JsValue) -> Result<Vec<u64>, JsValue>;
+}
+
+// Exporting the sample uses wasm-bindgen's own class wrapper on every target.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(start)]
+pub fn initialize_bindings() {
+    install_orset_self_merge_guard(SafeMeshOrSet::new().into());
 }
 
 fn safe_mesh_error(code: u32, message: &str) -> JsValue {
@@ -29,6 +70,31 @@ fn safe_mesh_error(code: u32, message: &str) -> JsValue {
 /// text and is parsed by `BigInt`, which is unbounded; no digit is lost.
 fn exact_bigint(total: u128) -> JsValue {
     JsValue::bigint_from_str(&total.to_string())
+}
+
+// Preserve the original JS value until its type and full range have been checked.
+fn checked_u64(value: JsValue, name: &str) -> Result<u64, JsValue> {
+    u64::try_from(value).map_err(|_| safe_mesh_error(2, &format!("{name} must be a u64 bigint")))
+}
+
+fn checked_index(value: JsValue, name: &str) -> Result<usize, JsValue> {
+    let number = value.as_f64().ok_or_else(|| {
+        safe_mesh_error(
+            2,
+            &format!("{name} must be a finite nonnegative integer number"),
+        )
+    })?;
+    if !number.is_finite()
+        || number.is_sign_negative()
+        || number.fract() != 0.0
+        || number > u32::MAX as f64
+    {
+        return Err(safe_mesh_error(
+            2,
+            &format!("{name} must be a finite nonnegative wasm32 integer"),
+        ));
+    }
+    Ok(number as usize)
 }
 
 fn admission_name(admission: safemesh_crdt::Admission) -> String {
@@ -48,23 +114,34 @@ pub struct SafeMeshGCounter {
 #[wasm_bindgen]
 impl SafeMeshGCounter {
     #[wasm_bindgen(constructor)]
-    pub fn new(replicas: usize) -> Self {
-        SafeMeshGCounter {
-            inner: GCounter::new(replicas),
-        }
+    pub fn new_js(
+        #[wasm_bindgen(unchecked_param_type = "number")] replicas: JsValue,
+    ) -> Result<Self, JsValue> {
+        let replicas = checked_index(replicas, "replicas")?;
+        Ok(Self::new(replicas))
     }
 
     #[wasm_bindgen(js_name = applyBump)]
-    pub fn apply_bump(&mut self, replica: usize, tally: u64) {
-        self.inner.apply_bump(replica, tally);
+    pub fn apply_bump_js(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "number")] replica: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] tally: JsValue,
+    ) -> Result<(), JsValue> {
+        let replica = checked_index(replica, "replica")?;
+        let tally = checked_u64(tally, "tally")?;
+        self.try_apply_bump(replica, tally)
     }
 
     /// Apply a coordinate delta, throwing a descriptive Error for a bad index.
     #[wasm_bindgen(js_name = tryApplyBump)]
-    pub fn try_apply_bump(&mut self, replica: usize, tally: u64) -> Result<(), JsValue> {
-        self.inner
-            .try_apply_bump(replica, tally)
-            .map_err(|_| safe_mesh_error(2, "replica out of range"))
+    pub fn try_apply_bump_js(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "number")] replica: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] tally: JsValue,
+    ) -> Result<(), JsValue> {
+        let replica = checked_index(replica, "replica")?;
+        let tally = checked_u64(tally, "tally")?;
+        self.try_apply_bump(replica, tally)
     }
 
     /// The counter total as an exact `bigint`, also past the 64-bit boundary.
@@ -86,10 +163,13 @@ impl SafeMeshGCounter {
 }
 
 #[wasm_bindgen(js_name = gcounterDeltaToWire)]
-pub fn gcounter_delta_to_wire(replica: usize, tally: u64) -> Result<Vec<u8>, JsValue> {
-    GCounterDelta { replica, tally }
-        .to_wire_bytes()
-        .map_err(|_| safe_mesh_error(1, "failed to encode G-Counter delta"))
+pub fn gcounter_delta_to_wire_js(
+    #[wasm_bindgen(unchecked_param_type = "number")] replica: JsValue,
+    #[wasm_bindgen(unchecked_param_type = "bigint")] tally: JsValue,
+) -> Result<Vec<u8>, JsValue> {
+    let replica = checked_index(replica, "replica")?;
+    let tally = checked_u64(tally, "tally")?;
+    gcounter_delta_to_wire(replica, tally)
 }
 
 #[wasm_bindgen]
@@ -106,8 +186,17 @@ impl SafeMeshLwwRegister {
         }
     }
 
-    pub fn set(&mut self, timestamp: u64, replica: u64, value: u64) {
-        self.inner.set(timestamp, replica, value);
+    #[wasm_bindgen(js_name = set)]
+    pub fn set_js(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] timestamp: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] replica: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] value: JsValue,
+    ) -> Result<(), JsValue> {
+        let timestamp = checked_u64(timestamp, "timestamp")?;
+        let replica = checked_u64(replica, "replica")?;
+        let value = checked_u64(value, "value")?;
+        Ok(self.set(timestamp, replica, value))
     }
 
     #[wasm_bindgen(js_name = hasValue)]
@@ -116,40 +205,43 @@ impl SafeMeshLwwRegister {
     }
 
     #[wasm_bindgen(js_name = valueOr)]
-    pub fn value_or(&self, default_value: u64) -> u64 {
-        self.inner.value().copied().unwrap_or(default_value)
+    pub fn value_or_js(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] default_value: JsValue,
+    ) -> Result<u64, JsValue> {
+        let default_value = checked_u64(default_value, "default_value")?;
+        Ok(self.value_or(default_value))
     }
 
     #[wasm_bindgen(js_name = timestampOr)]
-    pub fn timestamp_or(&self, default_value: u64) -> u64 {
-        self.inner
-            .entry()
-            .map(|entry| entry.dot.timestamp)
-            .unwrap_or(default_value)
+    pub fn timestamp_or_js(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] default_value: JsValue,
+    ) -> Result<u64, JsValue> {
+        let default_value = checked_u64(default_value, "default_value")?;
+        Ok(self.timestamp_or(default_value))
     }
 
     #[wasm_bindgen(js_name = writerReplicaOr)]
-    pub fn writer_replica_or(&self, default_value: u64) -> u64 {
-        self.inner
-            .entry()
-            .map(|entry| entry.dot.replica)
-            .unwrap_or(default_value)
+    pub fn writer_replica_or_js(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] default_value: JsValue,
+    ) -> Result<u64, JsValue> {
+        let default_value = checked_u64(default_value, "default_value")?;
+        Ok(self.writer_replica_or(default_value))
     }
 }
 
 #[wasm_bindgen(js_name = lwwRegisterDeltaToWire)]
-pub fn lww_register_delta_to_wire(
-    timestamp: u64,
-    replica: u64,
-    value: u64,
+pub fn lww_register_delta_to_wire_js(
+    #[wasm_bindgen(unchecked_param_type = "bigint")] timestamp: JsValue,
+    #[wasm_bindgen(unchecked_param_type = "bigint")] replica: JsValue,
+    #[wasm_bindgen(unchecked_param_type = "bigint")] value: JsValue,
 ) -> Result<Vec<u8>, JsValue> {
-    LwwRegisterDelta {
-        timestamp,
-        replica,
-        value,
-    }
-    .to_wire_bytes()
-    .map_err(|_| safe_mesh_error(1, "failed to encode LWW register delta"))
+    let timestamp = checked_u64(timestamp, "timestamp")?;
+    let replica = checked_u64(replica, "replica")?;
+    let value = checked_u64(value, "value")?;
+    lww_register_delta_to_wire(timestamp, replica, value)
 }
 
 #[wasm_bindgen]
@@ -166,22 +258,52 @@ impl SafeMeshLwwMap {
         }
     }
 
-    pub fn set(&mut self, key: u64, timestamp: u64, replica: u64, value: u64) {
-        self.inner.set(key, timestamp, replica, value);
+    #[wasm_bindgen(js_name = set)]
+    pub fn set_js(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] key: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] timestamp: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] replica: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] value: JsValue,
+    ) -> Result<(), JsValue> {
+        let key = checked_u64(key, "key")?;
+        let timestamp = checked_u64(timestamp, "timestamp")?;
+        let replica = checked_u64(replica, "replica")?;
+        let value = checked_u64(value, "value")?;
+        Ok(self.set(key, timestamp, replica, value))
     }
 
-    pub fn remove(&mut self, key: u64, timestamp: u64, replica: u64) {
-        self.inner.remove(key, timestamp, replica);
+    #[wasm_bindgen(js_name = remove)]
+    pub fn remove_js(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] key: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] timestamp: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] replica: JsValue,
+    ) -> Result<(), JsValue> {
+        let key = checked_u64(key, "key")?;
+        let timestamp = checked_u64(timestamp, "timestamp")?;
+        let replica = checked_u64(replica, "replica")?;
+        Ok(self.remove(key, timestamp, replica))
     }
 
     #[wasm_bindgen(js_name = hasKey)]
-    pub fn has_key(&self, key: u64) -> bool {
-        self.inner.get(&key).is_some()
+    pub fn has_key_js(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] key: JsValue,
+    ) -> Result<bool, JsValue> {
+        let key = checked_u64(key, "key")?;
+        Ok(self.has_key(key))
     }
 
     #[wasm_bindgen(js_name = valueOr)]
-    pub fn value_or(&self, key: u64, default_value: u64) -> u64 {
-        self.inner.get(&key).copied().unwrap_or(default_value)
+    pub fn value_or_js(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] key: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] default_value: JsValue,
+    ) -> Result<u64, JsValue> {
+        let key = checked_u64(key, "key")?;
+        let default_value = checked_u64(default_value, "default_value")?;
+        Ok(self.value_or(key, default_value))
     }
 
     #[wasm_bindgen(js_name = visibleKeys)]
@@ -201,35 +323,29 @@ impl SafeMeshLwwMap {
 }
 
 #[wasm_bindgen(js_name = lwwMapSetDeltaToWire)]
-pub fn lww_map_set_delta_to_wire(
-    key: u64,
-    timestamp: u64,
-    replica: u64,
-    value: u64,
+pub fn lww_map_set_delta_to_wire_js(
+    #[wasm_bindgen(unchecked_param_type = "bigint")] key: JsValue,
+    #[wasm_bindgen(unchecked_param_type = "bigint")] timestamp: JsValue,
+    #[wasm_bindgen(unchecked_param_type = "bigint")] replica: JsValue,
+    #[wasm_bindgen(unchecked_param_type = "bigint")] value: JsValue,
 ) -> Result<Vec<u8>, JsValue> {
-    LwwMapDelta::Set {
-        key,
-        timestamp,
-        replica,
-        value,
-    }
-    .to_wire_bytes()
-    .map_err(|_| safe_mesh_error(1, "failed to encode LWW map set delta"))
+    let key = checked_u64(key, "key")?;
+    let timestamp = checked_u64(timestamp, "timestamp")?;
+    let replica = checked_u64(replica, "replica")?;
+    let value = checked_u64(value, "value")?;
+    lww_map_set_delta_to_wire(key, timestamp, replica, value)
 }
 
 #[wasm_bindgen(js_name = lwwMapRemoveDeltaToWire)]
-pub fn lww_map_remove_delta_to_wire(
-    key: u64,
-    timestamp: u64,
-    replica: u64,
+pub fn lww_map_remove_delta_to_wire_js(
+    #[wasm_bindgen(unchecked_param_type = "bigint")] key: JsValue,
+    #[wasm_bindgen(unchecked_param_type = "bigint")] timestamp: JsValue,
+    #[wasm_bindgen(unchecked_param_type = "bigint")] replica: JsValue,
 ) -> Result<Vec<u8>, JsValue> {
-    LwwMapDelta::<u64, u64>::Remove {
-        key,
-        timestamp,
-        replica,
-    }
-    .to_wire_bytes()
-    .map_err(|_| safe_mesh_error(1, "failed to encode LWW map remove delta"))
+    let key = checked_u64(key, "key")?;
+    let timestamp = checked_u64(timestamp, "timestamp")?;
+    let replica = checked_u64(replica, "replica")?;
+    lww_map_remove_delta_to_wire(key, timestamp, replica)
 }
 
 #[wasm_bindgen]
@@ -246,8 +362,13 @@ impl SafeMeshEnableWinsFlag {
         }
     }
 
-    pub fn enable(&mut self, token: u64) {
-        self.inner.enable(token);
+    #[wasm_bindgen(js_name = enable)]
+    pub fn enable_js(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] token: JsValue,
+    ) -> Result<(), JsValue> {
+        let token = checked_u64(token, "token")?;
+        Ok(self.enable(token))
     }
 
     #[wasm_bindgen(js_name = disableObserved)]
@@ -272,17 +393,19 @@ impl SafeMeshEnableWinsFlag {
 }
 
 #[wasm_bindgen(js_name = enableWinsFlagEnableDeltaToWire)]
-pub fn enable_wins_flag_enable_delta_to_wire(token: u64) -> Result<Vec<u8>, JsValue> {
-    EnableWinsFlagDelta::Enable { token }
-        .to_wire_bytes()
-        .map_err(|_| safe_mesh_error(1, "failed to encode enable-wins flag enable delta"))
+pub fn enable_wins_flag_enable_delta_to_wire_js(
+    #[wasm_bindgen(unchecked_param_type = "bigint")] token: JsValue,
+) -> Result<Vec<u8>, JsValue> {
+    let token = checked_u64(token, "token")?;
+    enable_wins_flag_enable_delta_to_wire(token)
 }
 
 #[wasm_bindgen(js_name = enableWinsFlagDisableDeltaToWire)]
-pub fn enable_wins_flag_disable_delta_to_wire(tokens: Vec<u64>) -> Result<Vec<u8>, JsValue> {
-    EnableWinsFlagDelta::Disable { tokens }
-        .to_wire_bytes()
-        .map_err(|_| safe_mesh_error(1, "failed to encode enable-wins flag disable delta"))
+pub fn enable_wins_flag_disable_delta_to_wire_js(
+    #[wasm_bindgen(unchecked_param_type = "BigUint64Array")] tokens: JsValue,
+) -> Result<Vec<u8>, JsValue> {
+    let tokens = checked_tokens(tokens)?;
+    enable_wins_flag_disable_delta_to_wire(tokens)
 }
 
 #[wasm_bindgen]
@@ -295,47 +418,24 @@ pub struct SafeMeshGCounterReplica {
 #[wasm_bindgen]
 impl SafeMeshGCounterReplica {
     #[wasm_bindgen(constructor)]
-    pub fn new(replica_id: u64, replicas: usize) -> Self {
-        SafeMeshGCounterReplica {
-            replica_id,
-            state: GCounter::new(replicas),
-            log: EventLog::with_replica_count(replicas),
-        }
+    pub fn new_js(
+        #[wasm_bindgen(unchecked_param_type = "bigint")] replica_id: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "number")] replicas: JsValue,
+    ) -> Result<Self, JsValue> {
+        let replica_id = checked_u64(replica_id, "replica_id")?;
+        let replicas = checked_index(replicas, "replicas")?;
+        Ok(Self::new(replica_id, replicas))
     }
 
     #[wasm_bindgen(js_name = appendBump)]
-    pub fn append_bump(&mut self, counter_replica: usize, tally: u64) -> Result<Vec<u8>, JsValue> {
-        if safemesh_crdt::ownership::check_counter_record(
-            self.state.len(),
-            safemesh_crdt::RecordId {
-                replica: self.replica_id,
-                sequence: 1,
-            },
-            &GCounterDelta {
-                replica: counter_replica,
-                tally,
-            },
-        )
-        .is_err()
-        {
-            return Err(safe_mesh_error(
-                2,
-                "counter coordinate out of range or not owned by record author",
-            ));
-        }
-        let delta = GCounterDelta {
-            replica: counter_replica,
-            tally,
-        };
-        let id = self
-            .log
-            .append_with(self.replica_id, delta.clone(), |delta| {
-                self.state.apply_delta(delta.clone());
-            })
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
-        Record { id, delta }
-            .to_wire_bytes()
-            .map_err(|_| safe_mesh_error(1, "failed to encode record"))
+    pub fn append_bump_js(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "number")] counter_replica: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] tally: JsValue,
+    ) -> Result<Vec<u8>, JsValue> {
+        let counter_replica = checked_index(counter_replica, "counter_replica")?;
+        let tally = checked_u64(tally, "tally")?;
+        self.append_bump(counter_replica, tally)
     }
 
     #[wasm_bindgen(js_name = mergeRecordBytes)]
@@ -415,8 +515,12 @@ impl SafeMeshGCounterReplica {
     }
 
     #[wasm_bindgen(js_name = versionFor)]
-    pub fn version_for(&self, replica: u64) -> u64 {
-        self.log.version().get(replica)
+    pub fn version_for_js(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] replica: JsValue,
+    ) -> Result<u64, JsValue> {
+        let replica = checked_u64(replica, "replica")?;
+        Ok(self.version_for(replica))
     }
 
     /// The counter total as an exact `bigint`, also past the 64-bit boundary.
@@ -453,26 +557,20 @@ pub struct SafeMeshEnableWinsFlagReplica {
 #[wasm_bindgen]
 impl SafeMeshEnableWinsFlagReplica {
     #[wasm_bindgen(constructor)]
-    pub fn new(replica_id: u64) -> Self {
-        SafeMeshEnableWinsFlagReplica {
-            replica_id,
-            state: EnableWinsFlag::new(),
-            log: EventLog::new(),
-        }
+    pub fn new_js(
+        #[wasm_bindgen(unchecked_param_type = "bigint")] replica_id: JsValue,
+    ) -> Result<Self, JsValue> {
+        let replica_id = checked_u64(replica_id, "replica_id")?;
+        Ok(Self::new(replica_id))
     }
 
     #[wasm_bindgen(js_name = appendEnable)]
-    pub fn append_enable(&mut self, token: u64) -> Result<Vec<u8>, JsValue> {
-        let delta = EnableWinsFlagDelta::Enable { token };
-        let id = self
-            .log
-            .append_with(self.replica_id, delta.clone(), |delta| {
-                self.state.apply_delta(delta.clone());
-            })
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
-        Record { id, delta }
-            .to_wire_bytes()
-            .map_err(|_| safe_mesh_error(1, "failed to encode record"))
+    pub fn append_enable_js(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] token: JsValue,
+    ) -> Result<Vec<u8>, JsValue> {
+        let token = checked_u64(token, "token")?;
+        self.append_enable(token)
     }
 
     #[wasm_bindgen(js_name = appendDisableObserved)]
@@ -546,8 +644,12 @@ impl SafeMeshEnableWinsFlagReplica {
     }
 
     #[wasm_bindgen(js_name = versionFor)]
-    pub fn version_for(&self, replica: u64) -> u64 {
-        self.log.version().get(replica)
+    pub fn version_for_js(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] replica: JsValue,
+    ) -> Result<u64, JsValue> {
+        let replica = checked_u64(replica, "replica")?;
+        Ok(self.version_for(replica))
     }
 
     pub fn value(&self) -> bool {
@@ -575,60 +677,39 @@ pub struct SafeMeshLwwMapReplica {
 #[wasm_bindgen]
 impl SafeMeshLwwMapReplica {
     #[wasm_bindgen(constructor)]
-    pub fn new(replica_id: u64) -> Self {
-        SafeMeshLwwMapReplica {
-            replica_id,
-            state: LwwMap::new(),
-            log: EventLog::new(),
-        }
+    pub fn new_js(
+        #[wasm_bindgen(unchecked_param_type = "bigint")] replica_id: JsValue,
+    ) -> Result<Self, JsValue> {
+        let replica_id = checked_u64(replica_id, "replica_id")?;
+        Ok(Self::new(replica_id))
     }
 
     #[wasm_bindgen(js_name = appendSet)]
-    pub fn append_set(
+    pub fn append_set_js(
         &mut self,
-        key: u64,
-        timestamp: u64,
-        writer_replica: u64,
-        value: u64,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] key: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] timestamp: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] writer_replica: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] value: JsValue,
     ) -> Result<Vec<u8>, JsValue> {
-        let delta = LwwMapDelta::Set {
-            key,
-            timestamp,
-            replica: writer_replica,
-            value,
-        };
-        let id = self
-            .log
-            .append_with(self.replica_id, delta.clone(), |delta| {
-                self.state.apply_delta(delta.clone());
-            })
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
-        Record { id, delta }
-            .to_wire_bytes()
-            .map_err(|_| safe_mesh_error(1, "failed to encode record"))
+        let key = checked_u64(key, "key")?;
+        let timestamp = checked_u64(timestamp, "timestamp")?;
+        let writer_replica = checked_u64(writer_replica, "writer_replica")?;
+        let value = checked_u64(value, "value")?;
+        self.append_set(key, timestamp, writer_replica, value)
     }
 
     #[wasm_bindgen(js_name = appendRemove)]
-    pub fn append_remove(
+    pub fn append_remove_js(
         &mut self,
-        key: u64,
-        timestamp: u64,
-        writer_replica: u64,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] key: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] timestamp: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] writer_replica: JsValue,
     ) -> Result<Vec<u8>, JsValue> {
-        let delta = LwwMapDelta::Remove {
-            key,
-            timestamp,
-            replica: writer_replica,
-        };
-        let id = self
-            .log
-            .append_with(self.replica_id, delta.clone(), |delta| {
-                self.state.apply_delta(delta.clone());
-            })
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
-        Record { id, delta }
-            .to_wire_bytes()
-            .map_err(|_| safe_mesh_error(1, "failed to encode record"))
+        let key = checked_u64(key, "key")?;
+        let timestamp = checked_u64(timestamp, "timestamp")?;
+        let writer_replica = checked_u64(writer_replica, "writer_replica")?;
+        self.append_remove(key, timestamp, writer_replica)
     }
 
     #[wasm_bindgen(js_name = mergeRecordBytes)]
@@ -686,18 +767,32 @@ impl SafeMeshLwwMapReplica {
     }
 
     #[wasm_bindgen(js_name = versionFor)]
-    pub fn version_for(&self, replica: u64) -> u64 {
-        self.log.version().get(replica)
+    pub fn version_for_js(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] replica: JsValue,
+    ) -> Result<u64, JsValue> {
+        let replica = checked_u64(replica, "replica")?;
+        Ok(self.version_for(replica))
     }
 
     #[wasm_bindgen(js_name = hasKey)]
-    pub fn has_key(&self, key: u64) -> bool {
-        self.state.get(&key).is_some()
+    pub fn has_key_js(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] key: JsValue,
+    ) -> Result<bool, JsValue> {
+        let key = checked_u64(key, "key")?;
+        Ok(self.has_key(key))
     }
 
     #[wasm_bindgen(js_name = valueOr)]
-    pub fn value_or(&self, key: u64, default_value: u64) -> u64 {
-        self.state.get(&key).copied().unwrap_or(default_value)
+    pub fn value_or_js(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] key: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] default_value: JsValue,
+    ) -> Result<u64, JsValue> {
+        let key = checked_u64(key, "key")?;
+        let default_value = checked_u64(default_value, "default_value")?;
+        Ok(self.value_or(key, default_value))
     }
 
     #[wasm_bindgen(js_name = visibleKeys)]
@@ -726,35 +821,24 @@ pub struct SafeMeshLwwRegisterReplica {
 #[wasm_bindgen]
 impl SafeMeshLwwRegisterReplica {
     #[wasm_bindgen(constructor)]
-    pub fn new(replica_id: u64) -> Self {
-        SafeMeshLwwRegisterReplica {
-            replica_id,
-            state: LwwRegister::new(),
-            log: EventLog::new(),
-        }
+    pub fn new_js(
+        #[wasm_bindgen(unchecked_param_type = "bigint")] replica_id: JsValue,
+    ) -> Result<Self, JsValue> {
+        let replica_id = checked_u64(replica_id, "replica_id")?;
+        Ok(Self::new(replica_id))
     }
 
     #[wasm_bindgen(js_name = appendSet)]
-    pub fn append_set(
+    pub fn append_set_js(
         &mut self,
-        timestamp: u64,
-        writer_replica: u64,
-        value: u64,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] timestamp: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] writer_replica: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] value: JsValue,
     ) -> Result<Vec<u8>, JsValue> {
-        let delta = LwwRegisterDelta {
-            timestamp,
-            replica: writer_replica,
-            value,
-        };
-        let id = self
-            .log
-            .append_with(self.replica_id, delta.clone(), |delta| {
-                self.state.apply_delta(delta.clone());
-            })
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
-        Record { id, delta }
-            .to_wire_bytes()
-            .map_err(|_| safe_mesh_error(1, "failed to encode record"))
+        let timestamp = checked_u64(timestamp, "timestamp")?;
+        let writer_replica = checked_u64(writer_replica, "writer_replica")?;
+        let value = checked_u64(value, "value")?;
+        self.append_set(timestamp, writer_replica, value)
     }
 
     #[wasm_bindgen(js_name = mergeRecordBytes)]
@@ -812,8 +896,12 @@ impl SafeMeshLwwRegisterReplica {
     }
 
     #[wasm_bindgen(js_name = versionFor)]
-    pub fn version_for(&self, replica: u64) -> u64 {
-        self.log.version().get(replica)
+    pub fn version_for_js(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] replica: JsValue,
+    ) -> Result<u64, JsValue> {
+        let replica = checked_u64(replica, "replica")?;
+        Ok(self.version_for(replica))
     }
 
     #[wasm_bindgen(js_name = hasValue)]
@@ -822,24 +910,30 @@ impl SafeMeshLwwRegisterReplica {
     }
 
     #[wasm_bindgen(js_name = valueOr)]
-    pub fn value_or(&self, default_value: u64) -> u64 {
-        self.state.value().copied().unwrap_or(default_value)
+    pub fn value_or_js(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] default_value: JsValue,
+    ) -> Result<u64, JsValue> {
+        let default_value = checked_u64(default_value, "default_value")?;
+        Ok(self.value_or(default_value))
     }
 
     #[wasm_bindgen(js_name = timestampOr)]
-    pub fn timestamp_or(&self, default_value: u64) -> u64 {
-        self.state
-            .entry()
-            .map(|entry| entry.dot.timestamp)
-            .unwrap_or(default_value)
+    pub fn timestamp_or_js(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] default_value: JsValue,
+    ) -> Result<u64, JsValue> {
+        let default_value = checked_u64(default_value, "default_value")?;
+        Ok(self.timestamp_or(default_value))
     }
 
     #[wasm_bindgen(js_name = writerReplicaOr)]
-    pub fn writer_replica_or(&self, default_value: u64) -> u64 {
-        self.state
-            .entry()
-            .map(|entry| entry.dot.replica)
-            .unwrap_or(default_value)
+    pub fn writer_replica_or_js(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] default_value: JsValue,
+    ) -> Result<u64, JsValue> {
+        let default_value = checked_u64(default_value, "default_value")?;
+        Ok(self.writer_replica_or(default_value))
     }
 }
 
@@ -859,23 +953,43 @@ impl SafeMeshOrSet {
     }
 
     /// Add an element with a caller-supplied token, exactly as in the Rust core.
-    pub fn add(&mut self, element: u64, token: u64) {
-        self.inner.add(element, token);
+    #[wasm_bindgen(js_name = add)]
+    pub fn add_js(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] element: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] token: JsValue,
+    ) -> Result<(), JsValue> {
+        let element = checked_u64(element, "element")?;
+        let token = checked_u64(token, "token")?;
+        Ok(self.add(element, token))
     }
     /// Tombstone tokens globally, including tokens whose adds have not arrived yet.
     #[wasm_bindgen(js_name = applyRemove)]
-    pub fn apply_remove(&mut self, tokens: Vec<u64>) {
-        self.inner.apply_remove(tokens);
+    pub fn apply_remove_js(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "BigUint64Array")] tokens: JsValue,
+    ) -> Result<(), JsValue> {
+        let tokens = checked_tokens(tokens)?;
+        Ok(self.apply_remove(tokens))
     }
     #[wasm_bindgen(js_name = observedTokens)]
-    pub fn observed_tokens(&self, element: u64) -> Vec<u64> {
-        self.inner.observed_tokens(&element).into_iter().collect()
+    pub fn observed_tokens_js(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] element: JsValue,
+    ) -> Result<Vec<u64>, JsValue> {
+        let element = checked_u64(element, "element")?;
+        Ok(self.observed_tokens(element))
     }
     pub fn elements(&self) -> Vec<u64> {
         self.inner.elements().into_iter().collect()
     }
-    pub fn contains(&self, element: u64) -> bool {
-        self.inner.contains(&element)
+    #[wasm_bindgen(js_name = contains)]
+    pub fn contains_js(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] element: JsValue,
+    ) -> Result<bool, JsValue> {
+        let element = checked_u64(element, "element")?;
+        Ok(self.contains(element))
     }
     pub fn tombstones(&self) -> Vec<u64> {
         self.inner.tombstones().iter().copied().collect()
@@ -1246,13 +1360,11 @@ impl SafeMeshStringOrSetReplica {
 #[wasm_bindgen]
 impl SafeMeshStringOrSetReplica {
     #[wasm_bindgen(constructor)]
-    pub fn new(replica_id: u64) -> Self {
-        SafeMeshStringOrSetReplica {
-            replica_id,
-            allocated_writers: None,
-            state: OrSet::new(),
-            log: EventLog::new(),
-        }
+    pub fn new_js(
+        #[wasm_bindgen(unchecked_param_type = "bigint")] replica_id: JsValue,
+    ) -> Result<Self, JsValue> {
+        let replica_id = checked_u64(replica_id, "replica_id")?;
+        Ok(Self::new(replica_id))
     }
 
     /// Create an allocated writer. At most one allocated handle per author may
@@ -1293,9 +1405,13 @@ impl SafeMeshStringOrSetReplica {
 
     /// Append an add record for `(element, token)` and return its wire bytes.
     #[wasm_bindgen(js_name = appendAdd)]
-    pub fn append_add(&mut self, element: String, token: u64) -> Result<Vec<u8>, JsValue> {
-        self.append(OrSetDelta::Add { element, token })
-            .map_err(JsValue::from)
+    pub fn append_add_js(
+        &mut self,
+        element: String,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] token: JsValue,
+    ) -> Result<Vec<u8>, JsValue> {
+        let token = checked_u64(token, "token")?;
+        self.append_add(element, token)
     }
 
     /// Append a remove record tombstoning every token this replica has observed
@@ -1343,8 +1459,12 @@ impl SafeMeshStringOrSetReplica {
     }
 
     #[wasm_bindgen(js_name = versionFor)]
-    pub fn version_for(&self, replica: u64) -> u64 {
-        self.log.version().get(replica)
+    pub fn version_for_js(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] replica: JsValue,
+    ) -> Result<u64, JsValue> {
+        let replica = checked_u64(replica, "replica")?;
+        Ok(self.version_for(replica))
     }
 
     /// Live members, sorted and unique, as the core computes them.
@@ -1382,6 +1502,361 @@ impl SafeMeshStringOrSetReplica {
     #[wasm_bindgen(js_name = inspectRecordBytes)]
     pub fn inspect_record_bytes(bytes: &[u8]) -> Result<SafeMeshStringOrSetRecord, JsValue> {
         Self::try_inspect_record_bytes(bytes).map_err(JsValue::from)
+    }
+}
+
+// Native entry points retain the Rust API used by host-side core integration tests.
+// Only the checked *_js entry points above are exported to JavaScript.
+impl SafeMeshGCounter {
+    pub fn new(replicas: usize) -> Self {
+        SafeMeshGCounter {
+            inner: GCounter::new(replicas),
+        }
+    }
+
+    pub fn apply_bump(&mut self, replica: usize, tally: u64) {
+        self.inner.apply_bump(replica, tally);
+    }
+
+    pub fn try_apply_bump(&mut self, replica: usize, tally: u64) -> Result<(), JsValue> {
+        self.inner
+            .try_apply_bump(replica, tally)
+            .map_err(|_| safe_mesh_error(2, "replica out of range"))
+    }
+}
+pub fn gcounter_delta_to_wire(replica: usize, tally: u64) -> Result<Vec<u8>, JsValue> {
+    GCounterDelta { replica, tally }
+        .to_wire_bytes()
+        .map_err(|_| safe_mesh_error(1, "failed to encode G-Counter delta"))
+}
+
+pub fn lww_register_delta_to_wire(
+    timestamp: u64,
+    replica: u64,
+    value: u64,
+) -> Result<Vec<u8>, JsValue> {
+    LwwRegisterDelta {
+        timestamp,
+        replica,
+        value,
+    }
+    .to_wire_bytes()
+    .map_err(|_| safe_mesh_error(1, "failed to encode LWW register delta"))
+}
+
+pub fn lww_map_set_delta_to_wire(
+    key: u64,
+    timestamp: u64,
+    replica: u64,
+    value: u64,
+) -> Result<Vec<u8>, JsValue> {
+    LwwMapDelta::Set {
+        key,
+        timestamp,
+        replica,
+        value,
+    }
+    .to_wire_bytes()
+    .map_err(|_| safe_mesh_error(1, "failed to encode LWW map set delta"))
+}
+
+pub fn lww_map_remove_delta_to_wire(
+    key: u64,
+    timestamp: u64,
+    replica: u64,
+) -> Result<Vec<u8>, JsValue> {
+    LwwMapDelta::<u64, u64>::Remove {
+        key,
+        timestamp,
+        replica,
+    }
+    .to_wire_bytes()
+    .map_err(|_| safe_mesh_error(1, "failed to encode LWW map remove delta"))
+}
+
+pub fn enable_wins_flag_enable_delta_to_wire(token: u64) -> Result<Vec<u8>, JsValue> {
+    EnableWinsFlagDelta::Enable { token }
+        .to_wire_bytes()
+        .map_err(|_| safe_mesh_error(1, "failed to encode enable-wins flag enable delta"))
+}
+
+pub fn enable_wins_flag_disable_delta_to_wire(tokens: Vec<u64>) -> Result<Vec<u8>, JsValue> {
+    EnableWinsFlagDelta::Disable { tokens }
+        .to_wire_bytes()
+        .map_err(|_| safe_mesh_error(1, "failed to encode enable-wins flag disable delta"))
+}
+impl SafeMeshLwwRegister {
+    pub fn set(&mut self, timestamp: u64, replica: u64, value: u64) {
+        self.inner.set(timestamp, replica, value);
+    }
+
+    pub fn value_or(&self, default_value: u64) -> u64 {
+        self.inner.value().copied().unwrap_or(default_value)
+    }
+
+    pub fn timestamp_or(&self, default_value: u64) -> u64 {
+        self.inner
+            .entry()
+            .map(|entry| entry.dot.timestamp)
+            .unwrap_or(default_value)
+    }
+
+    pub fn writer_replica_or(&self, default_value: u64) -> u64 {
+        self.inner
+            .entry()
+            .map(|entry| entry.dot.replica)
+            .unwrap_or(default_value)
+    }
+}
+impl SafeMeshLwwMap {
+    pub fn set(&mut self, key: u64, timestamp: u64, replica: u64, value: u64) {
+        self.inner.set(key, timestamp, replica, value);
+    }
+
+    pub fn remove(&mut self, key: u64, timestamp: u64, replica: u64) {
+        self.inner.remove(key, timestamp, replica);
+    }
+
+    pub fn has_key(&self, key: u64) -> bool {
+        self.inner.get(&key).is_some()
+    }
+
+    pub fn value_or(&self, key: u64, default_value: u64) -> u64 {
+        self.inner.get(&key).copied().unwrap_or(default_value)
+    }
+}
+impl SafeMeshEnableWinsFlag {
+    pub fn enable(&mut self, token: u64) {
+        self.inner.enable(token);
+    }
+}
+impl SafeMeshGCounterReplica {
+    pub fn new(replica_id: u64, replicas: usize) -> Self {
+        SafeMeshGCounterReplica {
+            replica_id,
+            state: GCounter::new(replicas),
+            log: EventLog::with_replica_count(replicas),
+        }
+    }
+
+    pub fn append_bump(&mut self, counter_replica: usize, tally: u64) -> Result<Vec<u8>, JsValue> {
+        if safemesh_crdt::ownership::check_counter_record(
+            self.state.len(),
+            safemesh_crdt::RecordId {
+                replica: self.replica_id,
+                sequence: 1,
+            },
+            &GCounterDelta {
+                replica: counter_replica,
+                tally,
+            },
+        )
+        .is_err()
+        {
+            return Err(safe_mesh_error(
+                2,
+                "counter coordinate out of range or not owned by record author",
+            ));
+        }
+        let delta = GCounterDelta {
+            replica: counter_replica,
+            tally,
+        };
+        let id = self
+            .log
+            .append_with(self.replica_id, delta.clone(), |delta| {
+                self.state.apply_delta(delta.clone());
+            })
+            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+        Record { id, delta }
+            .to_wire_bytes()
+            .map_err(|_| safe_mesh_error(1, "failed to encode record"))
+    }
+
+    pub fn version_for(&self, replica: u64) -> u64 {
+        self.log.version().get(replica)
+    }
+}
+impl SafeMeshEnableWinsFlagReplica {
+    pub fn new(replica_id: u64) -> Self {
+        SafeMeshEnableWinsFlagReplica {
+            replica_id,
+            state: EnableWinsFlag::new(),
+            log: EventLog::new(),
+        }
+    }
+
+    pub fn append_enable(&mut self, token: u64) -> Result<Vec<u8>, JsValue> {
+        let delta = EnableWinsFlagDelta::Enable { token };
+        let id = self
+            .log
+            .append_with(self.replica_id, delta.clone(), |delta| {
+                self.state.apply_delta(delta.clone());
+            })
+            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+        Record { id, delta }
+            .to_wire_bytes()
+            .map_err(|_| safe_mesh_error(1, "failed to encode record"))
+    }
+
+    pub fn version_for(&self, replica: u64) -> u64 {
+        self.log.version().get(replica)
+    }
+}
+impl SafeMeshLwwMapReplica {
+    pub fn new(replica_id: u64) -> Self {
+        SafeMeshLwwMapReplica {
+            replica_id,
+            state: LwwMap::new(),
+            log: EventLog::new(),
+        }
+    }
+
+    pub fn append_set(
+        &mut self,
+        key: u64,
+        timestamp: u64,
+        writer_replica: u64,
+        value: u64,
+    ) -> Result<Vec<u8>, JsValue> {
+        let delta = LwwMapDelta::Set {
+            key,
+            timestamp,
+            replica: writer_replica,
+            value,
+        };
+        let id = self
+            .log
+            .append_with(self.replica_id, delta.clone(), |delta| {
+                self.state.apply_delta(delta.clone());
+            })
+            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+        Record { id, delta }
+            .to_wire_bytes()
+            .map_err(|_| safe_mesh_error(1, "failed to encode record"))
+    }
+
+    pub fn append_remove(
+        &mut self,
+        key: u64,
+        timestamp: u64,
+        writer_replica: u64,
+    ) -> Result<Vec<u8>, JsValue> {
+        let delta = LwwMapDelta::Remove {
+            key,
+            timestamp,
+            replica: writer_replica,
+        };
+        let id = self
+            .log
+            .append_with(self.replica_id, delta.clone(), |delta| {
+                self.state.apply_delta(delta.clone());
+            })
+            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+        Record { id, delta }
+            .to_wire_bytes()
+            .map_err(|_| safe_mesh_error(1, "failed to encode record"))
+    }
+
+    pub fn version_for(&self, replica: u64) -> u64 {
+        self.log.version().get(replica)
+    }
+
+    pub fn has_key(&self, key: u64) -> bool {
+        self.state.get(&key).is_some()
+    }
+
+    pub fn value_or(&self, key: u64, default_value: u64) -> u64 {
+        self.state.get(&key).copied().unwrap_or(default_value)
+    }
+}
+impl SafeMeshLwwRegisterReplica {
+    pub fn new(replica_id: u64) -> Self {
+        SafeMeshLwwRegisterReplica {
+            replica_id,
+            state: LwwRegister::new(),
+            log: EventLog::new(),
+        }
+    }
+
+    pub fn append_set(
+        &mut self,
+        timestamp: u64,
+        writer_replica: u64,
+        value: u64,
+    ) -> Result<Vec<u8>, JsValue> {
+        let delta = LwwRegisterDelta {
+            timestamp,
+            replica: writer_replica,
+            value,
+        };
+        let id = self
+            .log
+            .append_with(self.replica_id, delta.clone(), |delta| {
+                self.state.apply_delta(delta.clone());
+            })
+            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+        Record { id, delta }
+            .to_wire_bytes()
+            .map_err(|_| safe_mesh_error(1, "failed to encode record"))
+    }
+
+    pub fn version_for(&self, replica: u64) -> u64 {
+        self.log.version().get(replica)
+    }
+
+    pub fn value_or(&self, default_value: u64) -> u64 {
+        self.state.value().copied().unwrap_or(default_value)
+    }
+
+    pub fn timestamp_or(&self, default_value: u64) -> u64 {
+        self.state
+            .entry()
+            .map(|entry| entry.dot.timestamp)
+            .unwrap_or(default_value)
+    }
+
+    pub fn writer_replica_or(&self, default_value: u64) -> u64 {
+        self.state
+            .entry()
+            .map(|entry| entry.dot.replica)
+            .unwrap_or(default_value)
+    }
+}
+impl SafeMeshOrSet {
+    pub fn add(&mut self, element: u64, token: u64) {
+        self.inner.add(element, token);
+    }
+
+    pub fn apply_remove(&mut self, tokens: Vec<u64>) {
+        self.inner.apply_remove(tokens);
+    }
+
+    pub fn observed_tokens(&self, element: u64) -> Vec<u64> {
+        self.inner.observed_tokens(&element).into_iter().collect()
+    }
+
+    pub fn contains(&self, element: u64) -> bool {
+        self.inner.contains(&element)
+    }
+}
+impl SafeMeshStringOrSetReplica {
+    pub fn new(replica_id: u64) -> Self {
+        SafeMeshStringOrSetReplica {
+            replica_id,
+            allocated_writers: None,
+            state: OrSet::new(),
+            log: EventLog::new(),
+        }
+    }
+
+    pub fn append_add(&mut self, element: String, token: u64) -> Result<Vec<u8>, JsValue> {
+        self.append(OrSetDelta::Add { element, token })
+            .map_err(JsValue::from)
+    }
+
+    pub fn version_for(&self, replica: u64) -> u64 {
+        self.log.version().get(replica)
     }
 }
 
