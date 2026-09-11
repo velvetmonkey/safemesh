@@ -98,6 +98,10 @@ export class SafeMeshEnableWinsFlagReplica {
 }
 
 export class SafeMeshStringOrSetReplica {
+  static createAllocated(writers: bigint, author: bigint): SafeMeshStringOrSetReplica;
+  appendAllocatedAdd(element: string): Uint8Array;
+  exportIdentity(): Uint8Array;
+  static importIdentity(bytes: Uint8Array): SafeMeshStringOrSetReplica;
   constructor(replicaId: bigint);
   appendAdd(element: string, token: bigint): Uint8Array;
   appendRemoveObserved(element: string): Uint8Array;

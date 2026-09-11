@@ -331,6 +331,61 @@ The C ABI has carrier operations and a G-Counter delta-to-wire helper, **no repl
 
 ## WASM / TypeScript
 
+For new UTF-8 OR-Set writers, use the allocated path. SafeMesh fixes the writer
+count and author at creation and allocates each add token through the Rust core.
+Build the Node package using the [TypeScript install commands](/safemesh/getting-started/#typescript-gold-path-node),
+then use its generated declarations:
+
+```ts
+import { SafeMeshStringOrSetReplica as Members } from "./pkg/safemesh_wasm";
+
+const left = Members.createAllocated(2n, 0n);
+left.appendAllocatedAdd("compass");
+const saved = left.exportIdentity(); // persist these bytes with your storage
+left.free(); // releases this WASM instance's live-author claim
+
+// Load the saved bytes on restart. Missing/invalid data throws; do not catch
+// that error and call createAllocated as a fallback.
+const restored = Members.importIdentity(saved);
+const peer = Members.createAllocated(2n, 1n);
+try {
+  restored.appendAllocatedAdd("map"); // no token cursor in the application
+  restored.appendRemoveObserved("compass");
+  restored.mergeRecordBytes(peer.appendAllocatedAdd("compass"));
+  console.log(restored.elements()); // ["compass", "map"]
+  const updated = restored.exportIdentity(); // persist after every local/peer edit
+  void updated;
+} finally {
+  restored.free();
+  peer.free();
+}
+```
+
+`exportIdentity()` includes writer count, author, next sequence and the complete
+log in one local storage container. It does not change record or log wire bytes.
+The **allocation/history consistency check** on `importIdentity(bytes)` validates
+configuration, the core log's shape/integrity, every add's author/sequence/token,
+complete local history and the saved next sequence. Any mismatch throws before a
+live writer is returned; it never starts a fresh identity. Imports also refuse an
+author already held by an allocated writer in the same WASM instance. Use
+`logBytes()` and record bytes for peer exchange, not identity exports.
+
+Writer count and author must be unsigned 64-bit `bigint` values, with writer
+count greater than zero and author below it. Token overflow and an exhausted
+sequence refuse before an allocated add changes state; allocated writes at next
+sequence `u64::MAX` refuse, while a consistent exhausted identity can still be
+exported and restored. Empty and Unicode strings are supported. Incoming records
+on allocated replicas must follow the same writer configuration and token rule;
+new records claiming the local author refuse. Invalid ownership in a whole log
+is rejected before any of that batch is applied.
+
+`appendAdd(element, token)` remains the caller-token API. Mixing incompatible
+caller tokens into an allocated writer makes subsequent allocated writes and
+identity export refuse the consistency check. Python and C numeric OR-Set paths
+continue to use caller-owned tokens.
+
+The following existing gold path exercises the legacy caller-token API:
+
 Run the [TypeScript gold path](/safemesh/getting-started/#typescript-gold-path-node)
 to build the local Node package, compile this program with `tsc` and execute it.
 It imports the real generated declarations and calls the Rust core through WASM.
@@ -339,7 +394,7 @@ The checkout’s `examples/gold-path/typescript/` contains these exact files,
 `main.ts` directly.
 
 <details>
-<summary>Complete TypeScript program</summary>
+<summary>Complete legacy caller-token TypeScript program</summary>
 
 <!-- gold:source ts:typescript/main.ts -->
 ```ts
@@ -463,6 +518,14 @@ this project's imports to `require`. WASM loads synchronously. Keep the generate
 package directory whole. Handles require `free()`; `finally` releases them even
 when a check throws. The locked build dependencies are installed by the first-use
 commands; there is no SafeMesh registry dependency.
+
+For the allocated path above, the caller must run **one live writer per author**
+across WASM instances, tabs and processes. SafeMesh's live-author check is local
+to one WASM instance; v0 has no shared browser lock or cross-tab/process fencing.
+A **self-consistent stale snapshot is not detected**. Persist the complete latest
+identity export with your storage before relying on it for restart; the API does
+not make storage atomic and an export does not stop its live writer. The legacy
+constructor does not acquire an allocated-author claim.
 
 Unlike the Rust durable adapter, these replica classes do not provide writer
 fencing or atomic disk persistence. The fixture assumes one live process per

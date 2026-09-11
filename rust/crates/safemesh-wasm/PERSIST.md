@@ -22,6 +22,17 @@ it merges are the Lean-backed ones, while the event log, the wire bytes and this
 binding are outside the separate Lean proof claim. See the repository
 `CLAIMS.md` and `WHAT-IS-PROVEN.md`.
 
+## Allocated OR-Set writes
+
+For new applications, use the [allocated identity lifecycle](README.md#string-or-set-replica-with-an-event-log):
+`createAllocated(writers, author)`, `appendAllocatedAdd(element)`,
+`exportIdentity()` and checked `importIdentity(bytes)`. Persist the whole identity
+export, and refuse a failed import instead of creating a fresh writer. The caller
+must run one live writer per author across WASM instances; there is no cross-tab
+or cross-process fencing, and a self-consistent stale snapshot is not detected.
+The walkthrough below retains the legacy caller-token API and its original
+complete-log, single-writer assumptions.
+
 ## What you need
 
 - Node. This page used v22.22.3 and v24.20.0.

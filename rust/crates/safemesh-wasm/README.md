@@ -128,9 +128,9 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const { SafeMeshStringOrSetReplica } = require("./pkg-node/safemesh_wasm.js");
 
-const left = new SafeMeshStringOrSetReplica(1n);
-const right = new SafeMeshStringOrSetReplica(2n);
-const add = left.appendAdd("vaccine", 11n);
+const left = SafeMeshStringOrSetReplica.createAllocated(3n, 1n);
+const right = SafeMeshStringOrSetReplica.createAllocated(3n, 2n);
+const add = left.appendAllocatedAdd("vaccine");
 console.log(right.mergeRecordBytes(add));
 console.log(right.mergeRecordBytes(add)); // Same identity and payload; state unchanged.
 right.mergeRecordBytes(left.appendRemoveObserved("vaccine"));
@@ -138,6 +138,11 @@ console.log(right.elements());
 console.log(right.observedTokens("vaccine"));
 const view = SafeMeshStringOrSetReplica.inspectRecordBytes(add);
 console.log(view.replica(), view.sequence(), view.deltaKind(), view.element(), view.token());
+const saved = left.exportIdentity(); // store these bytes, including identity and next sequence
+left.free();
+const restored = SafeMeshStringOrSetReplica.importIdentity(saved); // throws on failed checks
+restored.appendAllocatedAdd("bandage"); // fresh token after restart
+view.free(); restored.free(); right.free();
 ```
 
 Stdout:
@@ -146,8 +151,8 @@ Stdout:
 accepted
 duplicate
 []
-BigUint64Array(1) [ 11n ]
-1n 1n add vaccine 11n
+BigUint64Array(1) [ 4n ]
+1n 1n add vaccine 4n
 ```
 
 `mergeRecordBytes` returns the core's admission verdict; a record whose
@@ -158,3 +163,26 @@ through the same core decoder without admitting them anywhere. Every value
 these classes return is computed by `safemesh-crdt`; the binding holds no
 set or log logic of its own. Token semantics are the core's, exactly as for
 `SafeMeshOrSet` above.
+
+The allocated lifecycle uses Rust `ownership::allocate_token`. Its
+**allocation/history consistency check** verifies writer configuration, log
+shape/integrity, author/sequence/token ownership, complete local history, and the
+saved next sequence before returning a restored writer. Missing or inconsistent
+identity bytes refuse; never fall back to `createAllocated` on an import error.
+Save `exportIdentity()` after local edits and accepted peer records. Identity
+storage wraps the unchanged log bytes and is not a transport packet.
+
+The caller must run one live writer per author across WASM instances, tabs and
+processes. The allocated factory and import refuse an author already held within
+one WASM instance; `free()` releases it. There is no shared browser lock,
+cross-tab/process fencing or atomic persistence in v0. A self-consistent stale
+snapshot is not detected. Legacy constructors remain unfenced.
+
+Writer count/author accept only u64 bigints with author below a nonzero writer
+count. Token arithmetic overflow and writes at next sequence `u64::MAX` refuse;
+a consistent exhausted identity remains exportable/restorable. Empty and
+Unicode strings work. Allocated receivers reject invalid token ownership and
+new records claiming their local author; invalid ownership in a log batch is
+checked before any admission. `appendAdd(element, token)` is unchanged; a caller
+token inconsistent with the allocated history makes subsequent allocated writes
+and export refuse. Python and C numeric paths retain caller-owned tokens.
