@@ -2,10 +2,12 @@
 // Copyright (C) 2026 Ben Cassie
 // SPDX-License-Identifier: Apache-2.0
 
+use safemesh_crdt::ownership::{allocate_token, WriterConfig};
 use safemesh_crdt::{
     Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta, LwwMap,
     LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta, Record, WireDecode, WireEncode,
 };
+use std::{cell::RefCell, collections::BTreeSet};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(
@@ -1005,11 +1007,177 @@ impl SafeMeshStringOrSetRecord {
 #[wasm_bindgen]
 pub struct SafeMeshStringOrSetReplica {
     replica_id: u64,
+    allocated_writers: Option<u64>,
     state: OrSet<String, u64>,
     log: EventLog<OrSetDelta<String, u64>>,
 }
 
+// Scoped to one WASM instance (one thread in native host tests). This is not
+// cross-tab/process fencing. Legacy constructors deliberately remain unfenced.
+thread_local! {
+    static ALLOCATED_AUTHORS: RefCell<BTreeSet<u64>> = const { RefCell::new(BTreeSet::new()) };
+}
+
+impl Drop for SafeMeshStringOrSetReplica {
+    fn drop(&mut self) {
+        if self.allocated_writers.is_some() {
+            ALLOCATED_AUTHORS.with(|authors| authors.borrow_mut().remove(&self.replica_id));
+        }
+    }
+}
+
 impl SafeMeshStringOrSetReplica {
+    fn claim(&mut self, writers: u64) -> Result<(), BindingError> {
+        WriterConfig {
+            writers,
+            writer: self.replica_id,
+        }
+        .validate()
+        .map_err(|_| binding_error(2, "invalid writer configuration"))?;
+        if !ALLOCATED_AUTHORS.with(|authors| authors.borrow_mut().insert(self.replica_id)) {
+            return Err(binding_error(
+                1,
+                "author already has a live allocated writer",
+            ));
+        }
+        self.allocated_writers = Some(writers);
+        Ok(())
+    }
+
+    fn try_create_allocated(writers: u64, author: u64) -> Result<Self, BindingError> {
+        let mut replica = Self::new(author);
+        replica.claim(writers)?;
+        Ok(replica)
+    }
+
+    fn check_owned_record(
+        writers: u64,
+        record: &Record<OrSetDelta<String, u64>>,
+    ) -> Result<(), BindingError> {
+        if record.id.replica >= writers || record.id.sequence == 0 {
+            return Err(binding_error(
+                1,
+                "allocation/history consistency: invalid record author or sequence",
+            ));
+        }
+        if let OrSetDelta::Add { token, .. } = &record.delta {
+            if allocate_token(writers, record.id.replica, record.id.sequence) != Some(*token) {
+                return Err(binding_error(
+                    1,
+                    "allocation/history consistency: token mismatch",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    // Check every add, including tombstoned adds, and require a complete local
+    // history. Peer histories may contain gaps during ordinary record exchange.
+    fn checked_next(&self, writers: u64) -> Result<u64, BindingError> {
+        WriterConfig {
+            writers,
+            writer: self.replica_id,
+        }
+        .validate()
+        .map_err(|_| binding_error(2, "invalid writer configuration"))?;
+        let mut last = 0;
+        let mut count = 0;
+        for record in self.log.records() {
+            Self::check_owned_record(writers, record)?;
+            if record.id.replica == self.replica_id {
+                last = last.max(record.id.sequence);
+                count += 1;
+            }
+        }
+        if count != last {
+            return Err(binding_error(
+                1,
+                "allocation/history consistency: incomplete local history",
+            ));
+        }
+        let next = last
+            .checked_add(1)
+            .ok_or_else(|| binding_error(1, "allocation sequence exhausted"))?;
+        Ok(next)
+    }
+
+    fn checked_write_next(&self, writers: u64) -> Result<u64, BindingError> {
+        let next = self.checked_next(writers)?;
+        // Keep an exhausted but consistent identity exportable/restorable.
+        // A write must leave its subsequent cursor representable as well.
+        if next == u64::MAX {
+            return Err(binding_error(1, "allocation sequence exhausted"));
+        }
+        Ok(next)
+    }
+
+    fn check_incoming(&self, record: &Record<OrSetDelta<String, u64>>) -> Result<(), BindingError> {
+        if let Some(writers) = self.allocated_writers {
+            Self::check_owned_record(writers, record)?;
+            if record.id.replica == self.replica_id
+                && !self.log.records().iter().any(|known| known.id == record.id)
+            {
+                return Err(binding_error(1, "incoming record claims the local author"));
+            }
+        }
+        Ok(())
+    }
+
+    fn try_append_allocated_add(&mut self, element: String) -> Result<Vec<u8>, BindingError> {
+        let writers = self
+            .allocated_writers
+            .ok_or_else(|| binding_error(1, "replica has no allocated identity"))?;
+        let sequence = self.checked_write_next(writers)?;
+        let token = allocate_token(writers, self.replica_id, sequence)
+            .ok_or_else(|| binding_error(1, "token allocation exhausted"))?;
+        self.append(OrSetDelta::Add { element, token })
+    }
+
+    fn try_export_identity(&self) -> Result<Vec<u8>, BindingError> {
+        let writers = self
+            .allocated_writers
+            .ok_or_else(|| binding_error(1, "replica has no allocated identity"))?;
+        let next = self.checked_next(writers)?;
+        // Local identity storage only, not a new CRDT transport encoding. The
+        // suffix is the existing core log, including its shape/integrity checks.
+        let mut bytes = b"SMOI\x01".to_vec();
+        for word in [writers, self.replica_id, next] {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        bytes.extend(
+            self.log.to_wire_bytes().map_err(|error| {
+                binding_error(1, format!("failed to encode event log: {error:?}"))
+            })?,
+        );
+        Ok(bytes)
+    }
+
+    fn try_import_identity(bytes: &[u8]) -> Result<Self, BindingError> {
+        if bytes.len() < 29 || &bytes[..5] != b"SMOI\x01" {
+            return Err(binding_error(
+                1,
+                "allocation/history consistency: invalid identity storage",
+            ));
+        }
+        let word = |i| u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+        let (writers, author, next) = (word(5), word(13), word(21));
+        let mut candidate = Self::new(author);
+        candidate.log = EventLog::from_wire_bytes_for(&bytes[29..], &candidate.state)
+            .map_err(event_log_decode_error)?;
+        if candidate.checked_next(writers)? != next {
+            return Err(binding_error(
+                1,
+                "allocation/history consistency: next sequence mismatch",
+            ));
+        }
+        for record in candidate.log.records() {
+            candidate.state.apply_delta(record.delta.clone());
+        }
+        // Claim only after all checks; a failed import creates no live writer.
+        candidate.claim(writers)?;
+        Ok(candidate)
+    }
+
     fn append(&mut self, delta: OrSetDelta<String, u64>) -> Result<Vec<u8>, BindingError> {
         let id = self
             .log
@@ -1026,6 +1194,7 @@ impl SafeMeshStringOrSetReplica {
         &mut self,
         record: Record<OrSetDelta<String, u64>>,
     ) -> Result<safemesh_crdt::Admission, BindingError> {
+        self.check_incoming(&record)?;
         match self.log.admit_with(record, |delta| {
             self.state.apply_delta(delta.clone());
         }) {
@@ -1051,6 +1220,9 @@ impl SafeMeshStringOrSetReplica {
     fn try_merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, BindingError> {
         let log = EventLog::<OrSetDelta<String, u64>>::from_wire_bytes_for(bytes, &self.state)
             .map_err(event_log_decode_error)?;
+        for record in log.records() {
+            self.check_incoming(record)?;
+        }
         Ok(log
             .records()
             .iter()
@@ -1076,9 +1248,46 @@ impl SafeMeshStringOrSetReplica {
     pub fn new(replica_id: u64) -> Self {
         SafeMeshStringOrSetReplica {
             replica_id,
+            allocated_writers: None,
             state: OrSet::new(),
             log: EventLog::new(),
         }
+    }
+
+    /// Create an allocated writer. At most one allocated handle per author may
+    /// live in this WASM instance; free() releases it. The caller provides any
+    /// cross-instance/process exclusion and must not restore stale snapshots.
+    #[wasm_bindgen(js_name = createAllocated)]
+    pub fn create_allocated(
+        #[wasm_bindgen(unchecked_param_type = "bigint")] writers: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] author: JsValue,
+    ) -> Result<Self, JsValue> {
+        let writers = u64::try_from(writers)
+            .map_err(|_| safe_mesh_error(2, "writers must be a u64 bigint"))?;
+        let author =
+            u64::try_from(author).map_err(|_| safe_mesh_error(2, "author must be a u64 bigint"))?;
+        Self::try_create_allocated(writers, author).map_err(JsValue::from)
+    }
+
+    /// Allocate through the Rust ownership rule, append, and return record bytes.
+    #[wasm_bindgen(js_name = appendAllocatedAdd)]
+    pub fn append_allocated_add(&mut self, element: String) -> Result<Vec<u8>, JsValue> {
+        self.try_append_allocated_add(element)
+            .map_err(JsValue::from)
+    }
+
+    /// Export fixed writer configuration, next sequence, and the complete log.
+    /// The bytes are caller-persisted identity storage, not a transport packet.
+    #[wasm_bindgen(js_name = exportIdentity)]
+    pub fn export_identity(&self) -> Result<Vec<u8>, JsValue> {
+        self.try_export_identity().map_err(JsValue::from)
+    }
+
+    /// Allocation/history consistency check; failure never creates a fresh writer.
+    /// A self-consistent stale snapshot is not detected. There is no disk I/O.
+    #[wasm_bindgen(js_name = importIdentity)]
+    pub fn import_identity(bytes: &[u8]) -> Result<Self, JsValue> {
+        Self::try_import_identity(bytes).map_err(JsValue::from)
     }
 
     /// Append an add record for `(element, token)` and return its wire bytes.
@@ -1092,6 +1301,9 @@ impl SafeMeshStringOrSetReplica {
     /// for `element`, as the core reports them, and return its wire bytes.
     #[wasm_bindgen(js_name = appendRemoveObserved)]
     pub fn append_remove_observed(&mut self, element: String) -> Result<Vec<u8>, JsValue> {
+        if let Some(writers) = self.allocated_writers {
+            self.checked_write_next(writers).map_err(JsValue::from)?;
+        }
         let tokens = self.state.observed_tokens(&element).into_iter().collect();
         self.append(OrSetDelta::Remove { tokens })
             .map_err(JsValue::from)
@@ -1176,6 +1388,51 @@ impl SafeMeshStringOrSetReplica {
 mod tests {
     use super::*;
     use safemesh_crdt::{RecordId, WireEncode};
+
+    #[test]
+    fn allocated_identity_checks_history_and_restarts() {
+        let mut left = SafeMeshStringOrSetReplica::try_create_allocated(2, 0).unwrap();
+        left.try_append_allocated_add("water".into()).unwrap();
+        let saved = left.try_export_identity().unwrap();
+        assert!(SafeMeshStringOrSetReplica::try_import_identity(&saved).is_err());
+        drop(left);
+        for (offset, word) in [(5, 0u64), (5, 3), (13, 1), (21, 0), (21, u64::MAX)] {
+            let mut bad = saved.clone();
+            bad[offset..offset + 8].copy_from_slice(&word.to_le_bytes());
+            assert!(SafeMeshStringOrSetReplica::try_import_identity(&bad).is_err());
+        }
+        let mut restored = SafeMeshStringOrSetReplica::try_import_identity(&saved).unwrap();
+        let next = restored.try_append_allocated_add("radio".into()).unwrap();
+        let record = SafeMeshStringOrSetReplica::decode_record(&next).unwrap();
+        assert_eq!(record.id.sequence, 2);
+        assert_eq!(
+            record.delta,
+            OrSetDelta::Add {
+                element: "radio".into(),
+                token: 4
+            }
+        );
+    }
+
+    #[test]
+    fn allocated_history_refuses_gaps_zero_and_max_sequence() {
+        for sequence in [0, 2, u64::MAX] {
+            let mut replica = SafeMeshStringOrSetReplica::new(0);
+            replica.log.insert_record(Record {
+                id: RecordId {
+                    replica: 0,
+                    sequence,
+                },
+                delta: OrSetDelta::Remove { tokens: vec![] },
+            });
+            assert!(replica.checked_next(1).is_err());
+        }
+        assert_eq!(allocate_token(1, 0, u64::MAX), Some(u64::MAX));
+        assert_eq!(allocate_token(2, 0, u64::MAX), None);
+        assert_eq!(allocate_token(0, 0, 1), None);
+        assert_eq!(allocate_token(2, 2, 1), None);
+        assert_eq!(allocate_token(2, 0, 0), None);
+    }
 
     #[test]
     fn orset_matches_core_with_concurrent_add_and_early_tombstone() {
