@@ -257,7 +257,7 @@ export function convergence(sim: Simulation): {
 }
 
 export function runAntiEntropyNow(sim: Simulation): Simulation {
-  return runAntiEntropy({ ...sim, nextAntiEntropyAt: sim.now })
+  return runAntiEntropy(sim)
 }
 
 export function queueAntiEntropyPackets(sim: Simulation): Simulation {
@@ -442,10 +442,14 @@ function maybeRunAntiEntropy(sim: Simulation): Simulation {
 }
 
 function runAntiEntropy(sim: Simulation): Simulation {
-  if (sim.partitioned || sim.antiEntropyMs <= 0) return sim
+  // Scheduling is guarded by maybeRunAntiEntropy; manual repair also works when it is off.
+  if (sim.partitioned) return sim
 
   let peers = sim.peers
-  let next: Simulation = { ...sim, nextAntiEntropyAt: sim.now + sim.antiEntropyMs }
+  let next: Simulation = {
+    ...sim,
+    nextAntiEntropyAt: sim.antiEntropyMs > 0 ? sim.now + sim.antiEntropyMs : Number.POSITIVE_INFINITY,
+  }
   let mergedAny = false
 
   for (let i = 0; i < peers.length; i += 1) {
