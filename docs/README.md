@@ -17,8 +17,8 @@ Build:
 npm --prefix docs ci && npm --prefix docs run build
 ```
 
-The development server opens at `http://localhost:4321/`; production files and the Pagefind index are written to `docs/dist/`.
-To inspect the built search, run `npm --prefix docs run preview` and open `http://localhost:4320/`.
+With the default `SITE_URL`, open the development site at `http://localhost:4321/safemesh/`; production files and the Pagefind index are written to `docs/dist/`.
+To inspect the built search, run `npm --prefix docs run preview` and open `http://localhost:4320/safemesh/` with the default `SITE_URL`.
 Pagefind is built during the production build, so search verification uses preview.
 
 The global Lab link defaults to `http://localhost:4173/`, the separate Lab's default preview root.
