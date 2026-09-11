@@ -1,5 +1,8 @@
 # What is proven
 
+Reproduction commands use **Rust 1.96.1**, the full-gate CI and demo toolchain; the consumer crate floor is **Rust 1.89**. Install rustup and select the toolchain using the [build toolchain setup](README.md#build-toolchain) before running them.
+
+
 SafeMesh follows verification-guided development:
 
 1. Lean definitions state the semantics.

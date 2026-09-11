@@ -1,5 +1,8 @@
 # Documentation development
 
+Reproduction commands use **Rust 1.96.1**, the full-gate CI and demo toolchain; the consumer crate floor is **Rust 1.89**. Install rustup and select the toolchain using the [build toolchain setup](../README.md#build-toolchain) before running them.
+
+
 Use Node.js 22.12 or newer and run these commands from the repository root.
 
 Develop:
@@ -27,7 +30,7 @@ The hosted site is built by `npm --prefix docs run build:site` instead. It runs 
 The documentation workflow reads that address from the repository's existing GitHub Pages configuration; it never changes Pages settings.
 Building the Lab needs the [Lab's toolchain](../web/README.md#run): Node.js 24, Rust with the `wasm32-unknown-unknown` target, `wasm-pack`, and `npm --prefix web ci`.
 
-`npm --prefix docs ci` installs only the docs dependencies, and `dev`, `build` and `preview` use nothing else, independently of the Rust, WASM and web workflows.
+`npm --prefix docs ci` installs the documentation dependencies. `dev` and `preview` serve the documentation; `build` also generates the Rust API reference through Cargo and needs the Rust toolchain above. `build:site` additionally builds the WASM-backed Lab and needs its tools.
 The documentation workflow performs the same clean installs, runs `build:site` and the link check, and deploys the output to GitHub Pages from `main`.
 
 The documentation includes a first-result path, concepts, architecture, proof scope,

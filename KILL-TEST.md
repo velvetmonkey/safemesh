@@ -1,5 +1,8 @@
 # SafeMesh kill-test: field-science cold chain
 
+Reproduction commands use **Rust 1.96.1**, the full-gate CI and demo toolchain; the consumer crate floor is **Rust 1.89**. Install rustup and select the toolchain using the [build toolchain setup](README.md#build-toolchain) before running them.
+
+
 This is the software-only integrity vertical for the v0 evaluation. It is not a claim about sensors, law, radio delivery, or custody procedure. It asks whether SafeMesh's current library surface is enough for a builder to model a load-bearing convergent state workflow and rerun the failure campaign in CI.
 
 Run:
