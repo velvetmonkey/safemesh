@@ -68,3 +68,28 @@ at a server that is not running fails the check. Run the check against a
 `build:site` output, start the local Lab first, or set `LAB_URL` to a reachable
 address. `SITE_URL` sets the default `--site`, so the same command checks a site
 built at another address.
+
+## Assurance sources
+
+Edit `CLAIMS.md` for product claims and `WHAT-IS-PROVEN.md` for proof scope.
+The `claims.md` and `proof.md` pages contain only frontmatter and a source marker;
+Astro renders the root Markdown at build time. Do not paste assurance prose into
+those pages. Evidence kinds, theorem names, test commands and links belong beside
+the statement in the root document. Repository-relative links are resolved to the
+build's Git commit, displayed above each article; a build identity is not a test
+result. Keep any historical successful-run attribution explicitly commit-specific.
+
+`assuranceLoader` invalidates the two source-backed entries on every load and
+watches the root documents during development. `npm run build` runs
+`node check-assurance.mjs` after Astro: it independently reads the root documents,
+compares visible article text and ordered evidence destinations with the built
+HTML, and rejects missing kinds/evidence for any listed claim or the opening
+conditional claim. The parent kernel scope and its five nested claims count
+separately. The opening statement carries both model and finite-test evidence.
+The check validates rendering and traceability, not the truth of a theorem or test.
+
+To exercise drift detection, build, temporarily change one sentence in a root
+source, and run `node docs/check-assurance.mjs`: stale HTML must fail. Rebuild to
+see the sentence change on the site, then restore the sentence and rebuild. A
+changed evidence URL or edited built article must fail in the same way. The
+normal build includes this check before reference generation and final indexing.

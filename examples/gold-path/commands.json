@@ -1,0 +1,15 @@
+{
+  "rust": [
+    {"command": "cargo run --quiet --locked --manifest-path examples/gold-path/rust/Cargo.toml -- persist", "output": "rust/persist.txt"},
+    {"command": "cargo run --quiet --locked --manifest-path examples/gold-path/rust/Cargo.toml -- restart", "output": "rust/restart.txt"}
+  ],
+  "typescript": [
+    {"command": "cargo install wasm-pack --version 0.15.0 --locked"},
+    {"command": "rustup target add wasm32-unknown-unknown"},
+    {"command": "wasm-pack build rust/crates/safemesh-wasm --target nodejs --out-dir \"$PWD/examples/gold-path/typescript/pkg\" --release"},
+    {"command": "npm --prefix examples/gold-path/typescript ci"},
+    {"command": "npm --prefix examples/gold-path/typescript run build"},
+    {"command": "node examples/gold-path/typescript/main.js persist", "output": "typescript/persist.txt"},
+    {"command": "node examples/gold-path/typescript/main.js restart", "output": "typescript/restart.txt"}
+  ]
+}
