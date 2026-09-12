@@ -16,13 +16,13 @@ import threading
 import time
 from urllib.error import HTTPError
 from urllib.parse import unquote, urljoin, urlsplit, urlunsplit
-from urllib.request import HTTPSHandler, Request, build_opener, urlopen
+from urllib.request import HTTPHandler, HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 
 class Document(HTMLParser):
     def __init__(self, html):
         super().__init__(convert_charrefs=True)
-        self.ids, self.links = set(), []
+        self.ids, self.names, self.links = set(), set(), []
         self.base = None
         self.feed(html)
 
@@ -30,12 +30,50 @@ class Document(HTMLParser):
         attrs = dict(attrs)
         if 'id' in attrs:
             self.ids.add(attrs['id'])
+        if tag == 'a' and 'name' in attrs:
+            self.names.add(attrs['name'])
         if tag == 'base' and self.base is None and 'href' in attrs:
             self.base = attrs['href']
         for attr in ('href', 'src'):
             if attrs.get(attr) is not None:
                 asset = attr == 'src' or tag == 'link' and attrs.get('rel') not in ('canonical', 'alternate')
                 self.links.append((attrs[attr], asset, tag == 'base'))
+
+    def has_fragment(self, literal, url):
+        # HTML's indicated-part algorithm: literal, then UTF-8 decoded;
+        # IDs precede legacy a[name], with top as the final fallback.
+        decoded = unquote(literal)
+        for fragment in (literal, decoded):
+            if fragment in self.ids or fragment in self.names:
+                return True
+        if urlsplit(url).hostname == 'github.com' and 'user-content-' + decoded in self.ids:
+            return True
+        return not literal or decoded.lower() == 'top'
+
+
+class FragmentRedirectHandler(HTTPRedirectHandler):
+    """RFC 9110 10.2.2: an absent fragment inherits, an empty one replaces."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        location = headers.get('Location', headers.get('URI', ''))
+        # urllib resolves Location, but drops an explicit empty fragment and
+        # doesn't inherit across changed paths. Retain the delimiter as well.
+        if '#' in location:
+            suffix = '#' + newurl.split('#', 1)[1] if location.split('#', 1)[1] else '#'
+        else:
+            suffix = '#' + req.fragment if req.fragment is not None else ''
+        newurl = newurl.split('#', 1)[0] + suffix
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+    def http_response(self, request, response):
+        # Request.full_url/geturl omit a trailing # even though Request.fragment
+        # retains the distinction between absent (None) and explicitly empty.
+        if request.fragment == '':
+            response.url = request.full_url + '#'
+        return response
+
+    https_response = http_response
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -48,36 +86,45 @@ class Handler(SimpleHTTPRequestHandler):
         return None
 
 
-class SiteTransport(HTTPSHandler):
-    """Fetch this site's HTTPS URLs from the local deployment, without changing paths.
+class SiteTransport(HTTPSHandler, HTTPHandler):
+    """Fetch this site's HTTP(S) URLs from the local deployment, without changing paths.
 
-    Other origins retain normal HTTPS transport. The request URL and Host header
+    Other origins retain normal HTTP(S) transport. The request URL and Host header
     stay intact, including on redirects; only this origin's connection is local.
     """
 
     def __init__(self, site, address):
         super().__init__()
-        self.origin = urlsplit(site).netloc
+        self.origin = (urlsplit(site).scheme, urlsplit(site).netloc)
         self.address = address
 
+    def http_open(self, request):
+        return self.site_open(request, super().http_open)
+
     def https_open(self, request):
-        if urlsplit(request.full_url).netloc == self.origin:
+        return self.site_open(request, super().https_open)
+
+    def site_open(self, request, fallback):
+        parts = urlsplit(request.full_url)
+        if (parts.scheme, parts.netloc) == self.origin:
             return self.do_open(
                 lambda host, **kwargs: HTTPConnection(*self.address, **kwargs), request)
-        return super().https_open(request)
+        return fallback(request)
 
 
-def fetch(url, *, opener=urlopen, site=''):
+def fetch(url, *, opener=None, site=''):
+    if opener is None:
+        opener = build_opener(FragmentRedirectHandler()).open
     external = (urlsplit(url).hostname != '127.0.0.1' and
                 (urlsplit(url).scheme, urlsplit(url).netloc) !=
                 (urlsplit(site).scheme, urlsplit(site).netloc))
     for attempt in range(3 if external else 1):
         try:
             with opener(Request(url, headers={'User-Agent': 'SafeMesh-docs-link-check/1.0'}), timeout=10) as response:
-                return response.status, response.read().decode('utf-8', errors='replace'), response.headers.get('Content-Type', '')
+                return response.status, response.read().decode('utf-8', errors='replace'), response.headers.get('Content-Type', ''), response.geturl()
         except HTTPError as error:
             if error.code < 500 and error.code != 429:
-                return error.code, '', ''
+                return error.code, '', '', error.geturl()
             failure = str(error)
         except OSError as error:
             failure = str(error)
@@ -128,10 +175,10 @@ def crawl(root, base, fetcher=fetch):
         if route.endswith('index.html'):
             route = route[:-10]
         source = urljoin(base, route)
-        status, body, _ = fetcher(source)
+        status, body, _, effective = fetcher(source)
         if status != 200:
             errors.append(f'{route}: HTTP {status}')
-        parsed.append((route, source, Document(body)))
+        parsed.append((route, effective, Document(body)))
     for (route, source, document), targets in zip(parsed, resolve_documents(parsed), strict=True):
         for (raw, asset, is_base), target in zip(document.links, targets, strict=True):
             if target is None:
@@ -177,17 +224,20 @@ def crawl(root, base, fetcher=fetch):
     # Parse each fetched document once, even when rustdoc links to many anchors.
     documents = {}
     for route, raw, url, fragment, kind, literal_fragment in references:
-        status, body, content_type = results[url]
+        status, body, content_type, effective = results[url]
+        # Fetch each fragmentless URL once. If no redirect supplied a fragment,
+        # the original reference inherits unchanged; otherwise use the last
+        # replacement (including an explicit empty fragment).
+        if '#' in effective:
+            literal_fragment = effective.split('#', 1)[1]
+            fragment = unquote(literal_fragment)
         problem = None
         if status != 200:
             problem = f'HTTP {status}'
         elif fragment and kind != 'INTERNAL-ASSET':
             if url not in documents:
                 documents[url] = Document(body)
-            ids = documents[url].ids
-            # GitHub namespaces rendered Markdown headings with user-content-.
-            # Browsers first match the literal fragment, then its decoded form.
-            if literal_fragment not in ids and fragment not in ids and not (urlsplit(url).hostname == 'github.com' and 'user-content-' + fragment in ids):
+            if not documents[url].has_fragment(literal_fragment, effective):
                 problem = f'missing id #{fragment}'
         if problem:
             errors.append(f'{route} -> {raw} [{kind}] {problem}')
@@ -208,14 +258,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=Path(__file__).parent / 'dist')
     parser.add_argument('--site', default=os.environ.get('SITE_URL') or 'https://velvetmonkey.github.io/safemesh/',
-                        help='Deployed HTTPS site URL, including its base path (default: SITE_URL, else the production site)')
+                        help='Deployed HTTP(S) site URL, including its base path (default: SITE_URL, else the production site)')
     args = parser.parse_args()
+    # Use the builder's parser, including WHATWG normalization and validation,
+    # rather than allowing the two SITE_URL contracts to drift.
+    resolved = subprocess.run(['node', '--input-type=module', '-e',
+        'import {siteUrl} from "./site-url.mjs"; process.stdout.write(siteUrl(process.argv[1]).href);',
+        args.site], cwd=Path(__file__).parent, text=True, capture_output=True)
+    if resolved.returncode:
+        parser.error('--site: ' + resolved.stderr.strip())
+    args.site = resolved.stdout
     site = urlsplit(args.site)
-    if (site.scheme != 'https' or not site.netloc or site.query or site.fragment or
-            site.username or not site.path.endswith('/') or
-            any(part in ('.', '..') for part in site.path.split('/')) or
-            unquote(site.path) != site.path):
-        parser.error('--site must be an HTTPS site URL with a plain absolute base ending in /')
     root = args.root.resolve(strict=True)
     start = time.monotonic()
     # A real directory mount preserves /safemesh/ in every HTTP request.
@@ -232,7 +285,7 @@ def main():
                                      partial(Handler, directory=str(document_root)))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        opener = build_opener(SiteTransport(args.site, server.server_address))
+        opener = build_opener(SiteTransport(args.site, server.server_address), FragmentRedirectHandler())
         fetcher = partial(fetch, opener=opener.open, site=args.site)
         try:
             print(f'Serving {root} at {args.site} via 127.0.0.1:{server.server_port}')
