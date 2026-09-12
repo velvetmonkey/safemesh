@@ -15,8 +15,12 @@ const APP_SHELL = typeof BUILD === 'undefined'
   ? ['', 'README.md', 'manifest.webmanifest', 'pwa-icon.svg', 'favicon.svg'].map((name) => BASE + name)
   : BUILD.assets
 
+// addAll commits atomically, and each production Request verifies the bytes
+// emitted by this build. A deployment racing installation therefore fails closed.
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)))
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL.map((path) =>
+    new Request(path, { cache: 'reload', integrity: typeof BUILD === 'undefined' ? '' : BUILD.integrity[path] }),
+  ))))
   self.skipWaiting()
 })
 
@@ -48,42 +52,45 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       caches.open(CACHE_NAME)
         .then((cache) => cache.match(request, { ignoreVary: true }))
-        .then((cached) => cached || fetch(request)),
+        .then((cached) => cached || fetch(typeof BUILD === 'undefined' ? request :
+          new Request(request, { integrity: BUILD.integrity[url.pathname] }))),
     )
     return
   }
 
   if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(request)
-        .then((response) => {
-          if (response.ok) {
-            const copy = response.clone()
-            const contentType = response.headers.get('content-type') || ''
-            // The root key is the offline application fallback, so only an HTML
-            // shell may replace it. Other navigation responses retain their own URL.
-            const cacheKey = contentType.includes('text/html') ? BASE : response.url
-            caches.open(CACHE_NAME).then((cache) => cache.put(cacheKey, copy))
-          }
-          return response
-        })
-        .catch(() => caches.match(BASE)),
+      // Only installation may populate the offline shell. Even BASE can now be a
+      // different deployment, a redirect or a soft 404; navigation never writes it.
+      fetch(request).catch(() => caches.match(BASE, { cacheName: CACHE_NAME })),
     )
     return
   }
 
-  event.respondWith(
-    caches.match(request).then((cached) => {
-      const network = fetch(request)
-        .then((response) => {
-          if (response.ok) {
-            const copy = response.clone()
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy))
-          }
-          return response
-        })
-        .catch(() => cached)
-      return cached || network
-    }),
-  )
+  // Installed public files are immutable too: a fetch for index.html or a
+  // manifest must not silently refresh one member of the installed build.
+  if (url.origin === self.location.origin && !url.search && APP_SHELL.includes(url.pathname)) {
+    event.respondWith(caches.match(request, { cacheName: CACHE_NAME }))
+    return
+  }
+
+  // Unknown or queried build assets belong to the network's deployment, not
+  // this worker's precache. In particular B's hashed assets must not enter A.
+  if (url.origin === self.location.origin && url.pathname.startsWith(BASE + 'assets/')) {
+    event.respondWith(fetch(request))
+    return
+  }
+
+  const cached = caches.match(request, { cacheName: CACHE_NAME })
+  const network = cached.then(() => fetch(request))
+  // Register while dispatching the event, including when a cache hit returns
+  // before the refresh finishes. Cache failures do not discard a good response.
+  event.waitUntil(network.then(async (response) => {
+    if (response.ok) {
+      const copy = response.clone()
+      const cache = await caches.open(CACHE_NAME)
+      await cache.put(request, copy)
+    }
+  }).catch((error) => console.warn('SafeMesh refresh unavailable.', error)))
+  event.respondWith(cached.then((hit) => hit || network.catch(() => undefined)))
 })

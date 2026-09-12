@@ -22,6 +22,18 @@ prevent concurrent offline decrements from overselling.
 
 SafeMesh's convergence claim is conditional on missing deltas eventually being recovered. It does not prove network or radio delivery. A partition-and-heal example exercises modeled delivery faults; it cannot establish that your real transport will repair every gap. [Evidence: `CLAIMS.md`](https://github.com/velvetmonkey/safemesh/blob/main/CLAIMS.md) and [example scope](/safemesh/examples/).
 
+## You exchange peer versions from untrusted input
+
+`VersionVector::from_peer_prefixes` accepts positive prefixes through `u64::MAX`, including 1,000,001. It copies the prefix map and independent sequence-zero acknowledgements directly, taking O(r + z) time and additional space for r prefix entries and z zero acknowledgements. Prefix magnitude does not determine reconstruction work. A zero-valued prefix remains noncanonical; carry sequence-zero possession in `zero_replicas`.
+
+Keep three application-owned limits at the receiving boundary:
+
+- **Author-entry budget:** cap the number of prefix entries before reconstruction to bound validation and map cloning.
+- **Zero-acknowledgement budget:** cap the zero-author set before reconstruction to bound set cloning; the prefix-entry budget does not cover it.
+- **Encoded-byte budget:** cap the version message before decoding to bound parsing and input allocation, including repeated entries that a map or set would deduplicate.
+
+SafeMesh has no built-in version wire codec or universal numeric budgets for these collections. Choose budgets for your application, and enforce entry budgets during decoding as well as before reconstruction. These limits bound input cost without imposing a writer-lifetime ceiling. Peer versions remain possession claims: reconstruction does not verify that the sender holds the records. Evidence: [`VersionVector`](/safemesh/reference/rust/safemesh_crdt/struct.VersionVector.html).
+
 ## You need consensus or leader election
 
 These are explicitly outside v0's coverage. Equal state after joining the same updates does not provide a leader-election protocol. [Evidence: not covered in v0](https://github.com/velvetmonkey/safemesh/blob/main/CLAIMS.md#not-covered-in-v0).

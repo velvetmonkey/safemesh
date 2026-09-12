@@ -181,12 +181,21 @@ h2 {
   gap: 10px;
 }
 
-.stage {
+.stage-viewport {
   min-width: 0;
-  height: clamp(520px, 39vw, 620px);
-  min-height: 520px;
+  overflow: auto;
+}
+
+.stage-viewport:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.stage {
+  --stage-height: 560;
+  min-width: 0;
+  min-height: calc(var(--stage-height) * 1px);
   position: relative;
-  overflow: hidden;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--panel) 96%, transparent), color-mix(in srgb, var(--field) 98%, transparent)),
     repeating-linear-gradient(0deg, transparent 0 35px, rgba(255, 255, 255, 0.035) 36px 37px);
@@ -228,10 +237,8 @@ h2 {
 .stage-cue {
   max-width: min(420px, calc(100% - 48px));
   min-height: 38px;
-  position: absolute;
-  z-index: 8;
-  left: 24px;
-  top: 24px;
+  position: relative;
+  justify-self: start;
   display: inline-flex;
   align-items: center;
   padding: 9px 12px;
@@ -394,12 +401,6 @@ h2 {
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22);
 }
 
-.replica:hover,
-.replica:focus-visible {
-  border-color: var(--accent);
-  outline: none;
-}
-
 /* Selected: a solid offset ring, so the state survives without colour (aria-pressed carries it to assistive tech). */
 .replica.selected {
   border-color: var(--accent);
@@ -416,6 +417,11 @@ h2 {
 
 .replica.split {
   border-color: color-mix(in srgb, var(--warn) 70%, var(--line));
+}
+
+.replica:hover,
+.replica:focus-visible {
+  border-color: var(--accent);
 }
 
 .replica-kicker {
@@ -802,8 +808,7 @@ button:disabled {
   }
 
   .stage {
-    height: 500px;
-    min-height: 500px;
+    --stage-height: 500;
   }
 
   .narrative-panel,
@@ -864,8 +869,7 @@ button:disabled {
   }
 
   .stage {
-    height: 560px;
-    min-height: 560px;
+    --stage-height: 560;
   }
 
   .control-bank,
@@ -889,8 +893,7 @@ button:disabled {
   }
 
   .stage {
-    height: 540px;
-    min-height: 540px;
+    --stage-height: 540;
   }
 
   .convergence-core {
@@ -937,8 +940,6 @@ button:disabled {
 
   .stage-cue {
     max-width: calc(100% - 28px);
-    left: 14px;
-    top: 14px;
     font-size: 11px;
   }
 

@@ -1,6 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <title>SafeMesh connected replicas</title>
-  <rect width="32" height="32" rx="6" fill="#152c40"/>
-  <path d="M8 8h16v16H8zM8 8l16 16M24 8 8 24" fill="none" stroke="#73daca" stroke-width="2"/>
-  <g fill="#fff"><circle cx="8" cy="8" r="3"/><circle cx="24" cy="8" r="3"/><circle cx="8" cy="24" r="3"/><circle cx="24" cy="24" r="3"/></g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>SafeMesh</title>
+  <rect width="64" height="64" rx="13" fill="#0d1c33"/>
+  <g stroke="#eaf7ff" stroke-width="5" stroke-linecap="round">
+    <path d="M32 31 14 31"/>
+    <path d="M32 31 47 15"/>
+    <path d="M32 31 46 47"/>
+  </g>
+  <g stroke="#0d1c33" stroke-width="2.5">
+    <circle cx="14" cy="31" r="7.5" fill="#2b8ce8"/>
+    <circle cx="47" cy="15" r="8" fill="#2ad4f0"/>
+    <circle cx="46" cy="47" r="7" fill="#24e3f6"/>
+    <circle cx="32" cy="31" r="8" fill="#f2fbff"/>
+  </g>
 </svg>

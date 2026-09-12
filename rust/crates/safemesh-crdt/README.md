@@ -89,8 +89,8 @@ and file/directory sync. On macOS or Windows, the command below fails to compile
 the example imports `local`, but that module is gated on both `local-writer` and
 Linux. Omitting `--features local-writer` runs only the earlier `EventLog`
 walkthrough with a same-process restart, without the durable journey.
-`local-writer` enables everything this example needs; `laws` also enables it but
-adds law-checking helpers that the example does not use.
+`local-writer` enables everything this example needs; `laws` independently adds
+law-checking helpers that the example does not use.
 
 Start in an empty directory where you can download and build the repository.
 Use a fresh `walk-logs` directory for this example: its fresh constructors refuse

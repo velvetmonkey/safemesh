@@ -1,6 +1,6 @@
 // Copyright (C) 2026 Ben Cassie
 // SPDX-License-Identifier: Apache-2.0
-#![cfg(feature = "local-writer")]
+#![cfg(all(feature = "local-writer", target_os = "linux"))]
 use safemesh_crdt::{local::*, ownership::WriterConfig, *};
 use serde_json::{json, Value};
 use std::{

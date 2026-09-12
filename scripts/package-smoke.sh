@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tmp_dir="$(mktemp -d)"
-trap 'rm -rf "$tmp_dir"' EXIT
+trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$tmp_dir"' EXIT
 
 (
   cd "$repo_root/rust"
@@ -87,7 +87,74 @@ wasm-pack build "$repo_root/rust/crates/safemesh-wasm" \
   --out-dir "$tmp_dir/wasm-pkg" \
   --release
 
-npm pack --dry-run "$tmp_dir/wasm-pkg"
+# wasm-pack 0.15 omits inline-JS snippets from its npm files allowlist.
+# Include them in the artifact before packing; never repair the consumer install.
+node --input-type=module - "$tmp_dir/wasm-pkg/package.json" <<'JS'
+import { readFileSync, writeFileSync } from "node:fs";
+const path = process.argv[2];
+const manifest = JSON.parse(readFileSync(path, "utf8"));
+manifest.files = [...new Set([...manifest.files, "snippets/"])];
+writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+JS
+
+mkdir "$tmp_dir/tarballs" "$tmp_dir/consumer"
+npm pack "$tmp_dir/wasm-pkg" --pack-destination "$tmp_dir/tarballs" --json \
+  > "$tmp_dir/pack.json"
+tarball="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[0].filename' "$tmp_dir/pack.json")"
+(
+  cd "$tmp_dir/consumer"
+  npm init -y >/dev/null
+  npm install "$tmp_dir/tarballs/$tarball"
+
+  node --input-type=module - <<'JS'
+import assert from "node:assert/strict";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const snippets = "node_modules/safemesh-wasm/snippets";
+assert(lstatSync(snippets).isDirectory(), "installed snippets/ must be a directory");
+function checkFiles(directory) {
+  let count = 0;
+  for (const name of readdirSync(directory)) {
+    const path = join(directory, name);
+    const stat = lstatSync(path);
+    if (stat.isDirectory()) {
+      count += checkFiles(path);
+    } else {
+      assert(stat.isFile(), `snippet must be a regular file: ${path}`);
+      assert(readFileSync(path).length > 0, `snippet must have contents: ${path}`);
+      count++;
+    }
+  }
+  return count;
+}
+assert(checkFiles(snippets) > 0, "installed snippets/ must contain files");
+console.log("NPM_INSTALLED_SNIPPETS=true");
+JS
+
+  # The shipped bundler target uses native ESM WASM imports (Node 22/24 flag).
+  node --experimental-wasm-modules --input-type=module - <<'JS'
+import assert from "node:assert/strict";
+import { SafeMeshGCounterReplica } from "safemesh-wasm";
+
+const left = new SafeMeshGCounterReplica(1n, 3);
+const right = new SafeMeshGCounterReplica(2n, 3);
+right.mergeRecordBytes(left.appendBump(1, 5n));
+assert.deepEqual(left.mergeLogBytes(right.logBytes()), ["duplicate"]);
+assert.equal(left.value(), 5n);
+assert.equal(right.value(), 5n);
+// Exercise the inline JS that constructs the package's typed errors, too.
+assert.throws(() => left.mergeRecordBytes(new Uint8Array([0])), (error) => {
+  assert(error instanceof Error);
+  assert.equal(error.name, "SafeMeshError");
+  assert.equal(error.code, 1);
+  return true;
+});
+left.free();
+right.free();
+console.log("NPM_TARBALL_INSTALL_SMOKE=true");
+JS
+)
 
 wasm-pack build "$repo_root/rust/crates/safemesh-wasm" \
   --target nodejs \
@@ -99,4 +166,7 @@ node "$repo_root/rust/crates/safemesh-wasm/examples/node-convergence.mjs" \
 node "$repo_root/rust/crates/safemesh-wasm/tests/node-error-shape.mjs" \
   "$tmp_dir/wasm-node-pkg"
 node "$repo_root/rust/crates/safemesh-wasm/tests/safemesh-wasm-boundary-repros.mjs" \
+  "$tmp_dir/wasm-node-pkg"
+
+node "$repo_root/rust/crates/safemesh-wasm/tests/node-self-merge.mjs" \
   "$tmp_dir/wasm-node-pkg"
