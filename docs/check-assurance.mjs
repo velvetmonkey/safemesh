@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { unified } from 'unified';
 import remarkRehype from 'remark-rehype';
+import rehypeRaw from 'rehype-raw';
 import { parse } from 'parse5';
 import { pages, root, revision, sourceTree, walk } from './assurance.mjs';
 
@@ -10,18 +11,42 @@ const blocks = new Set(['p', 'div', 'li', 'ul', 'ol', 'blockquote', 'h1', 'h2', 
 function signature(node) {
   let text = '';
   const links = [];
+  const code = [];
+  const images = [];
+  function codeText(n) {
+    if (n.type === 'text' || n.nodeName === '#text') return n.value;
+    const attrs = n.properties ?? Object.fromEntries((n.attrs ?? []).map(a => [a.name, a.value]));
+    if (n.tagName === 'a') links.push(attrs.href);
+    if (n.tagName === 'img') images.push({ src: attrs.src, alt: attrs.alt ?? '' });
+    const classes = String(attrs.className ?? attrs.class ?? '').split(/[ ,]+/);
+    const children = n.children ?? n.childNodes ?? [];
+    // Expressive Code represents newlines as ec-line containers.
+    if (classes.includes('ec-line')) {
+      const content = children.find(c => (c.attrs ?? []).some(a => a.name === 'class' && a.value.split(' ').includes('code')));
+      return codeText(content ?? { children }) + '\n';
+    }
+    return children.map(codeText).join('');
+  }
   function visit(n) {
     const attrs = n.properties ?? Object.fromEntries((n.attrs ?? []).map(a => [a.name, a.value]));
     const tag = n.tagName;
     // Starlight adds heading-permalink controls, outside authored content.
     if (String(attrs.className ?? attrs.class ?? '').includes('sl-anchor-link')) return;
+    if (tag === 'pre' || tag === 'code') {
+      // Highlighting adds spans, but indentation and line breaks remain content.
+      const value = codeText(n);
+      code.push({ tag, value });
+      text += ` code:${code.length} `;
+      return;
+    }
     if (n.type === 'text' || n.nodeName === '#text') text += n.value;
     if (tag === 'a') links.push(attrs.href);
+    if (tag === 'img') images.push({ src: attrs.src, alt: attrs.alt ?? '' });
     for (const c of n.children ?? n.childNodes ?? []) visit(c);
     if (blocks.has(tag)) text += ' ';
   }
   visit(node);
-  return { text: text.replace(/\s+/g, ' ').trim(), links };
+  return { text: text.replace(/\s+/g, ' ').trim(), links, code, images };
 }
 let total = 0;
 for (const [route, source] of Object.entries(pages)) {
@@ -38,7 +63,7 @@ for (const [route, source] of Object.entries(pages)) {
     throw new Error(`${route}: stale build commit`);
   }
   const tree = sourceTree(source, sha);
-  const expected = signature(await unified().use(remarkRehype).run(tree));
+  const expected = signature(await unified().use(remarkRehype, { allowDangerousHtml: true }).use(rehypeRaw).run(tree));
   const actual = signature(matches[0]);
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(`${route}: rendered text or evidence links disagree with ${source}`);
