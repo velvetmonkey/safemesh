@@ -111,11 +111,12 @@ function App() {
       for (let i = 0; i < nodes.length; i++) {
         for (let j = i + 1; j < nodes.length; j++) {
           const a = nodes[i], b = nodes[j]
-          // Separate rectangles along the axis that needs less expansion.
+          // Prefer vertical growth so a small spacing deficit does not add a
+          // desktop scrollbar. Nodes sharing a row must separate horizontally.
           const separatedWidth = ((a.width + b.width) / 2 + 24) / Math.abs(a.x - b.x)
           const separatedHeight = ((a.height + b.height) / 2 + 24) / Math.abs(a.y - b.y)
           if (separatedWidth > requiredWidth && separatedHeight > requiredHeight) {
-            if (separatedWidth / requiredWidth < separatedHeight / requiredHeight) requiredWidth = separatedWidth
+            if (Math.abs(a.y - b.y) < 0.001) requiredWidth = separatedWidth
             else requiredHeight = separatedHeight
           }
         }

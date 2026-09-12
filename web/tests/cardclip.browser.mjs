@@ -13,7 +13,7 @@ before(async () => {
 after(async () => { await browser?.close(); await server?.close() })
 
 // Real controls, real WASM, real layout: no injected simulation or mocked boxes.
-for (const width of [1440, 821, 820, 760, 520, 360]) {
+for (const width of [1920, 1440, 1280, 1024, 821, 820, 760, 520, 360]) {
   for (const count of [3, 4, 5, 6]) {
     test(`${width}px / ${count} replicas: all supply text remains reachable`, async () => {
       const page = await browser.newPage({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' })
@@ -47,15 +47,33 @@ for (const width of [1440, 821, 820, 760, 520, 360]) {
           })
         })
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+        const assertDesktopFit = async () => {
+          if (width < 1024) return
+          await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+          const sizes = await page.evaluate(() => {
+            const viewport = document.querySelector('.stage-viewport')
+            return {
+              pageClient: document.documentElement.clientWidth,
+              pageScroll: document.documentElement.scrollWidth,
+              diagramClient: viewport.clientWidth,
+              diagramScroll: viewport.scrollWidth,
+            }
+          })
+          assert.equal(sizes.pageScroll, sizes.pageClient, 'no horizontal page overflow on desktop')
+          assert.equal(sizes.diagramScroll, sizes.diagramClient, 'no horizontal diagram scrollbar on desktop')
+        }
+        await assertDesktopFit()
         const empty = await measure()
         for (const supply of supplies) {
           await page.getByLabel('Record element').selectOption(supply)
           await page.getByRole('button', { name: 'Add', exact: true }).click()
+          await assertDesktopFit()
         }
         await page.getByRole('button', { name: 'Heal', exact: true }).click()
         // Wait for state delivery and the ResizeObserver layout pass.
         await page.waitForFunction(n => [...document.querySelectorAll('.replica')].every(c => c.textContent.includes(n)), supplies.at(-1))
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+        await assertDesktopFit()
         const populated = await measure()
         for (let i = 0; i < count; i++) {
           const card = cards.nth(i)
