@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Ben Cassie
 // SPDX-License-Identifier: Apache-2.0
 //! Public API walk: m2slice <scratch-directory> [--require-integrity].
-//! Use --features laws and a fresh scratch directory for the packet D process
+//! On Linux, use --features local-writer and a fresh scratch directory for the packet D process
 //! journey (Linux local filesystems). Keep the directory for subsequent recovery.
 use safemesh_crdt::{
     Admission, Crdt, EventLog, GCounter, GCounterDelta, OrSet, OrSetDelta, Record, WireDecode,
@@ -181,7 +181,7 @@ where
     detected
 }
 fn main() {
-    #[cfg(feature = "local-writer")]
+    #[cfg(all(feature = "local-writer", target_os = "linux"))]
     if let Some(root) = std::env::var_os("SAFEMESH_M2_JOINED_CHILD") {
         joined::child(Path::new(&root));
     }
@@ -192,7 +192,7 @@ fn main() {
     let require_integrity = args.next().as_deref() == Some("--require-integrity");
     let root = Path::new(&root);
     fs::create_dir_all(root).unwrap();
-    #[cfg(feature = "local-writer")]
+    #[cfg(all(feature = "local-writer", target_os = "linux"))]
     joined::run(root);
     journey(
         root,
@@ -307,8 +307,8 @@ mod logshape_tests {
 }
 
 // Packet D composes the public owned/durable/restart APIs. The earlier walk
-// remains available without local-writer; use --features laws for this journey.
-#[cfg(feature = "local-writer")]
+// remains available without local-writer; on Linux use --features local-writer for this journey.
+#[cfg(all(feature = "local-writer", target_os = "linux"))]
 mod joined {
     use super::*;
     use safemesh_crdt::{
