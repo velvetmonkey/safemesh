@@ -14,7 +14,8 @@
     "lint": "oxlint src",
     "preview": "vite preview",
     "pretest": "wasm-pack build ../rust/crates/safemesh-wasm --target bundler --out-dir pkg --release",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:layout": "node --test tests/cardclip.browser.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.23.0",
@@ -27,6 +28,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
     "oxlint": "^1.71.0",
+    "playwright": "^1.63.0",
     "typescript": "~6.0.2",
     "vite": "^8.1.1",
     "vitest": "^4.1.9"

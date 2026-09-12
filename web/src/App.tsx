@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentType } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import {
   BadgeCheck,
   ChevronLeft,
@@ -67,6 +67,10 @@ function App() {
   const [calmMotion, setCalmMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches)
   const [compactStage, setCompactStage] = useState(() => window.matchMedia('(max-width: 760px)').matches)
 
+  const fieldViewport = useRef<HTMLDivElement>(null)
+  const field = useRef<HTMLElement>(null)
+  const [fieldSize, setFieldSize] = useState({ width: 0, height: 0 })
+
   const activeScenario = currentScenario(activeScenarioId)
   const activeStep = currentScenarioStep(activeScenarioId, stepIndex)
   const sim = advancedOpen ? sandboxSim : scenarioSim
@@ -82,6 +86,51 @@ function App() {
   const stepProgress = activeStep.motionMs === 0 ? 100 : Math.round((stepElapsed / activeStep.motionMs) * 100)
   const stepStartTime = useMemo(() => buildScenarioSimulation(activeScenarioId, stepIndex, 0).now, [activeScenarioId, stepIndex])
   const visibleLog = useMemo(() => eventLogForMode(sim.log, advancedOpen, stepStartTime), [advancedOpen, sim.log, stepStartTime])
+
+  // Absolute nodes do not contribute to intrinsic stage size. Measure their
+  // actual content, then reserve enough room for every node and its focus ring.
+  useLayoutEffect(() => {
+    const viewport = fieldViewport.current
+    const stage = field.current
+    if (!viewport || !stage) return
+    const measure = () => {
+      const width = viewport.clientWidth
+      const height = parseFloat(getComputedStyle(stage).getPropertyValue('--stage-height'))
+      if (!width || !height) return
+      const cards = Array.from(stage.querySelectorAll<HTMLElement>('.replica'))
+      const core = stage.querySelector<HTMLElement>('.convergence-core')!
+      const nodes = [...cards.map((card, i) => ({
+        x: positions[i].x / 100, y: positions[i].y / 100,
+        width: card.offsetWidth, height: card.offsetHeight,
+      })), { x: 0.5, y: 0.5, width: core.offsetWidth, height: core.offsetHeight }]
+      let requiredWidth = width, requiredHeight = height
+      for (const node of nodes) {
+        requiredWidth = Math.max(requiredWidth, (node.width / 2 + 24) / Math.min(node.x, 1 - node.x))
+        requiredHeight = Math.max(requiredHeight, (node.height / 2 + 24) / Math.min(node.y, 1 - node.y))
+      }
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const a = nodes[i], b = nodes[j]
+          // Prefer vertical growth so a small spacing deficit does not add a
+          // desktop scrollbar. Nodes sharing a row must separate horizontally.
+          const separatedWidth = ((a.width + b.width) / 2 + 24) / Math.abs(a.x - b.x)
+          const separatedHeight = ((a.height + b.height) / 2 + 24) / Math.abs(a.y - b.y)
+          if (separatedWidth > requiredWidth && separatedHeight > requiredHeight) {
+            if (Math.abs(a.y - b.y) < 0.001) requiredWidth = separatedWidth
+            else requiredHeight = separatedHeight
+          }
+        }
+      }
+      const next = { width: Math.ceil(requiredWidth), height: Math.ceil(requiredHeight) }
+      setFieldSize(previous => previous.width === next.width && previous.height === next.height ? previous : next)
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(viewport)
+    stage.querySelectorAll('.replica, .convergence-core').forEach(node => observer.observe(node))
+    window.addEventListener('resize', measure)
+    measure()
+    return () => { observer.disconnect(); window.removeEventListener('resize', measure) }
+  }, [positions])
 
   useEffect(() => {
     const media = window.matchMedia('(max-width: 760px)')
@@ -200,7 +249,9 @@ function App() {
 
       <section className="demo-grid" aria-label="Interactive convergence demo">
         <div className="stage-shell">
-          <section className="stage" aria-label="Replica field">
+          {!advancedOpen && <div className={`stage-cue ${activeStep.tone}`}>{activeStep.stageCue ?? activeStep.watchFor}</div>}
+          <div className="stage-viewport" ref={fieldViewport} tabIndex={0} role="region" aria-label="Scrollable replica diagram">
+          <section className="stage" ref={field} style={{ width: fieldSize.width || undefined, minHeight: fieldSize.height || undefined }} aria-label="Replica field">
             <svg className="link-layer" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
               {linkPairs(sim.peers.length).map(([left, right]) => (
                 <line
@@ -214,8 +265,6 @@ function App() {
               ))}
               {sim.partitioned && <line className="partition-wall" x1="50" y1="10" x2="50" y2="90" />}
             </svg>
-
-            {!advancedOpen && <div className={`stage-cue ${activeStep.tone}`}>{activeStep.stageCue ?? activeStep.watchFor}</div>}
 
             {sim.queue.slice(0, compactStage ? 8 : 18).map((packet) => {
               const point = packetPoint(packet, sim, positions)
@@ -270,6 +319,7 @@ function App() {
               )
             })}
           </section>
+          </div>
 
           <div className="stage-step-controls" aria-label="Scenario step controls">
             {advancedOpen ? (
