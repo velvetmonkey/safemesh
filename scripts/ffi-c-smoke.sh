@@ -8,6 +8,12 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 crate_dir="$repo_root/rust/crates/safemesh-ffi"
 target_dir="${CARGO_TARGET_DIR:-$repo_root/rust/target}"
+# Cargo runs in rust/, while the C compiler runs in the caller's directory.
+# Make relative targets absolute against Cargo's working directory once.
+case "$target_dir" in
+  /*) ;;
+  *) target_dir="$repo_root/rust/$target_dir" ;;
+esac
 lib_dir="$target_dir/release"
 cc_bin="${CC:-cc}"
 
