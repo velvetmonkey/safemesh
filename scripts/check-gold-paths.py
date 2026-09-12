@@ -3,6 +3,7 @@
 
 --refresh regenerates expected stdout by running the asserting programs; review the diff.
 --write-docs copies fixture blocks into Markdown. Neither mode is used in CI.
+Fence validation requires the site's parser dependencies: npm --prefix docs ci.
 """
 import argparse
 import difflib
@@ -17,14 +18,42 @@ FIXTURES = ROOT / "examples/gold-path"
 COMMANDS = json.loads((FIXTURES / "commands.json").read_text())
 
 
+def check_fence(block):
+    # Use the site's Markdown parser, independently of the fixture comparison.
+    # A paragraph after the fence must remain outside the single code node.
+    result = subprocess.run([
+        "node", "--input-type=module", "-e", r"""
+import {unified} from 'unified';
+import remarkParse from 'remark-parse';
+let block = '';
+for await (const chunk of process.stdin) block += chunk;
+const following = 'Gold fence boundary sentinel.';
+const nodes = unified().use(remarkParse).parse(block + '\n\n' + following + '\n').children;
+const closed = nodes.length === 2 && nodes[0].type === 'code'
+    && nodes[0].position.end.line === block.split('\n').length
+    && nodes[1].type === 'paragraph' && nodes[1].children.length === 1
+    && nodes[1].children[0].type === 'text' && nodes[1].children[0].value === following;
+process.stdout.write(JSON.stringify(closed));
+"""], cwd=ROOT / "docs", input=block, text=True, capture_output=True, check=True)
+    if not json.loads(result.stdout):
+        raise ValueError("generated fixture must parse as one closed code block")
+
+
 def fixture_block(kind, name):
     if kind == "commands":
-        return "```sh\n" + "\n".join(item["command"] for item in COMMANDS[name]) + "\n```"
-    if kind == "output":
-        return "```text\n" + "".join((FIXTURES / item["output"]).read_text()
-                                     for item in COMMANDS[name] if "output" in item) + "```"
-    language, path = name.split(":", 1)
-    return f"```{language}\n{(FIXTURES / path).read_text()}```"
+        language = "sh"
+        content = "\n".join(item["command"] for item in COMMANDS[name]) + "\n"
+    elif kind == "output":
+        language = "text"
+        content = "".join((FIXTURES / item["output"]).read_text()
+                          for item in COMMANDS[name] if "output" in item)
+    else:
+        language, path = name.split(":", 1)
+        content = (FIXTURES / path).read_text()
+    separator = "" if content.endswith("\n") else "\n"
+    block = f"```{language}\n{content}{separator}```"
+    check_fence(block)
+    return block
 
 
 def main():
