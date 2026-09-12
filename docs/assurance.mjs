@@ -4,6 +4,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
+import remarkGfm from 'remark-gfm';
+import remarkSmartypants from 'remark-smartypants';
 
 export const root = fileURLToPath(new URL('../', import.meta.url));
 export const pages = { claims: 'CLAIMS.md', proof: 'WHAT-IS-PROVEN.md' };
@@ -14,23 +16,51 @@ export function walk(node, visit) {
   for (const child of node.children ?? []) walk(child, visit);
 }
 export function sourceTree(source, sha) {
-  const tree = unified().use(remarkParse).parse(readFileSync(root + source, 'utf8'));
+  // Match Astro's default GFM syntax and smart punctuation transforms.
+  const parser = unified().use(remarkParse).use(remarkGfm).use(remarkSmartypants);
+  const tree = parser.runSync(parser.parse(readFileSync(root + source, 'utf8')));
   // Starlight supplies the page's single H1 from its frontmatter.
   if (tree.children[0]?.type !== 'heading' || tree.children[0].depth !== 1) {
     throw new Error(`${source}: expected a source title`);
   }
   tree.children.shift();
+  const definitions = new Map();
   walk(tree, node => {
-    if (node.type === 'link' && !/^(?:[a-z]+:|#|\/)/i.test(node.url)) {
-      node.url = sourceUrl(node.url, sha);
+    if (node.type === 'definition' && !definitions.has(node.identifier)) {
+      definitions.set(node.identifier, { ...node });
     }
+  });
+  walk(tree, node => {
+    // An image reference can share a definition with a normal link. Resolve its
+    // destination separately so the link gets a file view and the image gets bytes.
+    if (node.type === 'imageReference' && definitions.has(node.identifier)) {
+      const definition = definitions.get(node.identifier);
+      node.type = 'image';
+      node.url = definition.url;
+      node.title = definition.title;
+      delete node.identifier;
+      delete node.label;
+      delete node.referenceType;
+    }
+    if (!['link', 'definition', 'image'].includes(node.type) || /^(?:[a-z][a-z\d+.-]*:|#|\/)/i.test(node.url)) return;
+    const base = node.type === 'image'
+      ? `https://raw.githubusercontent.com/velvetmonkey/safemesh/${sha}/${source}`
+      : sourceUrl(source, sha);
+    node.url = new URL(node.url, base).href;
   });
   return tree;
 }
 export default function assurance() {
   return (tree, file) => {
-    const route = Object.keys(pages).find(route => String(file.path).endsWith(`/content/docs/${route}.md`));
-    if (!route) return;
+    const path = String(file.path).replaceAll('\\', '/');
+    const route = Object.keys(pages).find(route => path.endsWith(`/content/docs/${route}.md`));
+    if (!route) {
+      // Ordinary pages also run this plugin. Only misplaced source markers are errors.
+      let marked = false;
+      walk(tree, node => { if (node.type === 'html' && node.value.includes('<!-- assurance-source:')) marked = true; });
+      if (marked) throw new Error(`${path}: unmatched assurance source page`);
+      return;
+    }
     const source = pages[route];
     const sha = revision();
     const marker = `<!-- assurance-source: ${source} -->`;
