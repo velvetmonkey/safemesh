@@ -33,8 +33,15 @@ Proof breadth and release support are separate: the five existing carrier proofs
 
 The supported language paths have different limits:
 
-- Rust and TypeScript/WASM: G-Counter and numeric/UTF-8 OR-Set mutation,
-  record exchange and checked restore; only Linux Rust has the durable writer.
+- Rust: G-Counter and numeric/UTF-8 OR-Set mutation, record exchange and checked
+  restore; only Linux Rust has the durable writer.
+- TypeScript/WASM `SafeMeshOrSet`: numeric `add`, `applyRemove`, `contains`,
+  `elements`, `merge`, `observedTokens`, and `tombstones`.
+- TypeScript/WASM `SafeMeshStringOrSetReplica`: UTF-8 `createAllocated`,
+  `appendAllocatedAdd`, `exportIdentity`, `importIdentity`, `appendAdd`,
+  `appendRemoveObserved`, `mergeRecordBytes`, `mergeLogBytes`, `logBytes`,
+  `versionFor`, `elements`, `observedTokens`, `tombstones`, `addEntries`, and
+  `inspectRecordBytes`.
 - Python: G-Counter mutation/exchange with caller-owned storage; numeric OR-Set
   mutation/remove/whole-state merge, without a UTF-8 replica or recovery promise.
 - C: G-Counter carrier mutation/read and delta encoding, and numeric OR-Set
