@@ -14,6 +14,9 @@ import {
   runAntiEntropyNow,
   setAntiEntropyMs,
   setDropRate,
+  setLatency,
+  setPeerCount,
+  type Simulation,
   setPartitioned,
   tick,
 } from './simulation'
@@ -246,5 +249,99 @@ describe('wide counter reads', () => {
     const sim = wideSimulation(9007199254740993n)
     expect(() => queueAntiEntropyPackets(sim)).toThrow(RangeError)
     expect(() => runAntiEntropyNow(sim)).toThrow(RangeError)
+  })
+})
+
+describe('Lab numeric boundary regressions', () => {
+  const badNumbers = [NaN, Infinity, -Infinity, -1, Number.MAX_SAFE_INTEGER + 1, '2', null, true] as number[]
+  it.each(badNumbers)('refuses invalid peer counts %s before constructing carriers', (bad) => {
+    expect(() => createSimulation(bad)).toThrow(RangeError)
+    expect(() => setPeerCount(createSimulation(2), bad)).toThrow(RangeError)
+  })
+  it('refuses fractional peer counts instead of truncating them', () => {
+    expect(() => createSimulation(2.5)).toThrow(RangeError)
+    expect(() => setPeerCount(createSimulation(2), 2.5)).toThrow(RangeError)
+  })
+  for (const [name, setter] of [['latency', setLatency], ['anti entropy', setAntiEntropyMs], ['clock', tick]] as const) {
+    it.each(badNumbers)(`${name} refuses invalid duration %s without mutation`, (bad) => {
+      const sim = createSimulation(2)
+      const before = structuredClone(sim)
+      expect(() => setter(sim, bad)).toThrow(RangeError)
+      expect(sim).toEqual(before)
+    })
+  }
+  it.each([...badNumbers, 1.01])('refuses invalid drop probability %s', (bad) => {
+    expect(() => setDropRate(createSimulation(2), bad)).toThrow(RangeError)
+  })
+  it.each([0, 1, 'false', null, undefined])('refuses nonboolean partition %s', (bad) => {
+    expect(() => setPartitioned(createSimulation(2), bad as unknown as boolean)).toThrow(TypeError)
+  })
+  for (const [name, operation] of [
+    ['bump', (sim: Simulation, peer: number) => bumpCounter(sim, peer)],
+    ['add', (sim: Simulation, peer: number) => addElement(sim, peer, 'water')],
+    ['remove', (sim: Simulation, peer: number) => removeElement(sim, peer, 'water')],
+    ['drop to peer', dropCounterPacketToPeer],
+  ] as const) {
+    it.each([...badNumbers, 0.5, 2])(`${name} refuses invalid peer %s`, (bad) => {
+      const sim = bumpCounter(createSimulation(2), 0)
+      const before = structuredClone(sim)
+      expect(() => operation(sim, bad)).toThrow(RangeError)
+      expect(sim).toEqual(before)
+    })
+  }
+  for (const [name, operation] of [
+    ['add', (sim: Simulation) => addElement(sim, 0, 'water')],
+    ['bump', (sim: Simulation) => bumpCounter(sim, 0)],
+    ['duplicate', duplicateNextPacket],
+    ['repair', queueAntiEntropyPackets],
+  ] as const) {
+    it.each([-1, 0.5, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER + 1])(`${name} refuses an invalid or exhausted ID %s`, (nextId) => {
+      const sim = { ...bumpCounter(createSimulation(2), 0), nextId }
+      const before = structuredClone(sim)
+      expect(() => operation(sim)).toThrow(RangeError)
+      expect(sim).toEqual(before)
+    })
+  }
+  it.each([-1, 0.5, NaN, Number.MAX_SAFE_INTEGER])('refuses invalid or exhausted local tally %s', (localTally) => {
+    const sim = createSimulation(2)
+    sim.peers[0] = { ...sim.peers[0], localTally }
+    expect(() => bumpCounter(sim, 0)).toThrow(RangeError)
+  })
+  for (const [name, operation] of [
+    ['clock', (sim: Simulation) => tick(sim, 1)],
+    ['anti entropy setter', (sim: Simulation) => setAntiEntropyMs(sim, 1)],
+    ['emission', (sim: Simulation) => bumpCounter(sim, 0)],
+    ['manual repair', runAntiEntropyNow],
+    ['queued repair', queueAntiEntropyPackets],
+    ['reorder', reorderQueue],
+    ['partition retry', (sim: Simulation) => tick(setPartitioned(sim, true), 0)],
+  ] as const) {
+    it(`${name} refuses schedule overflow without mutation`, () => {
+      const sim = { ...bumpCounter(createSimulation(3), 0), now: Number.MAX_SAFE_INTEGER }
+      const before = structuredClone(sim)
+      expect(() => operation(sim)).toThrow(RangeError)
+      expect(sim).toEqual(before)
+    })
+  }
+  it('refuses duplicate delivery time overflow', () => {
+    const queued = bumpCounter(createSimulation(2), 0)
+    queued.queue[0].deliverAt = Number.MAX_SAFE_INTEGER
+    expect(() => duplicateNextPacket(queued)).toThrow(RangeError)
+  })
+  it.each([0.25, 0.5])('refuses a fractional clock overflow that rounds back to MAX_SAFE_INTEGER (%s)', (duration) => {
+    const sim = { ...createSimulation(2), now: Number.MAX_SAFE_INTEGER }
+    expect(() => tick(sim, duration)).toThrow(RangeError)
+    expect(() => setAntiEntropyMs(sim, duration)).toThrow(RangeError)
+  })
+  it('preserves zero, fractional durations/probabilities, valid peers and last safe ID', () => {
+    expect(createSimulation(0).peers).toEqual([])
+    let sim = setDropRate(setLatency(setAntiEntropyMs(createSimulation(2), 0), 0.25), 0.5)
+    sim = tick(sim, 0.25)
+    expect(sim.now).toBe(0.25)
+    expect(sim.nextAntiEntropyAt).toBe(Infinity)
+    sim = addElement({ ...sim, nextId: Number.MAX_SAFE_INTEGER - 1 }, 0, 'water')
+    expect(sim.nextId).toBe(Number.MAX_SAFE_INTEGER)
+    expect(sim.queue[0].delta).toMatchObject({ token: BigInt(Number.MAX_SAFE_INTEGER - 1) })
+    expect(convergence(tick(setDropRate(sim, 0), 1)).orsetElements).toEqual(['water'])
   })
 })
