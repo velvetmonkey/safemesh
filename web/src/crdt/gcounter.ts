@@ -8,13 +8,22 @@ export type GCounterDelta = {
 
 export type GCounterState = number[]
 
+function checkNatural(value: number, name: string): void {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new RangeError(`${name} must be a finite nonnegative integer`)
+  }
+}
+
 export function bottomGCounter(replicas: number): GCounterState {
+  checkNatural(replicas, 'replicas')
   return Array.from({ length: replicas }, () => 0)
 }
 
 // Mirrors SafeMesh.deltaBump / SafeMesh.deltaGCounter_correct:
 // a bump is one replica coordinate asserting its current grow-only tally.
 export function bumpDelta(replica: ReplicaId, tally: number): GCounterDelta {
+  checkNatural(replica, 'replica')
+  checkNatural(tally, 'tally')
   return { kind: 'gcounter.bump', replica, tally }
 }
 
@@ -24,6 +33,8 @@ export function applyGCounterDelta(
   state: GCounterState,
   delta: GCounterDelta,
 ): GCounterState {
+  checkNatural(delta.replica, 'replica')
+  checkNatural(delta.tally, 'tally')
   const next = [...state]
   if (delta.replica >= 0 && delta.replica < next.length) {
     next[delta.replica] = Math.max(next[delta.replica], delta.tally)
@@ -33,7 +44,10 @@ export function applyGCounterDelta(
 
 // Mirrors the full-state G-Counter join used by Crdt.merge.
 export function mergeGCounter(left: GCounterState, right: GCounterState): GCounterState {
-  return left.map((value, index) => Math.max(value, right[index] ?? 0))
+  if (left.length !== right.length) {
+    throw new RangeError('G-Counter merge requires equal replica counts')
+  }
+  return left.map((value, index) => Math.max(value, right[index]))
 }
 
 // Mirrors Crdt.gcounterValue.

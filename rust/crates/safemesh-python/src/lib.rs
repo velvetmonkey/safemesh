@@ -931,6 +931,45 @@ mod tests {
     }
 
     #[test]
+    fn audit_counter_coordinates_dimensions_and_precision() {
+        with_python(|py| {
+            let module = PyModule::new_bound(py, "safemesh_python").unwrap();
+            safemesh_python(&module).unwrap();
+            let globals = pyo3::types::PyDict::new_bound(py);
+            globals.set_item("sm", module).unwrap();
+            py.run_bound(
+                r#"
+for bad in [0.5, float('nan'), float('inf'), -1]:
+    counter = sm.GCounter(2)
+    replica = sm.GCounterReplica(0, 2)
+    for call in [lambda: sm.GCounter(bad), lambda: sm.GCounterReplica(0, bad),
+                 lambda: counter.apply_bump(bad, 1), lambda: counter.try_apply_bump(bad, 1),
+                 lambda: sm.gcounter_delta_to_wire(bad, 1), lambda: replica.append_bump(bad, 1)]:
+        try: call()
+        except (TypeError, OverflowError): pass
+        else: raise AssertionError(('accepted bad coordinate', bad))
+        assert counter.state() == [0, 0]
+        assert replica.state() == [0, 0]
+a = sm.GCounter(2)
+a.apply_bump(0, 9007199254740991); a.apply_bump(1, 2)
+assert a.value() == 9007199254740993
+b = sm.GCounterReplica(0, 1); c = sm.GCounterReplica(1, 2)
+c.append_bump(1, 8)
+for dest, source in [(b,c),(c,b)]:
+    before = dest.log_bytes()
+    try: dest.merge_log_bytes(source.log_bytes())
+    except ValueError: pass
+    else: raise AssertionError('accepted mismatched counter dimensions')
+    assert dest.log_bytes() == before
+"#,
+                Some(&globals),
+                None,
+            )
+            .unwrap();
+        });
+    }
+
+    #[test]
     fn python_numeric_bools_and_batch_occurrences() {
         with_python(|py| {
             let module = PyModule::new_bound(py, "safemesh_python").unwrap();
@@ -960,7 +999,7 @@ functions = [(sm.gcounter_delta_to_wire, [0, 1]),
              (sm.enable_wins_flag_enable_delta_to_wire, [1])]
 for fn, args in constructors + functions:
     for i in range(len(args)):
-        for b in [True, False]:
+        for b in [True, False, 0.5, float("nan"), float("inf")]:
             bad = args.copy(); bad[i] = b
             refused(fn, bad)
 
@@ -978,10 +1017,10 @@ cases = [
 for obj, methods, snapshot in cases:
     for name, args in methods:
         for i in range(len(args)):
-            for b in [True, False]:
+            for b in [True, False, 0.5, float("nan"), float("inf")]:
                 bad=args.copy(); bad[i]=b
                 refused(getattr(obj,name),bad,lambda: snapshot(obj))
-for b in [True, False]:
+for b in [True, False, 0.5, float("nan"), float("inf")]:
     obj=sm.OrSet(); obj.add(1,1)
     refused(obj.apply_remove, [[1,b]], lambda: (obj.elements(),obj.tombstones()))
     refused(sm.enable_wins_flag_disable_delta_to_wire, [[1,b]])
