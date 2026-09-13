@@ -20,6 +20,18 @@ fn numeric<'py, T: FromPyObject<'py>>(value: &Bound<'py, PyAny>) -> PyResult<T> 
     value.extract()
 }
 
+// Capacity is a byte limit, not just a usize limit. Checking it here keeps
+// an unrepresentable Vec allocation from escaping as a PyO3 PanicException.
+fn numeric_replicas(value: &Bound<'_, PyAny>) -> PyResult<usize> {
+    let replicas: usize = numeric(value)?;
+    if replicas > isize::MAX as usize / std::mem::size_of::<u64>() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "replicas exceeds counter capacity",
+        ));
+    }
+    Ok(replicas)
+}
+
 fn numeric_tokens(value: &Bound<'_, PyAny>) -> PyResult<Vec<u64>> {
     value
         .extract::<Vec<Bound<'_, PyAny>>>()?
@@ -55,7 +67,7 @@ pub struct PyGCounter {
 #[pymethods]
 impl PyGCounter {
     #[new]
-    pub fn new(#[pyo3(from_py_with = "numeric")] replicas: usize) -> Self {
+    pub fn new(#[pyo3(from_py_with = "numeric_replicas")] replicas: usize) -> Self {
         PyGCounter {
             inner: GCounter::new(replicas),
         }
@@ -338,7 +350,7 @@ impl PyGCounterReplica {
     #[new]
     pub fn new(
         #[pyo3(from_py_with = "numeric")] replica_id: u64,
-        #[pyo3(from_py_with = "numeric")] replicas: usize,
+        #[pyo3(from_py_with = "numeric_replicas")] replicas: usize,
     ) -> Self {
         PyGCounterReplica {
             replica_id,
@@ -931,6 +943,37 @@ mod tests {
     }
 
     #[test]
+    fn python_counter_capacity_is_rejected_at_the_boundary() {
+        with_python(|py| {
+            let module = PyModule::new_bound(py, "safemesh_python").unwrap();
+            safemesh_python(&module).unwrap();
+            let globals = pyo3::types::PyDict::new_bound(py);
+            globals.set_item("sm", module).unwrap();
+            py.run_bound(
+                r#"
+import sys
+capacity_errors = []
+for make in [lambda n: sm.GCounter(n), lambda n: sm.GCounterReplica(0, n)]:
+    for count in [sys.maxsize // 8 + 1, sys.maxsize]:
+        try:
+            make(count)
+        except BaseException as error:
+            if not isinstance(error, ValueError) or 'replicas' not in str(error):
+                capacity_errors.append((count, type(error).__name__, str(error)))
+        else:
+            raise AssertionError('impossible counter capacity accepted')
+    assert make(0).value() == 0
+    assert make(2).value() == 0
+assert not capacity_errors, capacity_errors
+"#,
+                Some(&globals),
+                None,
+            )
+            .unwrap();
+        });
+    }
+
+    #[test]
     fn python_numeric_bools_and_batch_occurrences() {
         with_python(|py| {
             let module = PyModule::new_bound(py, "safemesh_python").unwrap();
@@ -985,6 +1028,49 @@ for b in [True, False]:
     obj=sm.OrSet(); obj.add(1,1)
     refused(obj.apply_remove, [[1,b]], lambda: (obj.elements(),obj.tombstones()))
     refused(sm.enable_wins_flag_disable_delta_to_wire, [[1,b]])
+
+# Independent audit of every numeric position, including sequence elements.
+# Python integers past JS's safe limit are valid and must stay exact.
+numeric_cases = 0
+invalid_numbers = [-1, 0.5, float('nan'), float('inf'), -(1 << 64), 1 << 64]
+def refused_numeric(fn, args, snapshot=lambda: None):
+    global numeric_cases
+    before = snapshot()
+    try:
+        fn(*args)
+    except (TypeError, OverflowError):
+        pass
+    else:
+        raise AssertionError((fn, args, 'accepted invalid numeric input'))
+    assert snapshot() == before, (fn, args, 'mutated')
+    numeric_cases += 1
+
+for fn, args in constructors + functions:
+    for i in range(len(args)):
+        for bad in invalid_numbers:
+            values = args.copy(); values[i] = bad
+            refused_numeric(fn, values)
+for obj, methods, snapshot in cases:
+    for name, args in methods:
+        for i in range(len(args)):
+            for bad in invalid_numbers:
+                values = args.copy(); values[i] = bad
+                refused_numeric(getattr(obj, name), values, lambda: snapshot(obj))
+for bad in invalid_numbers:
+    obj = sm.OrSet(); obj.add(1, 1)
+    refused_numeric(obj.apply_remove, [[1, bad]], lambda: (obj.elements(), obj.tombstones()))
+    refused_numeric(sm.enable_wins_flag_disable_delta_to_wire, [[1, bad]])
+for exact in [(1 << 53) - 1, 1 << 53, (1 << 53) + 1, (1 << 64) - 1]:
+    counter = sm.GCounter(2)
+    counter.apply_bump(0, exact); counter.apply_bump(1, exact)
+    assert counter.state() == [exact, exact]
+    assert counter.value() == 2 * exact
+    reg = sm.LwwRegister(); reg.set(exact, exact, exact)
+    assert (reg.value_or(0), reg.timestamp_or(0), reg.writer_replica_or(0)) == (exact, exact, exact)
+    entries = sm.OrSet(); entries.add(exact, exact)
+    assert entries.elements() == [exact]
+    assert entries.observed_tokens(exact) == [exact]
+print('PYTHON_NUMERIC_EXPORTS=%s CASES=%s' % (len(constructors) + len(functions) + sum(len(methods) for _, methods, _ in cases) + 2, numeric_cases))
 
 # Recompute framing with the same documented CRC and lengths; no fixtures changed.
 def occurrences(frame, order):

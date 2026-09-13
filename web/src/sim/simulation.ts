@@ -62,6 +62,7 @@ export type Simulation = {
 }
 
 export function createSimulation(peerCount = 4): Simulation {
+  checkedInteger(peerCount, 'peerCount', 0xffffffff)
   return {
     peers: Array.from({ length: peerCount }, (_, id) => ({
       id,
@@ -96,6 +97,7 @@ export function setPeerCount(sim: Simulation, peerCount: number): Simulation {
 }
 
 export function setPartitioned(sim: Simulation, partitioned: boolean): Simulation {
+  if (typeof partitioned !== 'boolean') throw new TypeError('partitioned must be a boolean')
   return appendLog(
     { ...sim, partitioned, nextAntiEntropyAt: partitioned ? sim.nextAntiEntropyAt : sim.now },
     partitioned ? 'Network cut: new radio messages are stuck locally' : 'Network back up: camps catching up',
@@ -105,25 +107,31 @@ export function setPartitioned(sim: Simulation, partitioned: boolean): Simulatio
 }
 
 export function setLatency(sim: Simulation, latencyMs: number): Simulation {
+  checkedDuration(latencyMs, 'latencyMs')
   return { ...sim, latencyMs }
 }
 
 export function setDropRate(sim: Simulation, dropRate: number): Simulation {
+  if (typeof dropRate !== 'number' || !Number.isFinite(dropRate) || dropRate < 0 || dropRate > 1) {
+    throw new RangeError('dropRate must be a finite number between 0 and 1')
+  }
   return { ...sim, dropRate }
 }
 
 export function setAntiEntropyMs(sim: Simulation, antiEntropyMs: number): Simulation {
+  checkedDuration(antiEntropyMs, 'antiEntropyMs')
   return {
     ...sim,
     antiEntropyMs,
-    nextAntiEntropyAt: antiEntropyMs > 0 ? sim.now + antiEntropyMs : Number.POSITIVE_INFINITY,
+    nextAntiEntropyAt: antiEntropyMs > 0 ? clockAfter(sim.now, antiEntropyMs) : Number.POSITIVE_INFINITY,
   }
 }
 
 export function bumpCounter(sim: Simulation, peerId: number): Simulation {
+  checkedInteger(peerId, 'peerId', sim.peers.length - 1)
   const peer = sim.peers[peerId]
   if (!peer) return sim
-  const tally = peer.localTally + 1
+  const tally = incrementInteger(peer.localTally, 'localTally')
   const replica = replicaFor(peer, sim.peers.length)
   try {
     const bytes = replica.appendBump(peerId, BigInt(tally))
@@ -140,10 +148,11 @@ export function bumpCounter(sim: Simulation, peerId: number): Simulation {
 }
 
 export function addElement(sim: Simulation, peerId: number, element: string): Simulation {
+  checkedInteger(peerId, 'peerId', sim.peers.length - 1)
   const peer = sim.peers[peerId]
   const clean = element.trim()
   if (!peer || clean.length === 0) return sim
-  const token = BigInt(sim.nextId)
+  const token = BigInt(checkedInteger(sim.nextId, 'nextId', Number.MAX_SAFE_INTEGER - 1))
   const replica = orsetReplicaFor(peer)
   let bytes: Uint8Array
   try {
@@ -161,6 +170,7 @@ export function addElement(sim: Simulation, peerId: number, element: string): Si
 }
 
 export function removeElement(sim: Simulation, peerId: number, element: string): Simulation {
+  checkedInteger(peerId, 'peerId', sim.peers.length - 1)
   const peer = sim.peers[peerId]
   if (!peer) return sim
   const replica = orsetReplicaFor(peer)
@@ -190,7 +200,7 @@ export function removeElement(sim: Simulation, peerId: number, element: string):
 }
 
 export function tick(sim: Simulation, elapsedMs: number, random = Math.random): Simulation {
-  const now = sim.now + elapsedMs
+  const now = clockAfter(sim.now, elapsedMs)
   const due = sim.queue.filter((packet) => packet.deliverAt <= now)
   const pending = sim.queue.filter((packet) => packet.deliverAt > now)
   let next: Simulation = { ...sim, now, queue: pending }
@@ -199,7 +209,7 @@ export function tick(sim: Simulation, elapsedMs: number, random = Math.random): 
     if (sim.partitioned) {
       next = {
         ...next,
-        queue: [...next.queue, { ...packet, sentAt: now, deliverAt: now + sim.latencyMs }],
+        queue: [...next.queue, { ...packet, sentAt: now, deliverAt: clockAfter(now, sim.latencyMs) }],
       }
       continue
     }
@@ -296,7 +306,7 @@ export function queueAntiEntropyPackets(sim: Simulation): Simulation {
   const nextBase = {
     ...sim,
     nextId,
-    nextAntiEntropyAt: sim.antiEntropyMs > 0 ? sim.now + sim.antiEntropyMs : Number.POSITIVE_INFINITY,
+    nextAntiEntropyAt: sim.antiEntropyMs > 0 ? clockAfter(sim.now, sim.antiEntropyMs) : Number.POSITIVE_INFINITY,
     lastAntiEntropyAt: packets.length > 0 ? sim.now : sim.lastAntiEntropyAt,
   }
 
@@ -324,6 +334,7 @@ export function dropNextPacket(sim: Simulation): Simulation {
 }
 
 export function dropCounterPacketToPeer(sim: Simulation, peerId: number): Simulation {
+  checkedInteger(peerId, 'peerId', sim.peers.length - 1)
   const index = sim.queue.findIndex((packet) => packet.to === peerId && packet.delta.kind === 'gcounter.bump')
   if (index < 0) return dropNextPacket(sim)
   return dropPacketAtIndex(sim, index)
@@ -349,14 +360,14 @@ export function duplicateNextPacket(sim: Simulation): Simulation {
     ...packet,
     id: `${packet.id}-dup-${sim.nextId}`,
     sentAt: sim.now,
-    deliverAt: packet.deliverAt + 220,
+    deliverAt: clockAfter(packet.deliverAt, 220),
     duplicated: true,
   }
   return appendLog(
     {
       ...sim,
       queue: [...sim.queue, duplicate],
-      nextId: sim.nextId + 1,
+      nextId: incrementInteger(sim.nextId, 'nextId'),
     },
     `Duplicated a delta from Camp ${packet.from} to Camp ${packet.to}`,
     'send',
@@ -374,7 +385,7 @@ export function reorderQueue(sim: Simulation): Simulation {
     .map((packet, index) => ({
       ...packet,
       sentAt: sim.now,
-      deliverAt: sim.now + 380 + index * 230,
+      deliverAt: clockAfter(sim.now, 380, index * 230),
       phase: 'reordered' as const,
       order: index + 1,
     }))
@@ -408,7 +419,7 @@ function emitDelta(
       to: peer.id,
       delta,
       sentAt: sim.now,
-      deliverAt: sim.now + sim.latencyMs + index * 90,
+      deliverAt: clockAfter(sim.now, sim.latencyMs, index * 90),
       phase: 'normal' as const,
     }))
 
@@ -417,7 +428,7 @@ function emitDelta(
       ...sim,
       peers,
       queue: [...sim.queue, ...packets],
-      nextId: sim.nextId + 1,
+      nextId: incrementInteger(sim.nextId, 'nextId'),
     },
     sim.partitioned
       ? `${plainMessage} - stuck until reconnect`
@@ -474,7 +485,7 @@ function runAntiEntropy(sim: Simulation): Simulation {
   let peers = sim.peers
   let next: Simulation = {
     ...sim,
-    nextAntiEntropyAt: sim.antiEntropyMs > 0 ? sim.now + sim.antiEntropyMs : Number.POSITIVE_INFINITY,
+    nextAntiEntropyAt: sim.antiEntropyMs > 0 ? clockAfter(sim.now, sim.antiEntropyMs) : Number.POSITIVE_INFINITY,
   }
   let mergedAny = false
   // Equal displayed/carrier states can still have different record histories.
@@ -595,10 +606,10 @@ function buildAntiEntropyPackets(sim: Simulation): { packets: Packet[]; nextId: 
               payload: 'log',
             },
             sentAt: sim.now,
-            deliverAt: sim.now + sim.latencyMs + 160 + repairIndex * 210,
+            deliverAt: clockAfter(sim.now, sim.latencyMs, 160, repairIndex * 210),
             phase: 'repair',
           })
-          nextId += 1
+          nextId = incrementInteger(nextId, 'nextId')
           repairIndex += 1
         } finally {
           targetCounter.free()
@@ -623,10 +634,10 @@ function buildAntiEntropyPackets(sim: Simulation): { packets: Packet[]; nextId: 
         to: target.id,
         delta: { kind: 'orset.log', bytes, payload: 'log' },
         sentAt: sim.now,
-        deliverAt: sim.now + sim.latencyMs + 160 + repairIndex * 210,
+        deliverAt: clockAfter(sim.now, sim.latencyMs, 160, repairIndex * 210),
         phase: 'repair',
       })
-      nextId += 1
+      nextId = incrementInteger(nextId, 'nextId')
       repairIndex += 1
     }
   }
@@ -824,4 +835,39 @@ function counterNumber(total: bigint): number {
     throw new RangeError('Counter value exceeds the safe integer range; no numeric read is available')
   }
   return value
+}
+
+// Keep the Lab's number API, but never narrow an unchecked number into a core
+// bigint or let an increment silently reuse an ID/tally at the precision limit.
+function checkedInteger(value: number, name: string, max = Number.MAX_SAFE_INTEGER): number {
+  if (!Number.isSafeInteger(value) || value < 0 || value > max) {
+    throw new RangeError(`${name} must be a nonnegative safe integer at most ${max}`)
+  }
+  return value
+}
+
+function incrementInteger(value: number, name: string): number {
+  return checkedInteger(value, name, Number.MAX_SAFE_INTEGER - 1) + 1
+}
+
+// Fractional milliseconds are legitimate (animation frames use them).
+function checkedDuration(value: number, name: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > Number.MAX_SAFE_INTEGER) {
+    throw new RangeError(`${name} must be a finite nonnegative number at most ${Number.MAX_SAFE_INTEGER}`)
+  }
+  return value
+}
+
+function clockAfter(now: number, ...durations: number[]): number {
+  let result = checkedDuration(now, 'now')
+  for (const duration of durations) {
+    checkedDuration(duration, 'duration')
+    // Check before addition: MAX_SAFE_INTEGER + 0.25 rounds back to the
+    // limit, so checking only the rounded result would miss the overflow.
+    if (duration > Number.MAX_SAFE_INTEGER - result) {
+      throw new RangeError('scheduled time exceeds the safe numeric range')
+    }
+    result = checkedDuration(result + duration, 'scheduled time')
+  }
+  return result
 }
