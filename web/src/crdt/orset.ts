@@ -23,6 +23,17 @@ function tokenMap<T>(...records: Record<string, T>[]): Record<string, T> {
   return Object.assign(Object.create(null), ...records)
 }
 
+// The token-keyed reference representation cannot retain two values for a token.
+// Reject conflicts, including tombstoned ones, symmetrically before joining.
+function mergeAdds(left: ORSetState['adds'], right: ORSetState['adds']): ORSetState['adds'] {
+  for (const [token, element] of Object.entries(right)) {
+    if (Object.hasOwn(left, token) && left[token] !== element) {
+      throw new Error('OR-Set token has conflicting values')
+    }
+  }
+  return tokenMap(left, right)
+}
+
 export function bottomORSet(): ORSetState {
   return { adds: tokenMap(), tombstones: tokenMap() }
 }
@@ -44,7 +55,7 @@ export function removeDelta(tokens: ORSetToken[]): ORSetDelta {
 export function applyORSetDelta(state: ORSetState, delta: ORSetDelta): ORSetState {
   if (delta.kind === 'orset.add') {
     return {
-      adds: tokenMap(state.adds, { [delta.token]: delta.element }),
+      adds: mergeAdds(state.adds, { [delta.token]: delta.element }),
       tombstones: tokenMap(state.tombstones),
     }
   }
@@ -58,7 +69,7 @@ export function applyORSetDelta(state: ORSetState, delta: ORSetDelta): ORSetStat
 
 export function mergeORSet(left: ORSetState, right: ORSetState): ORSetState {
   return {
-    adds: tokenMap(left.adds, right.adds),
+    adds: mergeAdds(left.adds, right.adds),
     tombstones: tokenMap(left.tombstones, right.tombstones),
   }
 }

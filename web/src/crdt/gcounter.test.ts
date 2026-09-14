@@ -45,3 +45,16 @@ it.each([0.5, NaN, Infinity, -1])('rejects invalid tally %s without poisoning st
   expect(() => applyGCounterDelta(state, { kind: 'gcounter.bump', replica: 0, tally: bad })).toThrow(RangeError)
   expect(state).toEqual([1, 2])
 })
+
+it('refuses an inexact total in either order while preserving the safe boundary', () => {
+  for (const state of [[Number.MAX_SAFE_INTEGER, 2], [2, Number.MAX_SAFE_INTEGER]]) {
+    expect(() => readGCounter(state)).toThrow(RangeError)
+    expect(() => readGCounter(mergeGCounter(state, state))).toThrow(RangeError)
+  }
+  expect(readGCounter([Number.MAX_SAFE_INTEGER - 2, 2])).toBe(Number.MAX_SAFE_INTEGER)
+  expect(readGCounter([])).toBe(0)
+})
+
+it.each([Number.MAX_SAFE_INTEGER + 1, -1, 0.5, NaN, Infinity])('refuses unsafe read coordinate %s', (bad) => {
+  expect(() => readGCounter([bad])).toThrow(RangeError)
+})
