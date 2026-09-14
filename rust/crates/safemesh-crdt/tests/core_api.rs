@@ -494,3 +494,35 @@ fn checked_counter_coordinates_match_infallible_valid_results() {
         }
     }
 }
+
+#[test]
+fn audit_counter_dimensions_and_orset_collision() {
+    let mut left = GCounter::new(1);
+    left.apply_delta(GCounterDelta {
+        replica: 0,
+        tally: 1,
+    });
+    let mut right = GCounter::new(2);
+    right.apply_delta(GCounterDelta {
+        replica: 0,
+        tally: 1,
+    });
+    right.apply_delta(GCounterDelta {
+        replica: 1,
+        tally: 8,
+    });
+    assert!(left.try_merge(&right).is_err());
+    assert!(right.try_merge(&left).is_err());
+    assert_eq!(left.state(), &[1]);
+    assert_eq!(right.state(), &[1, 8]);
+    let mut a = OrSet::<u64, u64>::new();
+    let mut b = OrSet::<u64, u64>::new();
+    a.add(1, 7);
+    b.add(2, 7);
+    let mut ab = a.clone();
+    ab.merge(&b);
+    let mut ba = b.clone();
+    ba.merge(&a);
+    assert_eq!(ab, ba);
+    assert_eq!(ab.elements().into_iter().collect::<Vec<_>>(), vec![1, 2]);
+}

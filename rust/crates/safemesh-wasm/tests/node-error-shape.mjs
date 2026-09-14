@@ -272,3 +272,30 @@ for (const [make, append] of [
   } finally { sender.free(); }
 }
 console.log(`BATCH_OCCURRENCE_CASES=${occurrenceCases}`);
+
+// Audit CRDT-core probes: exact reads, dimensions, and token collisions.
+{
+  const a = new wasm.SafeMeshGCounter(2);
+  const b = new wasm.SafeMeshGCounterReplica(0n, 1);
+  const c = new wasm.SafeMeshGCounterReplica(1n, 2);
+  const left = new wasm.SafeMeshOrSet();
+  const right = new wasm.SafeMeshOrSet();
+  const ab = new wasm.SafeMeshOrSet();
+  const ba = new wasm.SafeMeshOrSet();
+  try {
+    a.applyBump(0, 9007199254740991n);
+    a.applyBump(1, 2n);
+    assert.equal(a.value(), 9007199254740993n);
+    c.appendBump(1, 8n);
+    assert.throws(() => b.mergeLogBytes(c.logBytes()));
+    assert.throws(() => c.mergeLogBytes(b.logBytes()));
+    assert.deepEqual([...b.state()], [0n]);
+    assert.deepEqual([...c.state()], [0n, 8n]);
+    left.add(1n, 7n); right.add(2n, 7n);
+    ab.merge(left); ab.merge(right);
+    ba.merge(right); ba.merge(left);
+    assert.deepEqual([...ab.elements()], [1n, 2n]);
+    assert.deepEqual([...ba.elements()], [...ab.elements()]);
+  } finally { for (const obj of [a,b,c,left,right,ab,ba]) obj.free(); }
+  console.log('CRDT_AUDIT_BOUNDARIES=true');
+}

@@ -1429,6 +1429,8 @@ pub trait TransportAdapter<D> {
 ///
 /// This adapter can drop, duplicate, reorder, partition, and heal links. It is
 /// useful for CI and demos; it is not a real radio/network adapter.
+/// Packets queued before a partition remain pending until the link heals;
+/// draining a peer delivers only packets whose links are currently connected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InMemoryTransport<D> {
     subscribed: BTreeSet<u64>,
@@ -1549,7 +1551,11 @@ impl<D: Clone> TransportAdapter<D> for InMemoryTransport<D> {
         let mut incoming = Vec::new();
         let mut retained = Vec::new();
         for envelope in self.queue.drain(..) {
-            if envelope.to == peer {
+            let connected = envelope.from == envelope.to
+                || !self
+                    .disconnected
+                    .contains(&Self::link(envelope.from, envelope.to));
+            if envelope.to == peer && connected {
                 incoming.push(envelope);
             } else {
                 retained.push(envelope);

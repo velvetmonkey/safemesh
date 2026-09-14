@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addDelta, applyORSetDelta, bottomORSet, observedTokens, readORSet, removeDelta } from './orset'
+import { addDelta, applyORSetDelta, bottomORSet, mergeORSet, observedTokens, readORSet, removeDelta } from './orset'
 
 describe('OR-Set mirror', () => {
   it('keeps a concurrent fresh add visible after an observed-token remove', () => {
@@ -22,4 +22,15 @@ describe('OR-Set mirror', () => {
 
     expect(readORSet(state)).toEqual([])
   })
+})
+
+it.each(['__proto__', 'constructor', 'toString'])('preserves and removes prototype-named token %s', (token) => {
+  const added = applyORSetDelta(bottomORSet(), addDelta('water', token))
+  expect(readORSet(added)).toEqual(['water'])
+  expect(observedTokens(added, 'water')).toEqual([token])
+  const removed = applyORSetDelta(bottomORSet(), removeDelta([token]))
+  expect(Object.hasOwn(removed.tombstones, token)).toBe(true)
+  expect(readORSet(mergeORSet(added, removed))).toEqual([])
+  expect(readORSet(mergeORSet(removed, added))).toEqual([])
+  expect(readORSet(applyORSetDelta(removed, addDelta('water', token)))).toEqual([])
 })

@@ -216,3 +216,28 @@ fn version_exchange_public_api_edge_cases() {
         VersionVector::new()
     );
 }
+
+#[test]
+fn queued_packets_wait_for_link_healing() {
+    let mut transport: InMemoryTransport<GCounterDelta> = InMemoryTransport::new();
+    for peer in [1, 2, 3] {
+        transport.subscribe(peer);
+    }
+    transport.send(1, 2, vec![]).unwrap();
+    transport.send(3, 2, vec![]).unwrap();
+    transport.send(2, 1, vec![]).unwrap();
+    transport.set_connected(2, 1, false);
+    let incoming = transport.drain(2);
+    assert_eq!(
+        incoming.len(),
+        1,
+        "disconnected queued packet crossed partition"
+    );
+    assert_eq!(incoming[0].from, 3);
+    assert!(transport.drain(1).is_empty());
+    assert_eq!(transport.pending_len(), 2);
+    transport.set_connected(1, 2, true);
+    assert_eq!(transport.drain(2)[0].from, 1);
+    assert_eq!(transport.drain(1)[0].from, 2);
+    assert_eq!(transport.pending_len(), 0);
+}

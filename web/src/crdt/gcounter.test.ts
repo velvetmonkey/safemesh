@@ -22,3 +22,26 @@ describe('G-Counter mirror', () => {
     expect(full).toEqual([6, 0, 9, 0])
   })
 })
+
+it('rejects unequal replica counts in both merge orders', () => {
+  expect(() => mergeGCounter([1], [1, 8])).toThrow(RangeError)
+  expect(() => mergeGCounter([1, 8], [1])).toThrow(RangeError)
+})
+
+it.each([0.5, NaN, Infinity, -1])('rejects invalid replica count %s', (bad) => {
+  expect(() => bottomGCounter(bad)).toThrow(RangeError)
+})
+
+it.each([0.5, NaN, Infinity, -1])('rejects invalid coordinate %s without poisoning state', (bad) => {
+  const state = [1, 2]
+  expect(() => bumpDelta(bad, 3)).toThrow(RangeError)
+  expect(() => applyGCounterDelta(state, { kind: 'gcounter.bump', replica: bad, tally: 3 })).toThrow(RangeError)
+  expect(state).toEqual([1, 2])
+})
+
+it.each([0.5, NaN, Infinity, -1])('rejects invalid tally %s without poisoning state', (bad) => {
+  const state = [1, 2]
+  expect(() => bumpDelta(0, bad)).toThrow(RangeError)
+  expect(() => applyGCounterDelta(state, { kind: 'gcounter.bump', replica: 0, tally: bad })).toThrow(RangeError)
+  expect(state).toEqual([1, 2])
+})

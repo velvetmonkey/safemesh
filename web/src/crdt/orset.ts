@@ -19,8 +19,12 @@ export type ORSetState = {
   tombstones: Record<ORSetToken, true>
 }
 
+function tokenMap<T>(...records: Record<string, T>[]): Record<string, T> {
+  return Object.assign(Object.create(null), ...records)
+}
+
 export function bottomORSet(): ORSetState {
-  return { adds: {}, tombstones: {} }
+  return { adds: tokenMap(), tombstones: tokenMap() }
 }
 
 // Mirrors SafeMesh.orAddDelta and deltaORSet_lookup.
@@ -40,22 +44,22 @@ export function removeDelta(tokens: ORSetToken[]): ORSetDelta {
 export function applyORSetDelta(state: ORSetState, delta: ORSetDelta): ORSetState {
   if (delta.kind === 'orset.add') {
     return {
-      adds: { ...state.adds, [delta.token]: delta.element },
-      tombstones: { ...state.tombstones },
+      adds: tokenMap(state.adds, { [delta.token]: delta.element }),
+      tombstones: tokenMap(state.tombstones),
     }
   }
 
-  const tombstones = { ...state.tombstones }
+  const tombstones = tokenMap(state.tombstones)
   for (const token of delta.tokens) {
     tombstones[token] = true
   }
-  return { adds: { ...state.adds }, tombstones }
+  return { adds: tokenMap(state.adds), tombstones }
 }
 
 export function mergeORSet(left: ORSetState, right: ORSetState): ORSetState {
   return {
-    adds: { ...left.adds, ...right.adds },
-    tombstones: { ...left.tombstones, ...right.tombstones },
+    adds: tokenMap(left.adds, right.adds),
+    tombstones: tokenMap(left.tombstones, right.tombstones),
   }
 }
 
@@ -64,7 +68,7 @@ export function mergeORSet(left: ORSetState, right: ORSetState): ORSetState {
 export function readORSet(state: ORSetState): ORSetElement[] {
   const visible = new Set<ORSetElement>()
   for (const [token, element] of Object.entries(state.adds)) {
-    if (!state.tombstones[token]) {
+    if (!Object.hasOwn(state.tombstones, token)) {
       visible.add(element)
     }
   }
@@ -73,7 +77,7 @@ export function readORSet(state: ORSetState): ORSetElement[] {
 
 export function observedTokens(state: ORSetState, element: ORSetElement): ORSetToken[] {
   return Object.entries(state.adds)
-    .filter(([token, value]) => value === element && !state.tombstones[token])
+    .filter(([token, value]) => value === element && !Object.hasOwn(state.tombstones, token))
     .map(([token]) => token)
     .sort()
 }
