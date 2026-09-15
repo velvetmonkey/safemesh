@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyGCounterDelta, bottomGCounter, bumpDelta, mergeGCounter, readGCounter } from './gcounter'
+import { readPNCounter } from './pncounter'
 
 describe('G-Counter mirror', () => {
   it('is order-insensitive and redelivery-idempotent', () => {
@@ -44,4 +45,39 @@ it.each([0.5, NaN, Infinity, -1])('rejects invalid tally %s without poisoning st
   expect(() => bumpDelta(0, bad)).toThrow(RangeError)
   expect(() => applyGCounterDelta(state, { kind: 'gcounter.bump', replica: 0, tally: bad })).toThrow(RangeError)
   expect(state).toEqual([1, 2])
+})
+
+it('refuses an inexact total in either order while preserving the safe boundary', () => {
+  for (const state of [[Number.MAX_SAFE_INTEGER, 2], [2, Number.MAX_SAFE_INTEGER]]) {
+    expect(() => readGCounter(state)).toThrow(RangeError)
+    expect(() => readGCounter(mergeGCounter(state, state))).toThrow(RangeError)
+  }
+  expect(readGCounter([Number.MAX_SAFE_INTEGER - 2, 2])).toBe(Number.MAX_SAFE_INTEGER)
+  expect(readGCounter([])).toBe(0)
+})
+
+it.each([Number.MAX_SAFE_INTEGER + 1, -1, 0.5, NaN, Infinity])('refuses unsafe read coordinate %s', (bad) => {
+  expect(() => readGCounter([bad])).toThrow(RangeError)
+})
+
+it('cancels four merged replica totals before checking the PN read range', () => {
+  const total = [0, 1, 2, 3].reduce((state, replica) => {
+    const contribution = applyGCounterDelta(bottomGCounter(4), bumpDelta(replica, 2 ** 51))
+    return mergeGCounter(state, contribution)
+  }, bottomGCounter(4))
+  expect(() => readGCounter(total)).toThrow(RangeError)
+  expect(readPNCounter({ p: total, n: [...total] })).toBe(0)
+  expect(() => readPNCounter({ p: total, n: bottomGCounter(4) })).toThrow(RangeError)
+  expect(() => readPNCounter({ p: bottomGCounter(4), n: total })).toThrow(RangeError)
+})
+
+it('preserves exact safe PN differences across overflowing component sums', () => {
+  const p = [Number.MAX_SAFE_INTEGER, 2]
+  const n = [Number.MAX_SAFE_INTEGER, 1]
+  expect(readPNCounter({ p, n })).toBe(1)
+  expect(readPNCounter({ p: n, n: p })).toBe(-1)
+  expect(readPNCounter({ p: [Number.MAX_SAFE_INTEGER, 1], n: [1] })).toBe(Number.MAX_SAFE_INTEGER)
+  expect(readPNCounter({ p: [1], n: [Number.MAX_SAFE_INTEGER, 1] })).toBe(-Number.MAX_SAFE_INTEGER)
+  expect(readPNCounter({ p: [7, 2], n: [3, 1] })).toBe(5)
+  expect(readPNCounter({ p: [], n: [] })).toBe(0)
 })

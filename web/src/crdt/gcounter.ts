@@ -50,9 +50,18 @@ export function mergeGCounter(left: GCounterState, right: GCounterState): GCount
   return left.map((value, index) => Math.max(value, right[index]))
 }
 
-// Mirrors Crdt.gcounterValue.
+// This numeric reference API refuses coordinates or totals that cannot be read exactly.
+// Callers retain a number result on success.
 export function readGCounter(state: GCounterState): number {
-  return state.reduce((sum, value) => sum + value, 0)
+  return state.reduce((sum, value) => {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new RangeError('G-Counter read requires safe nonnegative integer coordinates')
+    }
+    if (value > Number.MAX_SAFE_INTEGER - sum) {
+      throw new RangeError('G-Counter total exceeds the safe integer range')
+    }
+    return sum + value
+  }, 0)
 }
 
 export function sameGCounter(left: GCounterState, right: GCounterState): boolean {
