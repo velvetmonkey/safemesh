@@ -3,7 +3,6 @@ import {
   bottomGCounter,
   bumpDelta,
   mergeGCounter,
-  readGCounter,
   type GCounterState,
   type ReplicaId,
 } from './gcounter'
@@ -40,5 +39,14 @@ export function mergePNCounter(left: PNCounterState, right: PNCounterState): PNC
 
 // Mirrors SafeMesh.deltaPNCounter_value_matches / Crdt.pncounterValue.
 export function readPNCounter(state: PNCounterState): number {
-  return readGCounter(state.p) - readGCounter(state.n)
+  // Keep raw component totals exact: either may exceed the number range before
+  // cancellation. Only the final difference must fit the numeric read API.
+  const positive = state.p.reduce((sum, value) => sum + BigInt(value), 0n)
+  const negative = state.n.reduce((sum, value) => sum + BigInt(value), 0n)
+  const result = positive - negative
+  const limit = BigInt(Number.MAX_SAFE_INTEGER)
+  if (result < -limit || result > limit) {
+    throw new RangeError('PN-Counter total exceeds the safe integer range')
+  }
+  return Number(result)
 }

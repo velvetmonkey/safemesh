@@ -51,7 +51,7 @@ export function mergeGCounter(left: GCounterState, right: GCounterState): GCount
 }
 
 // This numeric reference API refuses coordinates or totals that cannot be read exactly.
-// Callers (including PN-Counter subtraction) retain a number result on success.
+// Callers retain a number result on success.
 export function readGCounter(state: GCounterState): number {
   return state.reduce((sum, value) => {
     if (!Number.isSafeInteger(value) || value < 0) {

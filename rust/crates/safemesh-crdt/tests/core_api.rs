@@ -565,10 +565,7 @@ fn rga_position_read_preserves_every_live_entry() {
     forward.merge(&reverse);
     reverse.merge(&forward);
     assert_eq!(forward.read_positions(), reverse.read_positions());
-    assert_eq!(
-        forward.read_positions().len(),
-        forward.live_entries().len()
-    );
+    assert_eq!(forward.read_positions().len(), forward.live_entries().len());
     let mut adjacent = Rga::new();
     adjacent.insert(20, 'c');
     let mut other_order = adjacent.clone();
