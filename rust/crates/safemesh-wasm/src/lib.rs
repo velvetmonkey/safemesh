@@ -97,6 +97,19 @@ fn checked_index(value: JsValue, name: &str) -> Result<usize, JsValue> {
     Ok(number as usize)
 }
 
+// Vec<u64> cannot address more than isize::MAX bytes on wasm32. Reject
+// impossible capacities before allocation can trap and poison the instance.
+fn checked_replica_count(value: JsValue) -> Result<usize, JsValue> {
+    let replicas = checked_index(value, "replicas")?;
+    if replicas > i32::MAX as usize / std::mem::size_of::<u64>() {
+        return Err(safe_mesh_error(
+            2,
+            "replicas exceeds wasm32 counter capacity",
+        ));
+    }
+    Ok(replicas)
+}
+
 fn admission_name(admission: safemesh_crdt::Admission) -> String {
     match admission {
         safemesh_crdt::Admission::Accepted => "accepted",
@@ -117,7 +130,7 @@ impl SafeMeshGCounter {
     pub fn new_js(
         #[wasm_bindgen(unchecked_param_type = "number")] replicas: JsValue,
     ) -> Result<Self, JsValue> {
-        let replicas = checked_index(replicas, "replicas")?;
+        let replicas = checked_replica_count(replicas)?;
         Ok(Self::new(replicas))
     }
 
@@ -423,7 +436,7 @@ impl SafeMeshGCounterReplica {
         #[wasm_bindgen(unchecked_param_type = "number")] replicas: JsValue,
     ) -> Result<Self, JsValue> {
         let replica_id = checked_u64(replica_id, "replica_id")?;
-        let replicas = checked_index(replicas, "replicas")?;
+        let replicas = checked_replica_count(replicas)?;
         Ok(Self::new(replica_id, replicas))
     }
 

@@ -299,3 +299,25 @@ console.log(`BATCH_OCCURRENCE_CASES=${occurrenceCases}`);
   } finally { for (const obj of [a,b,c,left,right,ab,ba]) obj.free(); }
   console.log('CRDT_AUDIT_BOUNDARIES=true');
 }
+
+// Each old build traps on capacity overflow; isolate it so every constructor is
+// measured without reusing a WASM instance after an unreachable instruction.
+const { spawnSync } = await import('node:child_process');
+const capacityFailures = [];
+for (const name of ['SafeMeshGCounter', 'SafeMeshGCounterReplica']) {
+  const result = spawnSync(process.execPath, ['-e', `
+    const assert = require('node:assert/strict');
+    const wasm = require(process.argv[1]);
+    const make = n => process.argv[2] === 'SafeMeshGCounter'
+      ? new wasm.SafeMeshGCounter(n) : new wasm.SafeMeshGCounterReplica(0n, n);
+    for (const n of [2 ** 28, 2 ** 32 - 1]) {
+      assert.throws(() => make(n), e => e.name === 'SafeMeshError' && e.code === 2 && /replicas/.test(e.message));
+      const valid = make(2);
+      assert.equal(valid.value(), 0n);
+      valid.free();
+    }
+  `, join(packageDir, 'safemesh_wasm.js'), name], { encoding: 'utf8' });
+  if (result.status !== 0) capacityFailures.push(`${name}: ${result.stderr}`);
+}
+console.log(`COUNTER_CAPACITY_CONSTRUCTORS=2 FAILURES=${capacityFailures.length}`);
+assert.deepEqual(capacityFailures, []);
