@@ -29,7 +29,9 @@ where
     }
     fn local(&mut self, id: u64, delta: C::Delta) {
         self.log
-            .append_with(id, delta, |d| self.state.apply_delta(d.clone()))
+            .append_with(&mut self.state, id, delta, |state, d| {
+                state.apply_delta(d.clone())
+            })
             .unwrap();
     }
     fn persist(&self, path: &Path) {
@@ -66,7 +68,8 @@ where
             assert_eq!(
                 receiver
                     .log
-                    .admit_with(record, |d| receiver.state.apply_delta(d.clone())),
+                    .admit_with(&mut receiver.state, record, |state, d| state
+                        .apply_delta(d.clone())),
                 Admission::Accepted
             );
         }
@@ -382,7 +385,7 @@ mod joined {
                 for packet in batch {
                     let record = Record::<C::Delta>::from_wire_bytes(packet).unwrap();
                     assert_eq!(
-                        log.admit_with(record, |d| state.apply_delta(d.clone())),
+                        log.admit_with(&mut state, record, |state, d| state.apply_delta(d.clone())),
                         Admission::Accepted
                     );
                 }

@@ -298,6 +298,7 @@ fn lww_map_tracks_value_and_remove_dots_per_key() {
 fn event_log_deduplicates_and_serves_since_version() {
     let mut left = EventLog::new();
     let first = left.append(
+        &mut GCounter::new(3),
         1,
         GCounterDelta {
             replica: 1,
@@ -305,6 +306,7 @@ fn event_log_deduplicates_and_serves_since_version() {
         },
     );
     let second = left.append(
+        &mut GCounter::new(3),
         1,
         GCounterDelta {
             replica: 1,
@@ -317,14 +319,15 @@ fn event_log_deduplicates_and_serves_since_version() {
     assert_eq!(left.version().get(1), 2);
 
     let mut right = EventLog::new();
-    right.merge_records(left.records().iter().cloned());
-    right.merge_records(left.records().iter().cloned());
+    right.merge_records(&GCounter::new(3), left.records().iter().cloned());
+    right.merge_records(&GCounter::new(3), left.records().iter().cloned());
 
     assert_eq!(right.records().len(), 2);
     assert_eq!(right.version().get(1), 2);
     assert!(left.since(right.version()).is_empty());
 
     let third = left.append(
+        &mut GCounter::new(3),
         2,
         GCounterDelta {
             replica: 2,
@@ -340,6 +343,7 @@ fn event_log_deduplicates_and_serves_since_version() {
 fn event_log_version_does_not_hide_out_of_order_gaps() {
     let mut source = EventLog::new();
     let first = source.append(
+        &mut GCounter::new(3),
         1,
         GCounterDelta {
             replica: 1,
@@ -347,6 +351,7 @@ fn event_log_version_does_not_hide_out_of_order_gaps() {
         },
     );
     let second = source.append(
+        &mut GCounter::new(3),
         1,
         GCounterDelta {
             replica: 1,
@@ -354,6 +359,7 @@ fn event_log_version_does_not_hide_out_of_order_gaps() {
         },
     );
     let third = source.append(
+        &mut GCounter::new(3),
         1,
         GCounterDelta {
             replica: 1,
@@ -362,7 +368,7 @@ fn event_log_version_does_not_hide_out_of_order_gaps() {
     );
 
     let mut reordered = EventLog::new();
-    reordered.merge_records([source.records()[2].clone()]);
+    reordered.merge_records(&GCounter::new(3), [source.records()[2].clone()]);
     assert_eq!(reordered.version().get(1), 0);
     assert_eq!(
         source
@@ -373,10 +379,10 @@ fn event_log_version_does_not_hide_out_of_order_gaps() {
         vec![first, second, third]
     );
 
-    reordered.merge_records([source.records()[1].clone()]);
+    reordered.merge_records(&GCounter::new(3), [source.records()[1].clone()]);
     assert_eq!(reordered.version().get(1), 0);
 
-    reordered.merge_records([source.records()[0].clone()]);
+    reordered.merge_records(&GCounter::new(3), [source.records()[0].clone()]);
     assert_eq!(reordered.version().get(1), 3);
     assert!(source.since(reordered.version()).is_empty());
 }

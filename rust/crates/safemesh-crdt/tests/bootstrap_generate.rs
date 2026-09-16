@@ -112,25 +112,31 @@ fn generate_bootstrap() {
     retain(&out, &root, "orset", &s);
     let mut pn = EventLog::for_crdt(&PnCounter::new(2));
     assert_eq!(
-        pn.insert_record(record(
-            0,
-            1,
-            PnCounterDelta::Inc {
-                replica: 0,
-                tally: 9
-            }
-        )),
+        pn.insert_record(
+            &PnCounter::new(2),
+            record(
+                0,
+                1,
+                PnCounterDelta::Inc {
+                    replica: 0,
+                    tally: 9
+                }
+            )
+        ),
         Admission::Accepted
     );
     assert_eq!(
-        pn.insert_record(record(
-            1,
-            3,
-            PnCounterDelta::Dec {
-                replica: 1,
-                tally: 4
-            }
-        )),
+        pn.insert_record(
+            &PnCounter::new(2),
+            record(
+                1,
+                3,
+                PnCounterDelta::Dec {
+                    replica: 1,
+                    tally: 4
+                }
+            )
+        ),
         Admission::Accepted
     );
     write_new(&out, "pn.log", &pn.to_wire_bytes().unwrap());

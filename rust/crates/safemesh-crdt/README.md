@@ -350,7 +350,7 @@ where C::Delta: Clone + PartialEq + WireDecode + WireEncode + WireSchema {
     let mut recovered = empty();
     let mut log = EventLog::for_crdt(&recovered);
     for record in peer_log.records().iter().cloned() {
-        assert_eq!(log.admit_with(record, |d| recovered.apply_delta(d.clone())), Admission::Accepted);
+        assert_eq!(log.admit_with(&mut recovered, record, |state, d| state.apply_delta(d.clone())), Admission::Accepted);
     }
     assert_eq!(recovered, peer);
     assert_eq!(log.version(), peer_log.version());
@@ -364,10 +364,10 @@ where C::Delta: Clone + PartialEq + WireDecode + WireEncode + WireSchema {
     recovered = empty();
     for record in log.records() { recovered.apply_delta(record.delta.clone()); }
     for record in peer_log.records().iter().cloned() {
-        assert_eq!(log.admit_with(record, |d| recovered.apply_delta(d.clone())), Admission::Duplicate);
+        assert_eq!(log.admit_with(&mut recovered, record, |state, d| state.apply_delta(d.clone())), Admission::Duplicate);
     }
     for record in log.records().iter().cloned() {
-        assert_eq!(peer_log.admit_with(record, |d| peer.apply_delta(d.clone())), Admission::Duplicate);
+        assert_eq!(peer_log.admit_with(&mut peer, record, |state, d| state.apply_delta(d.clone())), Admission::Duplicate);
     }
     assert_eq!(recovered, peer);
     assert!(log == peer_log);

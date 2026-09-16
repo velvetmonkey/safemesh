@@ -33,7 +33,7 @@ fn external_decoder_reads_library_value() {
 
 use safemesh_crdt::{EventLog, GSet, WireSchema};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Custom {
     version: u8,
     count: u32,
@@ -81,7 +81,7 @@ fn external_custom_payload_roundtrips_in_library_log() {
         name: b"reading".to_vec(),
     };
     let mut log = EventLog::new();
-    log.append(2, value);
+    log.append(&mut GSet::new(), 2, value);
     let bytes = log.to_wire_bytes().unwrap();
     assert_eq!(EventLog::<Custom>::from_wire_bytes(&bytes).unwrap(), log);
 }

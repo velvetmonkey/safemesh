@@ -12,7 +12,7 @@ fn deliver_all(
     log: &mut EventLog<GCounterDelta>,
 ) {
     for envelope in transport.drain(to) {
-        log.merge_records(envelope.records);
+        log.merge_records(&safemesh_crdt::GCounter::new(3), envelope.records);
     }
 }
 
@@ -48,6 +48,7 @@ fn anti_entropy_recovers_after_drop_duplicate_and_reorder() {
     let mut left = EventLog::new();
     let mut right = EventLog::new();
     left.append(
+        &mut safemesh_crdt::GCounter::new(3),
         1,
         GCounterDelta {
             replica: 1,
@@ -55,6 +56,7 @@ fn anti_entropy_recovers_after_drop_duplicate_and_reorder() {
         },
     );
     left.append(
+        &mut safemesh_crdt::GCounter::new(3),
         1,
         GCounterDelta {
             replica: 1,
@@ -62,6 +64,7 @@ fn anti_entropy_recovers_after_drop_duplicate_and_reorder() {
         },
     );
     left.append(
+        &mut safemesh_crdt::GCounter::new(3),
         1,
         GCounterDelta {
             replica: 1,
@@ -93,6 +96,7 @@ fn partition_then_heal_uses_versions_to_cover_missing_records() {
     let mut left = EventLog::new();
     let mut right = EventLog::new();
     left.append(
+        &mut safemesh_crdt::GCounter::new(3),
         1,
         GCounterDelta {
             replica: 1,
@@ -148,7 +152,10 @@ fn version_exchange_public_api_round_trip() {
                 id: RecordId { replica, sequence },
                 delta: sequence,
             };
-            assert_eq!(source.insert_record(record.clone()), Admission::Accepted);
+            assert_eq!(
+                source.insert_record(&safemesh_crdt::GSet::new(), record.clone()),
+                Admission::Accepted
+            );
             if sequence <= 2 && (replica != 7 || sequence != 0) {
                 held.observe(record.id);
             }
@@ -171,8 +178,8 @@ fn version_exchange_public_api_round_trip() {
 #[test]
 fn version_exchange_public_api_trust_boundary() {
     let mut source = EventLog::new();
-    source.append(7, 1u64);
-    source.append(7, 2u64);
+    source.append(&mut safemesh_crdt::GSet::new(), 7, 1u64);
+    source.append(&mut safemesh_crdt::GSet::new(), 7, 2u64);
     let empty_receiver = EventLog::<u64>::new();
     let lie = rebuild(&BTreeMap::from([(7, 2)]), &BTreeSet::new());
     assert_eq!(source.since(empty_receiver.version()).len(), 2);
@@ -193,7 +200,7 @@ fn version_exchange_public_api_edge_cases() {
             replica,
             sequence: 0,
         };
-        source.insert_record(Record { id, delta: 0u64 });
+        source.insert_record(&safemesh_crdt::GSet::new(), Record { id, delta: 0u64 });
         assert!(only_zeros.includes(id));
         assert_eq!(only_zeros.get(replica), 0);
     }

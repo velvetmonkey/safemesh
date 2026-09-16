@@ -190,12 +190,12 @@ where
         ) {
             return Err(LocalError::Refused);
         }
-        let outcome = self.log.admission(&record);
+        let outcome = self.log.admission(&self.state, &record);
         if outcome != Admission::Accepted {
             return Ok(outcome);
         }
         let mut candidate = self.log.clone();
-        let outcome = candidate.insert_record(record.clone());
+        let outcome = candidate.insert_record(&self.state, record.clone());
         let sequence = if record.id.replica == self.config.writer {
             self.last_sequence.max(record.id.sequence)
         } else {
@@ -224,7 +224,9 @@ where
         let id = record.id;
         let outcome = self
             .log
-            .admit_with(record, |delta| self.state.apply_delta(delta.clone()));
+            .admit_with(&mut self.state, record, |state, delta| {
+                state.apply_delta(delta.clone())
+            });
         if outcome != Admission::Accepted {
             return Err(LocalError::InvalidHistory);
         }
@@ -650,7 +652,7 @@ mod durable_tests {
                 for packet in batch {
                     let record = Record::<C::Delta>::from_wire_bytes(packet).unwrap();
                     assert_eq!(
-                        log.admit_with(record, |d| state.apply_delta(d.clone())),
+                        log.admit_with(&mut state, record, |state, d| state.apply_delta(d.clone())),
                         Admission::Accepted
                     );
                 }
@@ -1165,34 +1167,41 @@ mod durable_tests {
             let path = transaction_path(&root, config());
             // Serialize with the product: valid framing, invalid ownership.
             if kind == "counter" {
+                let record = Record {
+                    id: RecordId {
+                        replica: 0,
+                        sequence: 1,
+                    },
+                    delta: GCounterDelta {
+                        replica: 1,
+                        tally: 5,
+                    },
+                };
                 let mut log = EventLog::for_crdt(&GCounter::new(2));
                 assert_eq!(
-                    log.insert_record(Record {
-                        id: RecordId {
-                            replica: 0,
-                            sequence: 1
-                        },
-                        delta: GCounterDelta {
-                            replica: 1,
-                            tally: 5
-                        },
-                    }),
-                    Admission::Accepted
+                    log.insert_record(&GCounter::new(2), record.clone()),
+                    Admission::Invalid(WireError::OwnershipViolation)
                 );
+                let mut bytes = Vec::new();
+                EventLog::encode_records(Some(2), &[record], &mut bytes).unwrap();
+                let log = EventLog::from_wire_bytes(&bytes).unwrap();
                 DurableReplica::<GCounter>::commit(&path, config(), &log, 1).unwrap();
             } else {
                 let mut log = EventLog::for_crdt(&OrSet::<String, u64>::new());
                 assert_eq!(
-                    log.insert_record(Record {
-                        id: RecordId {
-                            replica: 0,
-                            sequence: 1
-                        },
-                        delta: OrSetDelta::Add {
-                            element: "foreign".into(),
-                            token: 3
-                        },
-                    }),
+                    log.insert_record(
+                        &OrSet::<String, u64>::new(),
+                        Record {
+                            id: RecordId {
+                                replica: 0,
+                                sequence: 1
+                            },
+                            delta: OrSetDelta::Add {
+                                element: "foreign".into(),
+                                token: 3
+                            },
+                        }
+                    ),
                     Admission::Accepted
                 );
                 DurableReplica::<OrSet<String, u64>>::commit(&path, config(), &log, 1).unwrap();

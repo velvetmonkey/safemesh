@@ -103,6 +103,7 @@ fn canonical_state_encodings_are_sorted() {
 fn event_log_roundtrips_and_preserves_deduped_records() {
     let mut log = EventLog::with_replica_count(2);
     log.append(
+        &mut safemesh_crdt::PnCounter::new(2),
         1,
         PnCounterDelta::Inc {
             replica: 1,
@@ -110,6 +111,7 @@ fn event_log_roundtrips_and_preserves_deduped_records() {
         },
     );
     log.append(
+        &mut safemesh_crdt::PnCounter::new(2),
         1,
         PnCounterDelta::Dec {
             replica: 1,
@@ -227,14 +229,18 @@ fn enable_wins_flag_record_roundtrips_unormalized_tokens() {
     };
     let mut log = EventLog::new();
     assert_eq!(
-        log.insert_record(record.clone()),
+        log.insert_record(&EnableWinsFlag::new(), record.clone()),
         safemesh_crdt::Admission::Accepted
     );
     let bytes = log.to_wire_bytes().unwrap();
     let reopened = EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes(&bytes).unwrap();
     assert_eq!(reopened.records()[0].delta, record.delta);
     assert_eq!(
-        log.admit_with(reopened.records()[0].clone(), |_| {}),
+        log.admit_with(
+            &mut EnableWinsFlag::new(),
+            reopened.records()[0].clone(),
+            |_, _| {}
+        ),
         safemesh_crdt::Admission::Duplicate
     );
     assert_eq!(log.records(), reopened.records());
@@ -407,7 +413,7 @@ fn orset_delta_rejects_trailing_bytes_and_oversized_counts() {
 fn orset_delta_roundtrips_in_record_and_event_log() {
     let mut log = EventLog::new();
     for delta in orset_delta_cases() {
-        let id = log.append(1, delta.clone());
+        let id = log.append(&mut safemesh_crdt::OrSet::new(), 1, delta.clone());
         roundtrip(Record { id, delta });
     }
     let bytes = log.to_wire_bytes().unwrap();
@@ -555,7 +561,7 @@ fn orset_utf8_wire_shape_and_record_roundtrips() {
     );
     let mut log = EventLog::new();
     for delta in orset_utf8_cases() {
-        let id = log.append(1, delta.clone());
+        let id = log.append(&mut safemesh_crdt::OrSet::new(), 1, delta.clone());
         roundtrip(Record { id, delta });
     }
     let bytes = log.to_wire_bytes().unwrap();
@@ -569,6 +575,7 @@ fn event_log_refuses_every_single_byte_change() {
     use safemesh_crdt::OrSetDelta;
     let mut log = EventLog::new();
     log.append(
+        &mut safemesh_crdt::OrSet::new(),
         1,
         OrSetDelta::Add {
             element: "café☕".to_owned(),
@@ -620,22 +627,36 @@ fn event_log_empty_and_embedded_frames_roundtrip_and_reject_truncation() {
     roundtrip(empty.clone());
     let mut log = EventLog::with_replica_count(2);
     log.append(
+        &mut safemesh_crdt::GCounter::new(2),
         1,
         GCounterDelta {
             replica: 1,
             tally: 7,
         },
     );
-    log.append(
-        2,
-        GCounterDelta {
+    let mut records = log.records().to_vec();
+    records.push(Record {
+        id: safemesh_crdt::RecordId {
+            replica: 2,
+            sequence: 1,
+        },
+        delta: GCounterDelta {
             replica: 0,
             tally: 9,
         },
-    );
+    });
+    let log = wire_log(Some(2), &records);
     roundtrip(log.clone());
-    let mut outer = EventLog::new();
-    outer.append(1, log.clone());
+    let outer = wire_log(
+        None,
+        &[Record {
+            id: safemesh_crdt::RecordId {
+                replica: 1,
+                sequence: 1,
+            },
+            delta: log.clone(),
+        }],
+    );
     roundtrip(outer);
     let mut stream = vec![99];
     empty.encode_wire(&mut stream).unwrap();
@@ -677,6 +698,7 @@ fn event_log_shape_rejects_wrong_type_even_when_empty_or_nested() {
         let mut source = EventLog::for_crdt(&GCounter::new(2));
         if populated {
             source.append(
+                &mut GCounter::new(2),
                 0,
                 GCounterDelta {
                     replica: 0,
@@ -689,10 +711,18 @@ fn event_log_shape_rejects_wrong_type_even_when_empty_or_nested() {
             EventLog::<PnCounterDelta>::from_wire_bytes(&bytes),
             Err(WireError::DeltaTypeMismatch)
         );
-        let mut outer = EventLog::new();
-        if populated {
-            outer.append(0, source);
-        }
+        let records = if populated {
+            vec![Record {
+                id: safemesh_crdt::RecordId {
+                    replica: 0,
+                    sequence: 1,
+                },
+                delta: source,
+            }]
+        } else {
+            vec![]
+        };
+        let outer = wire_log(None, &records);
         let bytes = outer.to_wire_bytes().unwrap();
         assert_eq!(
             EventLog::<EventLog<PnCounterDelta>>::from_wire_bytes(&bytes),
@@ -701,7 +731,11 @@ fn event_log_shape_rejects_wrong_type_even_when_empty_or_nested() {
     }
     // Remove payloads have identical fields, but distinct element schemas.
     let mut source = EventLog::new();
-    source.append(0, OrSetDelta::<u64, u64>::Remove { tokens: vec![7] });
+    source.append(
+        &mut safemesh_crdt::OrSet::new(),
+        0,
+        OrSetDelta::<u64, u64>::Remove { tokens: vec![7] },
+    );
     assert_eq!(
         EventLog::<OrSetDelta<String, u64>>::from_wire_bytes(&source.to_wire_bytes().unwrap()),
         Err(WireError::DeltaTypeMismatch)
@@ -766,4 +800,14 @@ fn event_log_shape_distinguishes_unbounded_from_fixed_zero() {
         EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes_for(&bytes, &state),
         Ok(log)
     );
+}
+
+// Inert codec fixtures can contain data which no live CRDT may admit.
+fn wire_log<D: WireEncode + WireDecode + safemesh_crdt::WireSchema + PartialEq>(
+    shape: Option<usize>,
+    records: &[Record<D>],
+) -> EventLog<D> {
+    let mut bytes = Vec::new();
+    EventLog::encode_records(shape, records, &mut bytes).unwrap();
+    EventLog::from_wire_bytes(&bytes).unwrap()
 }
