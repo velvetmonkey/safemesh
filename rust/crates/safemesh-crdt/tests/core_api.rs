@@ -526,3 +526,59 @@ fn audit_counter_dimensions_and_orset_collision() {
     assert_eq!(ab, ba);
     assert_eq!(ab.elements().into_iter().collect::<Vec<_>>(), vec![1, 2]);
 }
+
+#[test]
+fn orset_shared_token_preserves_both_values_commutatively() {
+    let mut radio = OrSet::new();
+    radio.add("radio", 1_u64);
+    let mut water = OrSet::new();
+    water.add("water", 1_u64);
+    let mut forward = radio.clone();
+    forward.merge(&water);
+    let mut reverse = water.clone();
+    reverse.merge(&radio);
+    assert_eq!(forward, reverse);
+    assert_eq!(
+        forward.elements().into_iter().collect::<Vec<_>>(),
+        vec!["radio", "water"]
+    );
+    forward.merge(&water);
+    forward.merge(&radio);
+    assert_eq!(forward, reverse);
+    forward.apply_remove([1]);
+    assert!(forward.elements().is_empty());
+    forward.add("water", 2);
+    assert!(forward.contains(&"water"));
+}
+
+#[test]
+fn rga_position_read_preserves_every_live_entry() {
+    let mut forward = Rga::new();
+    forward.insert(10, 'a');
+    forward.insert(10, 'b');
+    assert_eq!(forward.live_entries(), vec![(10, 'a'), (10, 'b')]);
+    assert_eq!(forward.read_positions(), vec![10, 10]);
+    let mut reverse = Rga::new();
+    reverse.insert(10, 'b');
+    reverse.insert(10, 'a');
+    assert_eq!(forward, reverse);
+    forward.merge(&reverse);
+    reverse.merge(&forward);
+    assert_eq!(forward.read_positions(), reverse.read_positions());
+    assert_eq!(forward.read_positions().len(), forward.live_entries().len());
+    let mut adjacent = Rga::new();
+    adjacent.insert(20, 'c');
+    let mut other_order = adjacent.clone();
+    other_order.merge(&forward);
+    forward.merge(&adjacent);
+    forward.merge(&adjacent);
+    assert_eq!(forward, other_order);
+    assert_eq!(
+        forward.live_entries(),
+        vec![(10, 'a'), (10, 'b'), (20, 'c')]
+    );
+    assert_eq!(forward.read_positions(), vec![10, 10, 20]);
+    forward.delete(10);
+    assert_eq!(forward.live_entries(), vec![(20, 'c')]);
+    assert_eq!(forward.read_positions(), vec![20]);
+}

@@ -647,6 +647,7 @@ impl<P: Ord, V: Ord> Rga<P, V> {
 }
 
 impl<P: Ord + Clone, V: Ord + Clone> Rga<P, V> {
+    /// Every live positioned value, in total `(position, value)` order.
     pub fn live_entries(&self) -> Vec<(P, V)> {
         self.placed
             .iter()
@@ -660,12 +661,13 @@ impl<P: Ord + Clone, V: Ord + Clone> Rga<P, V> {
             .collect()
     }
 
+    /// One position per live entry, in the same order as `live_entries`.
+    /// Repeated positions are retained: distinct live values at a shared
+    /// position must not disappear from the sequence projection.
     pub fn read_positions(&self) -> Vec<P> {
         self.live_entries()
             .into_iter()
             .map(|(position, _)| position)
-            .collect::<BTreeSet<P>>()
-            .into_iter()
             .collect()
     }
 }
