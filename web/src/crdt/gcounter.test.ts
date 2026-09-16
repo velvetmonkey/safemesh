@@ -60,6 +60,20 @@ it.each([Number.MAX_SAFE_INTEGER + 1, -1, 0.5, NaN, Infinity])('refuses unsafe r
   expect(() => readGCounter([bad])).toThrow(RangeError)
 })
 
+it.each([Number.MAX_SAFE_INTEGER + 1, -1, 0.5, NaN, Infinity])('refuses invalid PN coordinate %s on either side before cancellation', (bad) => {
+  const message = 'G-Counter read requires safe nonnegative integer coordinates'
+  for (const state of [
+    { p: [bad], n: [0] },
+    { p: [0], n: [bad] },
+    { p: [bad], n: [Number.MAX_SAFE_INTEGER] },
+    { p: [Number.MAX_SAFE_INTEGER], n: [bad] },
+    { p: [bad], n: [bad] },
+  ]) {
+    expect(() => readPNCounter(state)).toThrow(RangeError)
+    expect(() => readPNCounter(state)).toThrow(message)
+  }
+})
+
 it('cancels four merged replica totals before checking the PN read range', () => {
   const total = [0, 1, 2, 3].reduce((state, replica) => {
     const contribution = applyGCounterDelta(bottomGCounter(4), bumpDelta(replica, 2 ** 51))

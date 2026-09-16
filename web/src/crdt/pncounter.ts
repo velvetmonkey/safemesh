@@ -41,8 +41,15 @@ export function mergePNCounter(left: PNCounterState, right: PNCounterState): PNC
 export function readPNCounter(state: PNCounterState): number {
   // Keep raw component totals exact: either may exceed the number range before
   // cancellation. Only the final difference must fit the numeric read API.
-  const positive = state.p.reduce((sum, value) => sum + BigInt(value), 0n)
-  const negative = state.n.reduce((sum, value) => sum + BigInt(value), 0n)
+  const sumCoordinates = (coordinates: GCounterState): bigint =>
+    coordinates.reduce((sum, value) => {
+      if (!Number.isSafeInteger(value) || value < 0) {
+        throw new RangeError('G-Counter read requires safe nonnegative integer coordinates')
+      }
+      return sum + BigInt(value)
+    }, 0n)
+  const positive = sumCoordinates(state.p)
+  const negative = sumCoordinates(state.n)
   const result = positive - negative
   const limit = BigInt(Number.MAX_SAFE_INTEGER)
   if (result < -limit || result > limit) {
