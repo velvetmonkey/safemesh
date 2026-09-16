@@ -115,6 +115,7 @@ fn admission_name(admission: safemesh_crdt::Admission) -> String {
         safemesh_crdt::Admission::Accepted => "accepted",
         safemesh_crdt::Admission::Duplicate => "duplicate",
         safemesh_crdt::Admission::Collision => "collision",
+        safemesh_crdt::Admission::Invalid(_) => "invalid",
     }
     .to_owned()
 }
@@ -467,9 +468,12 @@ impl SafeMeshGCounterReplica {
                 "counter coordinate out of range or not owned by record author",
             ));
         }
-        if self.log.admit_with(record, |delta| {
-            self.state.apply_delta(delta.clone());
-        }) == safemesh_crdt::Admission::Collision
+        if self
+            .log
+            .admit_with(&mut self.state, record, |state, delta| {
+                state.apply_delta(delta.clone());
+            })
+            == safemesh_crdt::Admission::Collision
         {
             return Err(safe_mesh_error(1, "record ID collision"));
         }
@@ -510,9 +514,10 @@ impl SafeMeshGCounterReplica {
             .iter()
             .cloned()
             .map(|record| {
-                self.log.admit_with(record, |delta| {
-                    self.state.apply_delta(delta.clone());
-                })
+                self.log
+                    .admit_with(&mut self.state, record, |state, delta| {
+                        state.apply_delta(delta.clone());
+                    })
             })
             .map(admission_name)
             .collect())
@@ -591,9 +596,14 @@ impl SafeMeshEnableWinsFlagReplica {
         };
         let id = self
             .log
-            .append_with(self.replica_id, delta.clone(), |delta| {
-                self.state.apply_delta(delta.clone());
-            })
+            .append_with(
+                &mut self.state,
+                self.replica_id,
+                delta.clone(),
+                |state, delta| {
+                    state.apply_delta(delta.clone());
+                },
+            )
             .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
         Record { id, delta }
             .to_wire_bytes()
@@ -604,9 +614,12 @@ impl SafeMeshEnableWinsFlagReplica {
     pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
         let record = Record::<EnableWinsFlagDelta<u64>>::from_wire_bytes(bytes)
             .map_err(|_| safe_mesh_error(1, "failed to decode record"))?;
-        if self.log.admit_with(record, |delta| {
-            self.state.apply_delta(delta.clone());
-        }) == safemesh_crdt::Admission::Collision
+        if self
+            .log
+            .admit_with(&mut self.state, record, |state, delta| {
+                state.apply_delta(delta.clone());
+            })
+            == safemesh_crdt::Admission::Collision
         {
             return Err(safe_mesh_error(1, "record ID collision"));
         }
@@ -639,9 +652,10 @@ impl SafeMeshEnableWinsFlagReplica {
             .iter()
             .cloned()
             .map(|record| {
-                self.log.admit_with(record, |delta| {
-                    self.state.apply_delta(delta.clone());
-                })
+                self.log
+                    .admit_with(&mut self.state, record, |state, delta| {
+                        state.apply_delta(delta.clone());
+                    })
             })
             .map(admission_name)
             .collect())
@@ -727,9 +741,12 @@ impl SafeMeshLwwMapReplica {
     pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
         let record = Record::<LwwMapDelta<u64, u64>>::from_wire_bytes(bytes)
             .map_err(|_| safe_mesh_error(1, "failed to decode record"))?;
-        if self.log.admit_with(record, |delta| {
-            self.state.apply_delta(delta.clone());
-        }) == safemesh_crdt::Admission::Collision
+        if self
+            .log
+            .admit_with(&mut self.state, record, |state, delta| {
+                state.apply_delta(delta.clone());
+            })
+            == safemesh_crdt::Admission::Collision
         {
             return Err(safe_mesh_error(1, "record ID collision"));
         }
@@ -762,9 +779,10 @@ impl SafeMeshLwwMapReplica {
             .iter()
             .cloned()
             .map(|record| {
-                self.log.admit_with(record, |delta| {
-                    self.state.apply_delta(delta.clone());
-                })
+                self.log
+                    .admit_with(&mut self.state, record, |state, delta| {
+                        state.apply_delta(delta.clone());
+                    })
             })
             .map(admission_name)
             .collect())
@@ -856,9 +874,12 @@ impl SafeMeshLwwRegisterReplica {
     pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
         let record = Record::<LwwRegisterDelta<u64>>::from_wire_bytes(bytes)
             .map_err(|_| safe_mesh_error(1, "failed to decode record"))?;
-        if self.log.admit_with(record, |delta| {
-            self.state.apply_delta(delta.clone());
-        }) == safemesh_crdt::Admission::Collision
+        if self
+            .log
+            .admit_with(&mut self.state, record, |state, delta| {
+                state.apply_delta(delta.clone());
+            })
+            == safemesh_crdt::Admission::Collision
         {
             return Err(safe_mesh_error(1, "record ID collision"));
         }
@@ -891,9 +912,10 @@ impl SafeMeshLwwRegisterReplica {
             .iter()
             .cloned()
             .map(|record| {
-                self.log.admit_with(record, |delta| {
-                    self.state.apply_delta(delta.clone());
-                })
+                self.log
+                    .admit_with(&mut self.state, record, |state, delta| {
+                        state.apply_delta(delta.clone());
+                    })
             })
             .map(admission_name)
             .collect())
@@ -1307,9 +1329,14 @@ impl SafeMeshStringOrSetReplica {
     fn append(&mut self, delta: OrSetDelta<String, u64>) -> Result<Vec<u8>, BindingError> {
         let id = self
             .log
-            .append_with(self.replica_id, delta.clone(), |delta| {
-                self.state.apply_delta(delta.clone());
-            })
+            .append_with(
+                &mut self.state,
+                self.replica_id,
+                delta.clone(),
+                |state, delta| {
+                    state.apply_delta(delta.clone());
+                },
+            )
             .map_err(|_| binding_error(1, "event log sequence exhausted"))?;
         Record { id, delta }
             .to_wire_bytes()
@@ -1321,10 +1348,13 @@ impl SafeMeshStringOrSetReplica {
         record: Record<OrSetDelta<String, u64>>,
     ) -> Result<safemesh_crdt::Admission, BindingError> {
         self.check_incoming(&record)?;
-        match self.log.admit_with(record, |delta| {
-            self.state.apply_delta(delta.clone());
-        }) {
+        match self
+            .log
+            .admit_with(&mut self.state, record, |state, delta| {
+                state.apply_delta(delta.clone());
+            }) {
             safemesh_crdt::Admission::Collision => Err(binding_error(1, "record ID collision")),
+            safemesh_crdt::Admission::Invalid(_) => Err(binding_error(1, "invalid record")),
             admission => Ok(admission),
         }
     }
@@ -1340,6 +1370,9 @@ impl SafeMeshStringOrSetReplica {
             safemesh_crdt::Admission::Accepted => "accepted",
             safemesh_crdt::Admission::Duplicate => "duplicate",
             safemesh_crdt::Admission::Collision => unreachable!("admit maps collision to Err"),
+            safemesh_crdt::Admission::Invalid(_) => {
+                unreachable!("admit maps invalid record to Err")
+            }
         })
     }
 
@@ -1354,9 +1387,10 @@ impl SafeMeshStringOrSetReplica {
             .iter()
             .cloned()
             .map(|record| {
-                self.log.admit_with(record, |delta| {
-                    self.state.apply_delta(delta.clone());
-                })
+                self.log
+                    .admit_with(&mut self.state, record, |state, delta| {
+                        state.apply_delta(delta.clone());
+                    })
             })
             .map(admission_name)
             .collect())
@@ -1675,9 +1709,14 @@ impl SafeMeshGCounterReplica {
         };
         let id = self
             .log
-            .append_with(self.replica_id, delta.clone(), |delta| {
-                self.state.apply_delta(delta.clone());
-            })
+            .append_with(
+                &mut self.state,
+                self.replica_id,
+                delta.clone(),
+                |state, delta| {
+                    state.apply_delta(delta.clone());
+                },
+            )
             .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
         Record { id, delta }
             .to_wire_bytes()
@@ -1701,9 +1740,14 @@ impl SafeMeshEnableWinsFlagReplica {
         let delta = EnableWinsFlagDelta::Enable { token };
         let id = self
             .log
-            .append_with(self.replica_id, delta.clone(), |delta| {
-                self.state.apply_delta(delta.clone());
-            })
+            .append_with(
+                &mut self.state,
+                self.replica_id,
+                delta.clone(),
+                |state, delta| {
+                    state.apply_delta(delta.clone());
+                },
+            )
             .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
         Record { id, delta }
             .to_wire_bytes()
@@ -1738,9 +1782,14 @@ impl SafeMeshLwwMapReplica {
         };
         let id = self
             .log
-            .append_with(self.replica_id, delta.clone(), |delta| {
-                self.state.apply_delta(delta.clone());
-            })
+            .append_with(
+                &mut self.state,
+                self.replica_id,
+                delta.clone(),
+                |state, delta| {
+                    state.apply_delta(delta.clone());
+                },
+            )
             .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
         Record { id, delta }
             .to_wire_bytes()
@@ -1760,9 +1809,14 @@ impl SafeMeshLwwMapReplica {
         };
         let id = self
             .log
-            .append_with(self.replica_id, delta.clone(), |delta| {
-                self.state.apply_delta(delta.clone());
-            })
+            .append_with(
+                &mut self.state,
+                self.replica_id,
+                delta.clone(),
+                |state, delta| {
+                    state.apply_delta(delta.clone());
+                },
+            )
             .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
         Record { id, delta }
             .to_wire_bytes()
@@ -1803,9 +1857,14 @@ impl SafeMeshLwwRegisterReplica {
         };
         let id = self
             .log
-            .append_with(self.replica_id, delta.clone(), |delta| {
-                self.state.apply_delta(delta.clone());
-            })
+            .append_with(
+                &mut self.state,
+                self.replica_id,
+                delta.clone(),
+                |state, delta| {
+                    state.apply_delta(delta.clone());
+                },
+            )
             .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
         Record { id, delta }
             .to_wire_bytes()
@@ -1905,13 +1964,16 @@ mod tests {
     fn allocated_history_refuses_gaps_zero_and_max_sequence() {
         for sequence in [0, 2, u64::MAX] {
             let mut replica = SafeMeshStringOrSetReplica::new(0);
-            replica.log.insert_record(Record {
-                id: RecordId {
-                    replica: 0,
-                    sequence,
+            replica.log.insert_record(
+                &replica.state,
+                Record {
+                    id: RecordId {
+                        replica: 0,
+                        sequence,
+                    },
+                    delta: OrSetDelta::Remove { tokens: vec![] },
                 },
-                delta: OrSetDelta::Remove { tokens: vec![] },
-            });
+            );
             assert!(replica.checked_next(1).is_err());
         }
         assert_eq!(allocate_token(1, 0, u64::MAX), Some(u64::MAX));
@@ -2015,7 +2077,7 @@ mod tests {
             let mut log = EventLog::with_replica_count(2);
             for record in records {
                 assert_eq!(
-                    log.insert_record(record),
+                    log.insert_record(&GCounter::new(2), record),
                     safemesh_crdt::Admission::Accepted
                 );
             }
@@ -2133,7 +2195,7 @@ mod tests {
                 let log = replica.log.clone();
                 let mut incoming = EventLog::for_crdt(&replica.state);
                 assert_eq!(
-                    incoming.insert_record(second),
+                    incoming.insert_record(&replica.state, second),
                     safemesh_crdt::Admission::Accepted
                 );
                 assert_eq!(
@@ -2213,7 +2275,7 @@ mod tests {
         let log = replica.log.clone();
         let mut incoming = EventLog::for_crdt(&replica.state);
         assert_eq!(
-            incoming.insert_record(second),
+            incoming.insert_record(&replica.state, second),
             safemesh_crdt::Admission::Accepted
         );
         assert_eq!(

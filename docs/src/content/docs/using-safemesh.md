@@ -281,12 +281,12 @@ fn main() {
         .checked_add(1).expect("record sequence exhausted");
     let token = sequence.checked_mul(writers)
         .and_then(|n| n.checked_add(writer)).expect("token space exhausted");
-    let id = log.append_with(writer, OrSetDelta::Add {
+    let id = log.append_with(&mut state, writer, OrSetDelta::Add {
         element: "water".to_owned(), token,
-    }, |delta| state.apply_delta(delta.clone())).unwrap();
+    }, |state, delta| state.apply_delta(delta.clone())).unwrap();
     assert_eq!(id.sequence, sequence);
-    log.append_with(writer, OrSetDelta::Remove { tokens: vec![token] },
-        |delta| state.apply_delta(delta.clone())).unwrap();
+    log.append_with(&mut state, writer, OrSetDelta::Remove { tokens: vec![token] },
+        |state, delta| state.apply_delta(delta.clone())).unwrap();
     // Demonstrates ordinary process restart only; not a durable commit protocol.
     fs::write("tokens.log", log.to_wire_bytes().unwrap()).unwrap();
     println!("allocated token={token}; records={}", log.records().len());

@@ -95,7 +95,8 @@ where
     let mut log = EventLog::for_crdt(&state);
     for r in decoded.records() {
         assert_eq!(
-            log.admit_with(r.clone(), |d| state.apply_delta(d.clone())),
+            log.admit_with(&mut state, r.clone(), |state, d| state
+                .apply_delta(d.clone())),
             Admission::Accepted,
             "{name}: replay admission disagreed"
         );
@@ -109,7 +110,9 @@ where
             log.version().clone(),
         );
         assert_eq!(
-            log.admit_with(r.clone(), |_| panic!("{name}: duplicate reapplied")),
+            log.admit_with(&mut state, r.clone(), |_, _| panic!(
+                "{name}: duplicate reapplied"
+            )),
             Admission::Duplicate
         );
         assert_eq!(

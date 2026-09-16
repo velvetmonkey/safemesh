@@ -16,9 +16,13 @@ fn record(sequence: u64, tally: u64) -> Record<GCounterDelta> {
 fn record_1_1_live_and_replay() {
     let mut log = EventLog::with_replica_count(2);
     let mut live = GCounter::new(2);
-    let first = log.admit_with(record(1, 5), |d| live.apply_delta(d.clone()));
+    let first = log.admit_with(&mut live, record(1, 5), |state, d| {
+        state.apply_delta(d.clone())
+    });
     let before = log.clone();
-    let second = log.admit_with(record(1, 9), |d| live.apply_delta(d.clone()));
+    let second = log.admit_with(&mut live, record(1, 9), |state, d| {
+        state.apply_delta(d.clone())
+    });
     let persisted =
         EventLog::<GCounterDelta>::from_wire_bytes(&log.to_wire_bytes().unwrap()).unwrap();
     let mut replay = GCounter::new(2);
@@ -40,20 +44,27 @@ fn record_1_1_live_and_replay() {
 #[test]
 fn duplicates_and_collisions_do_not_invoke_application() {
     let mut log = EventLog::new();
-    assert_eq!(log.insert_record(record(1, 5)), Admission::Accepted);
+    assert_eq!(
+        log.insert_record(&GCounter::new(2), record(1, 5)),
+        Admission::Accepted
+    );
     let before = log.clone();
     assert_eq!(
-        log.admit_with(record(1, 5), |_| panic!("duplicate applied")),
+        log.admit_with(&mut GCounter::new(2), record(1, 5), |_, _| panic!(
+            "duplicate applied"
+        )),
         Admission::Duplicate
     );
     assert_eq!(
-        log.admit_with(record(1, 9), |_| panic!("collision applied")),
+        log.admit_with(&mut GCounter::new(2), record(1, 9), |_, _| panic!(
+            "collision applied"
+        )),
         Admission::Collision
     );
     assert_eq!(log, before);
     let mut applied = false;
     assert_eq!(
-        log.admit_with(record(2, 0), |_| applied = true),
+        log.admit_with(&mut GCounter::new(2), record(2, 0), |_, _| applied = true),
         Admission::Accepted
     );
     assert!(applied);
@@ -63,16 +74,20 @@ fn local_append_handles_gaps_and_exhaustion_without_unlogged_application() {
     let mut log = EventLog::new();
     let mut live = GCounter::new(2);
     assert_eq!(
-        log.admit_with(record(2, 5), |d| live.apply_delta(d.clone())),
+        log.admit_with(&mut live, record(2, 5), |state, d| state
+            .apply_delta(d.clone())),
         Admission::Accepted
     );
     let id = log
-        .append_with(1, record(1, 9).delta, |d| live.apply_delta(d.clone()))
+        .append_with(&mut live, 1, record(1, 9).delta, |state, d| {
+            state.apply_delta(d.clone())
+        })
         .unwrap();
     assert_eq!(id.sequence, 3);
     assert_eq!(log.version().get(1), 0);
     assert_eq!(
-        log.admit_with(record(1, 4), |d| live.apply_delta(d.clone())),
+        log.admit_with(&mut live, record(1, 4), |state, d| state
+            .apply_delta(d.clone())),
         Admission::Accepted
     );
     assert_eq!(log.version().get(1), 3);
@@ -81,12 +96,18 @@ fn local_append_handles_gaps_and_exhaustion_without_unlogged_application() {
         replay.apply_delta(r.delta.clone());
     }
     assert_eq!(live, replay);
-    assert_eq!(log.insert_record(record(u64::MAX, 9)), Admission::Accepted);
+    assert_eq!(
+        log.insert_record(&GCounter::new(2), record(u64::MAX, 9)),
+        Admission::Accepted
+    );
     let before = log.clone();
     assert_eq!(
-        log.append_with(1, record(1, 10).delta, |_| panic!(
-            "exhausted append applied"
-        )),
+        log.append_with(
+            &mut GCounter::new(2),
+            1,
+            record(1, 10).delta,
+            |_, _| panic!("exhausted append applied")
+        ),
         Err(AppendError::SequenceExhausted)
     );
     assert_eq!(log, before);
@@ -401,8 +422,13 @@ fn existing_counter_loader_refuses_foreign_coordinate_history() {
             tally: 99,
         },
     };
-    assert_eq!(log.insert_record(bad), Admission::Accepted); // raw log is a carrier
-    let bytes = log.to_wire_bytes().unwrap();
+    assert_eq!(
+        log.insert_record(&state, bad.clone()),
+        Admission::Invalid(safemesh_crdt::WireError::OwnershipViolation)
+    );
+    let mut bytes = Vec::new();
+    EventLog::encode_records(Some(2), &[bad], &mut bytes).unwrap();
+    let log = EventLog::<GCounterDelta>::from_wire_bytes(&bytes).unwrap();
     assert_eq!(
         EventLog::<GCounterDelta>::from_wire_bytes_for(&bytes, &state),
         Err(safemesh_crdt::WireError::OwnershipViolation)
@@ -425,8 +451,12 @@ fn pn_counter_loader_refuses_out_of_range_coordinate() {
             tally: 7,
         },
     };
-    assert_eq!(log.insert_record(bad), Admission::Accepted);
-    let bytes = log.to_wire_bytes().unwrap();
+    assert_eq!(
+        log.insert_record(&state, bad.clone()),
+        Admission::Invalid(safemesh_crdt::WireError::OwnershipViolation)
+    );
+    let mut bytes = Vec::new();
+    EventLog::encode_records(Some(2), &[bad], &mut bytes).unwrap();
     let loaded = EventLog::<PnCounterDelta>::from_wire_bytes_for(&bytes, &state);
     let mut replay = PnCounter::new(2);
     let before = replay.value();
@@ -448,16 +478,19 @@ fn pn_counter_loader_refuses_out_of_range_coordinate() {
     assert_eq!(after, 0);
 
     let mut valid_log = EventLog::for_crdt(&state);
-    valid_log.insert_record(Record {
-        id: RecordId {
-            replica: 0,
-            sequence: 1,
+    valid_log.insert_record(
+        &state,
+        Record {
+            id: RecordId {
+                replica: 0,
+                sequence: 1,
+            },
+            delta: PnCounterDelta::Inc {
+                replica: 0,
+                tally: 7,
+            },
         },
-        delta: PnCounterDelta::Inc {
-            replica: 0,
-            tally: 7,
-        },
-    });
+    );
     let valid_bytes = valid_log.to_wire_bytes().unwrap();
     assert!(EventLog::<PnCounterDelta>::from_wire_bytes_for(&valid_bytes, &state).is_ok());
 }
@@ -480,30 +513,39 @@ fn seqzero_admission_since_population() {
                         replica: author,
                         sequence,
                     },
-                    delta: GCounterDelta { replica: 1, tally },
+                    delta: tally,
                 };
                 let mut log = EventLog::new();
                 let mut accepted = Vec::new();
                 for seq in history {
                     let r = make(seq, 5);
-                    assert_eq!(log.insert_record(r.clone()), Admission::Accepted);
+                    assert_eq!(
+                        log.insert_record(&safemesh_crdt::GSet::new(), r.clone()),
+                        Admission::Accepted
+                    );
                     accepted.push(r);
                     records_tested += 1;
                 }
                 let r = make(sequence, 5);
-                let first = log.insert_record(r.clone());
+                let first = log.insert_record(&safemesh_crdt::GSet::new(), r.clone());
                 if first == Admission::Accepted {
                     accepted.push(r.clone());
                 } else {
                     assert_eq!(first, Admission::Duplicate);
                 }
                 assert_eq!(
-                    log.admit_with(r.clone(), |_| panic!("duplicate applied")),
+                    log.admit_with(&mut safemesh_crdt::GSet::new(), r.clone(), |_, _| panic!(
+                        "duplicate applied"
+                    )),
                     Admission::Duplicate
                 );
                 let refused = make(sequence, 99);
                 assert_eq!(
-                    log.admit_with(refused.clone(), |_| panic!("collision applied")),
+                    log.admit_with(
+                        &mut safemesh_crdt::GSet::new(),
+                        refused.clone(),
+                        |_, _| panic!("collision applied")
+                    ),
                     Admission::Collision
                 );
                 let all = log.since(&VersionVector::new());
@@ -554,28 +596,44 @@ fn seqzero_two_replica_exchange_and_persisted_replay() {
     use safemesh_crdt::{anti_entropy, InMemoryTransport, TransportAdapter, VersionVector};
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
-    let mut source = EventLog::with_replica_count(2);
-    let mut source_state = GCounter::new(2);
+    // Sequence zero remains legal for a permissive carrier, but not a counter.
+    fn zero_record(sequence: u64, tally: u64) -> Record<safemesh_crdt::LwwRegisterDelta<u64>> {
+        Record {
+            id: RecordId {
+                replica: 1,
+                sequence,
+            },
+            delta: safemesh_crdt::LwwRegisterDelta {
+                timestamp: tally,
+                replica: 1,
+                value: tally,
+            },
+        }
+    }
+    let mut source = EventLog::new();
+    let mut source_state = safemesh_crdt::LwwRegister::new();
     // A zero record has an effect that later positive records do not subsume.
-    for r in [record(0, 7), record(2, 5), record(1, 3)] {
+    for r in [zero_record(0, 7), zero_record(2, 5), zero_record(1, 3)] {
         assert_eq!(
-            source.admit_with(r, |d| source_state.apply_delta(d.clone())),
+            source.admit_with(&mut source_state, r, |state, d| state
+                .apply_delta(d.clone())),
             Admission::Accepted
         );
     }
     let bytes = source.to_wire_bytes().unwrap();
-    let restored = EventLog::<GCounterDelta>::from_wire_bytes(&bytes).unwrap();
-    // The raw record kernel admits zero. The separate owned-counter loader
-    // has always required positive sequences; this version repair does not
-    // broaden that loader's admission contract.
-    assert_eq!(
-        EventLog::<GCounterDelta>::from_wire_bytes_for(&bytes, &GCounter::new(2)),
-        Err(safemesh_crdt::WireError::OwnershipViolation)
-    );
+    let restored = EventLog::<safemesh_crdt::LwwRegisterDelta<u64>>::from_wire_bytes_for(
+        &bytes,
+        &source_state,
+    )
+    .unwrap();
     assert_eq!(restored, source);
     assert_eq!(restored.since(&VersionVector::new()), source.records());
     {
         let bytes = include_bytes!("fixtures/old-zero.bin");
+        assert_eq!(
+            EventLog::<GCounterDelta>::from_wire_bytes_for(bytes, &GCounter::new(2)),
+            Err(safemesh_crdt::WireError::OwnershipViolation)
+        );
         let old = EventLog::<GCounterDelta>::from_wire_bytes(bytes).unwrap();
         let mut replay = GCounter::new(2);
         for r in old.records() {
@@ -585,8 +643,8 @@ fn seqzero_two_replica_exchange_and_persisted_replay() {
         assert_eq!(old.since(&VersionVector::new()), vec![record(0, 7)]);
         println!("OLDER BUILD persisted zero: read=7 returned=1");
     }
-    let mut peer = EventLog::with_replica_count(2);
-    let mut peer_state = GCounter::new(2);
+    let mut peer = EventLog::new();
+    let mut peer_state = safemesh_crdt::LwwRegister::new();
     let mut transport = InMemoryTransport::new();
     transport.subscribe(0);
     transport.subscribe(1);
@@ -607,9 +665,10 @@ fn seqzero_two_replica_exchange_and_persisted_replay() {
                 sender.write_all(&bytes).unwrap();
                 let mut received = vec![0; bytes.len()];
                 receiver.read_exact(&mut received).unwrap();
-                let r = Record::<GCounterDelta>::from_wire_bytes(&received).unwrap();
+                let r = Record::<safemesh_crdt::LwwRegisterDelta<u64>>::from_wire_bytes(&received)
+                    .unwrap();
                 assert_eq!(
-                    peer.admit_with(r, |d| peer_state.apply_delta(d.clone())),
+                    peer.admit_with(&mut peer_state, r, |state, d| state.apply_delta(d.clone())),
                     if round == 0 {
                         Admission::Accepted
                     } else {
@@ -623,7 +682,7 @@ fn seqzero_two_replica_exchange_and_persisted_replay() {
         assert_eq!(peer.version(), source.version());
     }
     println!(
-        "TWO REPLICA EXCHANGE CONVERGES true tcp_rounds=2 value={}",
+        "TWO REPLICA EXCHANGE CONVERGES true tcp_rounds=2 value={:?}",
         peer_state.value()
     );
 }
@@ -632,20 +691,23 @@ fn seqzero_two_replica_exchange_and_persisted_replay() {
 fn seqzero_converged_replicas_quiesce_at_scale() {
     use safemesh_crdt::{anti_entropy, InMemoryTransport, TransportAdapter, VersionVector};
     for (authors, positives) in [(1, true), (1, false), (10, false), (100, false)] {
-        let mut left = EventLog::with_replica_count(1);
-        let mut right = EventLog::with_replica_count(1);
+        let mut left = EventLog::new();
+        let mut right = EventLog::new();
         for replica in 0..authors {
             // Admit zero AFTER positives: a positive prefix must not imply zero.
             let sequences = if positives { vec![1, 2, 0] } else { vec![0] };
             for sequence in sequences {
                 let r = Record {
                     id: RecordId { replica, sequence },
-                    delta: GCounterDelta {
-                        replica: 0,
-                        tally: 7,
+                    delta: safemesh_crdt::OrSetDelta::Add {
+                        element: 7u64,
+                        token: 0u64,
                     },
                 };
-                assert_eq!(left.insert_record(r), Admission::Accepted);
+                assert_eq!(
+                    left.insert_record(&safemesh_crdt::OrSet::new(), r),
+                    Admission::Accepted
+                );
             }
         }
         let mut transport = InMemoryTransport::new();
@@ -657,8 +719,12 @@ fn seqzero_converged_replicas_quiesce_at_scale() {
         for envelope in transport.drain(1) {
             for r in envelope.records {
                 let bytes = r.to_wire_bytes().unwrap();
-                let decoded = Record::<GCounterDelta>::from_wire_bytes(&bytes).unwrap();
-                assert_eq!(right.insert_record(decoded), Admission::Accepted);
+                let decoded =
+                    Record::<safemesh_crdt::OrSetDelta<u64, u64>>::from_wire_bytes(&bytes).unwrap();
+                assert_eq!(
+                    right.insert_record(&safemesh_crdt::OrSet::new(), decoded),
+                    Admission::Accepted
+                );
                 recovered += 1;
             }
         }
@@ -674,7 +740,9 @@ fn seqzero_converged_replicas_quiesce_at_scale() {
                     sent += envelope.records.len();
                     for r in envelope.records {
                         assert_eq!(
-                            log.admit_with(r, |_| panic!("converged duplicate applied")),
+                            log.admit_with(&mut safemesh_crdt::OrSet::new(), r, |_, _| panic!(
+                                "converged duplicate applied"
+                            )),
                             Admission::Duplicate
                         );
                     }
@@ -687,8 +755,10 @@ fn seqzero_converged_replicas_quiesce_at_scale() {
         );
         assert_eq!(series, vec![0; 10], "converged replicas must stay quiet");
         // Rebuild versions through the legacy log format, not a cloned cache.
-        let restored =
-            EventLog::<GCounterDelta>::from_wire_bytes(&left.to_wire_bytes().unwrap()).unwrap();
+        let restored = EventLog::<safemesh_crdt::OrSetDelta<u64, u64>>::from_wire_bytes(
+            &left.to_wire_bytes().unwrap(),
+        )
+        .unwrap();
         assert_eq!(restored.version(), left.version());
         assert!(left.since(restored.version()).is_empty());
         assert_eq!(left.since(&VersionVector::new()).len(), recovered);
@@ -731,10 +801,13 @@ fn seqzero_acknowledgment_is_independent_of_positive_prefix() {
     for replica in [42, 43] {
         for sequence in 0..=4 {
             assert_eq!(
-                log.insert_record(Record {
-                    id: RecordId { replica, sequence },
-                    delta: 7u64
-                }),
+                log.insert_record(
+                    &safemesh_crdt::GSet::new(),
+                    Record {
+                        id: RecordId { replica, sequence },
+                        delta: 7u64
+                    }
+                ),
                 Admission::Accepted
             );
         }
@@ -780,7 +853,16 @@ fn inherited_types_accept_records_that_replay_subsumes() {
         D: WireEncode + WireDecode + WireSchema + Clone + PartialEq + Debug,
     {
         let mut log = EventLog::for_crdt(carrier);
-        assert_eq!(log.insert_record(record), Admission::Accepted);
+        assert_eq!(carrier.validate_record(record.id, &record.delta), Ok(()));
+        assert_eq!(carrier.validate_record(record.id, &record.delta), Ok(()));
+        let mut raw = carrier.clone();
+        let mut raw_log = EventLog::for_crdt(carrier);
+        assert_eq!(
+            raw_log.admit_with(&mut raw, record.clone(), |state, delta| state
+                .apply_delta(delta.clone())),
+            Admission::Accepted
+        );
+        assert_eq!(log.insert_record(carrier, record), Admission::Accepted);
         let bytes = log.to_wire_bytes().unwrap();
         let loaded = EventLog::<D>::from_wire_bytes_for(&bytes, carrier)
             .unwrap_or_else(|e: WireError| panic!("legitimate record refused: {e:?}"));
@@ -790,6 +872,8 @@ fn inherited_types_accept_records_that_replay_subsumes() {
             existing.apply_delta(r.delta.clone());
             fresh.apply_delta(r.delta.clone());
         }
+        assert_eq!(raw, existing);
+        assert_eq!(raw_log, log);
         (existing, fresh)
     }
     // GSet and Rga have no delta wire codec, so the loader cannot carry them;
@@ -797,8 +881,26 @@ fn inherited_types_accept_records_that_replay_subsumes() {
     fn via_trait<C, D>(carrier: &C, fresh: C, record: Record<D>) -> (C, C)
     where
         C: Crdt<Delta = D> + Clone + Debug + PartialEq,
-        D: Clone,
+        D: Clone + PartialEq,
     {
+        let mut log = EventLog::for_crdt(carrier);
+        assert_eq!(
+            log.insert_record(carrier, record.clone()),
+            Admission::Accepted
+        );
+        let mut via_raw = carrier.clone();
+        let mut raw_log = EventLog::for_crdt(carrier);
+        assert_eq!(
+            raw_log.admit_with(&mut via_raw, record.clone(), |state, delta| state
+                .apply_delta(delta.clone())),
+            Admission::Accepted
+        );
+        let mut applied = false;
+        assert_eq!(
+            log.admit_with(&mut via_raw, record.clone(), |_, _| applied = true),
+            Admission::Duplicate
+        );
+        assert!(!applied);
         carrier
             .validate_record(record.id, &record.delta)
             .unwrap_or_else(|e| panic!("legitimate record refused: {e:?}"));
@@ -806,6 +908,7 @@ fn inherited_types_accept_records_that_replay_subsumes() {
         let mut fresh = fresh;
         existing.apply_delta(record.delta.clone());
         fresh.apply_delta(record.delta);
+        assert_eq!(via_raw, existing);
         (existing, fresh)
     }
     let mut checked = 0;
@@ -1155,7 +1258,7 @@ fn pncounter_refuses_record_outside_same_shape() {
 fn loading_rest_after_refusal_preserves_previously_applied_records() {
     let mut state = GCounter::new(2);
     let mut prefix = EventLog::for_crdt(&state);
-    prefix.insert_record(record(1, 5));
+    prefix.insert_record(&GCounter::new(2), record(1, 5));
     let prefix =
         EventLog::<GCounterDelta>::from_wire_bytes_for(&prefix.to_wire_bytes().unwrap(), &state)
             .unwrap();
@@ -1174,10 +1277,8 @@ fn loading_rest_after_refusal_preserves_previously_applied_records() {
             tally: 99,
         },
     };
-    let mut remaining = EventLog::for_crdt(&state);
-    remaining.insert_record(bad);
-    remaining.insert_record(record(3, 9));
-    let bytes = remaining.to_wire_bytes().unwrap();
+    let mut bytes = Vec::new();
+    EventLog::encode_records(Some(2), &[bad, record(3, 9)], &mut bytes).unwrap();
     for _ in 0..2 {
         assert_eq!(
             EventLog::<GCounterDelta>::from_wire_bytes_for(&bytes, &state),
@@ -1192,7 +1293,7 @@ fn loading_rest_after_refusal_preserves_previously_applied_records() {
     // A caller can explicitly supply a separate valid suffix. The checked
     // loader does not automatically skip a refused record or return a prefix.
     let mut suffix = EventLog::for_crdt(&state);
-    suffix.insert_record(record(3, 9));
+    suffix.insert_record(&GCounter::new(2), record(3, 9));
     let loaded =
         EventLog::<GCounterDelta>::from_wire_bytes_for(&suffix.to_wire_bytes().unwrap(), &state)
             .unwrap();
@@ -1201,4 +1302,160 @@ fn loading_rest_after_refusal_preserves_previously_applied_records() {
     }
     assert_eq!(state.value(), 9);
     println!("refusal=OwnershipViolation retry=OwnershipViolation earlier=5 suffix_after_explicit_selection=9");
+}
+
+#[test]
+fn direct_raw_admission_refuses_invalid_counter_record() {
+    for (author, coordinate) in [(0, 2), (1, 0)] {
+        let mut state = GCounter::new(2);
+        let mut log = EventLog::for_crdt(&state);
+        let before = log.clone();
+        let mut applied = false;
+        let bad = Record {
+            id: RecordId {
+                replica: author,
+                sequence: 1,
+            },
+            delta: GCounterDelta {
+                replica: coordinate,
+                tally: 99,
+            },
+        };
+        let result = log.admit_with(&mut state, bad.clone(), |state, delta| {
+            applied = true;
+            state.apply_delta(delta.clone());
+        });
+        println!("RAW author={author} coordinate={coordinate} result={result:?} applied={applied} records={} value={}", log.records().len(), state.value());
+        assert_eq!(
+            result,
+            Admission::Invalid(safemesh_crdt::WireError::OwnershipViolation)
+        );
+        assert_eq!(log.insert_record(&state, bad.clone()), result);
+        assert_eq!(log.merge_records(&state, [bad.clone()]), vec![result]);
+        assert_eq!(
+            log.append_with(&mut state, author, bad.delta, |_, _| panic!(
+                "invalid append applied"
+            )),
+            Err(AppendError::InvalidRecord(
+                safemesh_crdt::WireError::OwnershipViolation
+            ))
+        );
+        assert_eq!(log, before, "invalid record must leave the log unchanged");
+        assert!(!applied, "invalid record must not invoke apply");
+        assert_eq!(state.value(), 0);
+    }
+    // The existing counter hook also excludes sequence zero. Preserve this
+    // refusal while the version kernel continues to support zero for total domains.
+    let mut state = GCounter::new(2);
+    let mut log = EventLog::for_crdt(&state);
+    assert_eq!(
+        log.admit_with(&mut state, record(0, 7), |_, _| panic!(
+            "zero counter callback"
+        )),
+        Admission::Invalid(safemesh_crdt::WireError::OwnershipViolation)
+    );
+    assert_eq!(
+        log.insert_record(&state, record(0, 7)),
+        Admission::Invalid(safemesh_crdt::WireError::OwnershipViolation)
+    );
+    assert!(log.records().is_empty());
+}
+
+#[test]
+fn raw_admission_uses_custom_crdt_hook_and_preserves_identity_verdicts() {
+    #[derive(Default)]
+    struct EvenSet(safemesh_crdt::GSet<u64>);
+    impl safemesh_crdt::Mergeable for EvenSet {
+        fn merge(&mut self, other: &Self) {
+            self.0.merge(&other.0);
+        }
+    }
+    impl Crdt for EvenSet {
+        type Delta = u64;
+        fn validate_record(
+            &self,
+            _: RecordId,
+            delta: &u64,
+        ) -> Result<(), safemesh_crdt::WireError> {
+            if delta % 2 == 0 {
+                Ok(())
+            } else {
+                Err(safemesh_crdt::WireError::InvalidTag)
+            }
+        }
+        fn apply_delta(&mut self, delta: u64) {
+            self.0.insert(delta);
+        }
+    }
+    let mut state = EvenSet::default();
+    let mut log = EventLog::for_crdt(&state);
+    let id = RecordId {
+        replica: 0,
+        sequence: 1,
+    };
+    let odd = Record { id, delta: 3 };
+    assert_eq!(
+        log.admit_with(&mut state, odd.clone(), |_, _| panic!("refused callback")),
+        Admission::Invalid(safemesh_crdt::WireError::InvalidTag)
+    );
+    assert_eq!(
+        log.insert_record(&state, odd.clone()),
+        Admission::Invalid(safemesh_crdt::WireError::InvalidTag)
+    );
+    assert!(log.records().is_empty());
+    let even = Record { id, delta: 2 };
+    assert_eq!(
+        log.admit_with(&mut state, even.clone(), |state, delta| state
+            .apply_delta(*delta)),
+        Admission::Accepted
+    );
+    let before = log.clone();
+    assert_eq!(
+        log.admit_with(&mut state, even, |_, _| panic!("duplicate callback")),
+        Admission::Duplicate
+    );
+    assert_eq!(
+        log.admit_with(&mut state, odd, |_, _| panic!("collision callback")),
+        Admission::Collision
+    );
+    assert_eq!(log, before);
+    assert_eq!(state.0.elements(), &std::collections::BTreeSet::from([2]));
+}
+
+#[test]
+fn direct_raw_pn_admission_refuses_invalid_coordinates() {
+    for delta in [
+        PnCounterDelta::Inc {
+            replica: 2,
+            tally: 99,
+        },
+        PnCounterDelta::Dec {
+            replica: 1,
+            tally: 99,
+        },
+    ] {
+        let mut state = PnCounter::new(2);
+        let before = state.clone();
+        let mut log = EventLog::for_crdt(&state);
+        let before_log = log.clone();
+        let record = Record {
+            id: RecordId {
+                replica: 0,
+                sequence: 1,
+            },
+            delta,
+        };
+        assert_eq!(
+            log.admit_with(&mut state, record.clone(), |_, _| panic!(
+                "invalid PN callback"
+            )),
+            Admission::Invalid(safemesh_crdt::WireError::OwnershipViolation)
+        );
+        assert_eq!(
+            log.insert_record(&state, record),
+            Admission::Invalid(safemesh_crdt::WireError::OwnershipViolation)
+        );
+        assert_eq!(log, before_log);
+        assert_eq!(state, before);
+    }
 }

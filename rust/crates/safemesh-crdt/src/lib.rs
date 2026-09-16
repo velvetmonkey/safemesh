@@ -1102,7 +1102,7 @@ pub struct Record<D> {
 /// }
 ///
 /// let mut peer = EventLog::new();
-/// peer.append(7, 42u64);
+/// peer.append(&mut safemesh_crdt::GSet::new(), 7, 42u64);
 /// // Carry both collections over the application's transport.
 /// let prefixes = peer.version().entries().clone();
 /// let zeros = peer.version().zero_replicas().clone();
@@ -1220,11 +1220,14 @@ pub enum Admission {
     Accepted,
     Duplicate,
     Collision,
+    /// The record is outside the supplied carrier's domain.
+    Invalid(WireError),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AppendError {
     SequenceExhausted,
+    InvalidRecord(WireError),
 }
 
 /// Append-only, deduplicating event log for CRDT deltas.
@@ -1266,24 +1269,26 @@ impl<D> EventLog<D> {
         self.replica_count
     }
 
-    pub fn append(&mut self, replica: u64, delta: D) -> RecordId
+    pub fn append<C: Crdt<Delta = D>>(&mut self, state: &mut C, replica: u64, delta: D) -> RecordId
     where
         D: PartialEq,
     {
-        self.append_with(replica, delta, |_| {})
-            .expect("event log sequence exhausted")
+        self.append_with(state, replica, delta, |_, _| {})
+            .expect("event log append refused or sequence exhausted")
     }
 
     /// Allocate a fresh ID, then use the same gate as incoming records.
-    pub fn append_with<F>(
+    pub fn append_with<C, F>(
         &mut self,
+        state: &mut C,
         replica: u64,
         delta: D,
         apply: F,
     ) -> Result<RecordId, AppendError>
     where
         D: PartialEq,
-        F: FnOnce(&D),
+        C: Crdt<Delta = D>,
+        F: FnOnce(&mut C, &D),
     {
         let sequence = self
             .seen
@@ -1302,44 +1307,72 @@ impl<D> EventLog<D> {
             .checked_add(1)
             .ok_or(AppendError::SequenceExhausted)?;
         let id = RecordId { replica, sequence };
-        let outcome = self.admit_with(Record { id, delta }, apply);
+        let outcome = self.admit_with(state, Record { id, delta }, apply);
+        if let Admission::Invalid(error) = outcome {
+            return Err(AppendError::InvalidRecord(error));
+        }
         debug_assert_eq!(outcome, Admission::Accepted);
         Ok(id)
     }
 
-    pub fn merge_records<I>(&mut self, records: I) -> Vec<Admission>
+    pub fn merge_records<C: Crdt<Delta = D>, I>(&mut self, state: &C, records: I) -> Vec<Admission>
     where
         D: PartialEq,
         I: IntoIterator<Item = Record<D>>,
     {
-        records.into_iter().map(|r| self.insert_record(r)).collect()
+        records
+            .into_iter()
+            .map(|r| self.insert_record(state, r))
+            .collect()
     }
 
-    /// The sole record admission decision. Only Accepted invokes `apply`.
+    /// Validate against the destination carrier and check record identity.
+    /// Only Accepted invokes `apply`, with the same carrier used for validation.
+    /// An invalid fresh record leaves the log, version, and carrier unchanged.
+    /// Duplicate/Collision retain their identity verdicts, but also run validation.
     /// The callback must be infallible and use the same delta interpretation as
     /// replay. This is an in-memory transition, not a crash-durability guarantee.
     #[must_use]
-    pub fn admit_with<F>(&mut self, record: Record<D>, apply: F) -> Admission
+    pub fn admit_with<C, F>(&mut self, state: &mut C, record: Record<D>, apply: F) -> Admission
     where
         D: PartialEq,
-        F: FnOnce(&D),
+        C: Crdt<Delta = D>,
+        F: FnOnce(&mut C, &D),
     {
-        let outcome = self.admission(&record);
+        let outcome = self.admission(state, &record);
         if outcome != Admission::Accepted {
             return outcome;
         }
+        self.commit_record(record);
+        apply(state, &self.records.last().expect("accepted record").delta);
+        Admission::Accepted
+    }
+
+    // Only called after admission, or by the inert wire decoder after identity checks.
+    fn commit_record(&mut self, record: Record<D>) {
         let id = record.id;
         self.seen.insert(id, self.records.len());
         self.records.push(record);
         self.version.observe(id);
         self.advance_contiguous_version(id.replica);
-        apply(&self.records.last().expect("accepted record").delta);
-        Admission::Accepted
     }
 
     // Shared read-only decision for admission and transactional preflight.
     // Consult the identity index without copying any admitted payloads.
-    fn admission(&self, record: &Record<D>) -> Admission
+    fn admission<C: Crdt<Delta = D>>(&self, state: &C, record: &Record<D>) -> Admission
+    where
+        D: PartialEq,
+    {
+        let identity = self.identity_admission(record);
+        let validation = state.validate_record(record.id, &record.delta);
+        match (identity, validation) {
+            (Admission::Accepted, Err(error)) => Admission::Invalid(error),
+            (outcome, _) => outcome,
+        }
+    }
+
+    // Wire decoding has no carrier yet; checked loaders validate before replay.
+    fn identity_admission(&self, record: &Record<D>) -> Admission
     where
         D: PartialEq,
     {
@@ -1358,11 +1391,16 @@ impl<D> EventLog<D> {
         &self.records
     }
 
-    pub fn insert_record(&mut self, record: Record<D>) -> Admission
+    /// Admit without applying; `state` must be the carrier used for later replay.
+    pub fn insert_record<C: Crdt<Delta = D>>(&mut self, state: &C, record: Record<D>) -> Admission
     where
         D: PartialEq,
     {
-        self.admit_with(record, |_| {})
+        let outcome = self.admission(state, &record);
+        if outcome == Admission::Accepted {
+            self.commit_record(record);
+        }
+        outcome
     }
 
     fn advance_contiguous_version(&mut self, replica: u64) {
@@ -2178,13 +2216,28 @@ fn frame_crc32(bytes: &[u8]) -> u32 {
 // then verify the CRC before decoding any record or invoking a payload decoder.
 impl<D: WireEncode + WireSchema> WireEncode for EventLog<D> {
     fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
-        if D::REQUIRES_ARITY && self.replica_count.is_none() {
+        Self::encode_records(self.replica_count, &self.records, out)
+    }
+}
+
+impl<D: WireEncode + WireSchema> EventLog<D> {
+    /// Encode an inert batch without admitting it into a live log.
+    ///
+    /// This preserves input occurrences, including duplicates and invalid records.
+    /// Receivers must use `records_from_wire_bytes_for` or `from_wire_bytes_for`
+    /// before applying the payload. Encoding does not validate a CRDT domain.
+    pub fn encode_records(
+        replica_count: Option<usize>,
+        records: &[Record<D>],
+        out: &mut Vec<u8>,
+    ) -> Result<(), WireError> {
+        if D::REQUIRES_ARITY && replica_count.is_none() {
             return Err(WireError::MissingShape);
         }
         let mut body = Vec::new();
         write_u32(&mut body, u32::MAX);
         write_bytes(&mut body, &D::wire_schema())?;
-        match self.replica_count {
+        match replica_count {
             Some(count) => {
                 write_u8(&mut body, 1);
                 write_u64(
@@ -2194,8 +2247,8 @@ impl<D: WireEncode + WireSchema> WireEncode for EventLog<D> {
             }
             None => write_u8(&mut body, 0),
         }
-        write_len(&mut body, self.records.len())?;
-        for record in &self.records {
+        write_len(&mut body, records.len())?;
+        for record in records {
             write_bytes(&mut body, &record.to_wire_bytes()?)?;
         }
         let len = u32::try_from(body.len()).map_err(|_| WireError::LengthOverflow)?;
@@ -2256,8 +2309,11 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
             let record_bytes = body.read_exact(record_len)?;
             let record = Record::<D>::from_wire_bytes(record_bytes)?;
             occurrence(&record);
-            if log.insert_record(record) == Admission::Collision {
-                return Err(WireError::RecordCollision);
+            match log.identity_admission(&record) {
+                Admission::Collision => return Err(WireError::RecordCollision),
+                Admission::Accepted => log.commit_record(record),
+                Admission::Duplicate => {}
+                Admission::Invalid(_) => unreachable!("identity check does not validate a carrier"),
             }
         }
         if !body.is_empty() {
@@ -2740,7 +2796,10 @@ mod frame_tests {
                         },
                         delta: 7u64,
                     };
-                    assert_eq!(log.insert_record(r.clone()), Admission::Accepted);
+                    assert_eq!(
+                        log.insert_record(&GSet::<u64>::new(), r.clone()),
+                        Admission::Accepted
+                    );
                     let mut version = VersionVector::new();
                     // Exercise saturated prefixes without allocating 2^64 records.
                     version.set(author, prefix);
@@ -2794,12 +2853,8 @@ mod frame_tests {
             name: &str,
             deltas: [D; 2],
         ) {
-            let mut log = if D::REQUIRES_ARITY {
-                EventLog::with_replica_count(2)
-            } else {
-                EventLog::new()
-            };
-            log.records = deltas
+            let shape = D::REQUIRES_ARITY.then_some(2);
+            let records: Vec<_> = deltas
                 .into_iter()
                 .map(|delta| Record {
                     id: RecordId {
@@ -2809,7 +2864,8 @@ mod frame_tests {
                     delta,
                 })
                 .collect();
-            let bytes = log.to_wire_bytes().unwrap();
+            let mut bytes = Vec::new();
+            EventLog::encode_records(shape, &records, &mut bytes).unwrap();
             assert!(matches!(
                 EventLog::<D>::from_wire_bytes(&bytes),
                 Err(WireError::RecordCollision)
@@ -2881,12 +2937,12 @@ mod frame_tests {
         }
     }
 
-    // Deliberately bypass admission to exercise the decoder's collision gate.
+    // Encode conflicting occurrences as inert input to the decoder's collision gate.
     // The production encoder derives all frame bytes, lengths and checksums.
     fn wire_log(records: &[Record<GCounterDelta>]) -> Vec<u8> {
-        let mut log = EventLog::with_replica_count(2);
-        log.records = records.to_vec();
-        log.to_wire_bytes().unwrap()
+        let mut bytes = Vec::new();
+        EventLog::encode_records(Some(2), records, &mut bytes).unwrap();
+        bytes
     }
     #[test]
     fn decoder_surfaces_conflicts_before_deduplication() {
@@ -2994,7 +3050,7 @@ mod version_vector_tests {
         let mut log = EventLog::new();
         for sequence in 1..=1_000_001 {
             assert_eq!(
-                log.append(0, sequence),
+                log.append(&mut GSet::<u64>::new(), 0, sequence),
                 RecordId {
                     replica: 0,
                     sequence
@@ -3023,10 +3079,13 @@ mod version_vector_tests {
             sequence: u64::MAX,
         };
         assert_eq!(
-            log.insert_record(Record {
-                id: last,
-                delta: 7u64
-            }),
+            log.insert_record(
+                &GSet::<u64>::new(),
+                Record {
+                    id: last,
+                    delta: 7u64
+                }
+            ),
             Admission::Accepted
         );
         assert_eq!(log.version().get(0), u64::MAX);
@@ -3052,7 +3111,7 @@ mod version_vector_tests {
             sequence: 0
         }));
         assert_eq!(
-            log.append_with(0, 8, |_| {}),
+            log.append_with(&mut GSet::<u64>::new(), 0, 8, |_, _| {}),
             Err(AppendError::SequenceExhausted)
         );
     }
@@ -3112,10 +3171,13 @@ mod version_vector_tests {
                 for sequence in sequences {
                     let id = RecordId { replica, sequence };
                     assert_eq!(
-                        local.insert_record(Record {
-                            id,
-                            delta: sequence
-                        }),
+                        local.insert_record(
+                            &GSet::<u64>::new(),
+                            Record {
+                                id,
+                                delta: sequence
+                            }
+                        ),
                         Admission::Accepted
                     );
                 }
@@ -3141,8 +3203,8 @@ mod version_vector_tests {
     #[test]
     fn refused_peer_map_leaves_since_on_previous_version_unchanged() {
         let mut local = EventLog::new();
-        let acknowledged = local.append(7, 10u64);
-        let missing = local.append(7, 20u64);
+        let acknowledged = local.append(&mut GSet::<u64>::new(), 7, 10u64);
+        let missing = local.append(&mut GSet::<u64>::new(), 7, 20u64);
         let remote_version =
             VersionVector::from_peer_prefixes(&BTreeMap::from([(7, 1)]), &BTreeSet::new()).unwrap();
         let before = local.since(&remote_version);
@@ -3195,7 +3257,7 @@ mod version_vector_tests {
             },
         ] {
             assert_eq!(
-                local.insert_record(Record { id, delta: 7u64 }),
+                local.insert_record(&GSet::<u64>::new(), Record { id, delta: 7u64 }),
                 Admission::Accepted
             );
         }

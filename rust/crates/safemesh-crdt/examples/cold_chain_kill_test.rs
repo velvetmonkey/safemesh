@@ -135,7 +135,9 @@ impl Replica {
 
     fn emit(&mut self, delta: ColdChainDelta) {
         self.log
-            .append_with(self.id, delta, |delta| self.state.apply(delta.clone()))
+            .append_with(&mut self.state, self.id, delta, |state, delta| {
+                state.apply(delta.clone())
+            })
             .expect("event log sequence exhausted");
     }
 
@@ -155,7 +157,9 @@ impl Replica {
         for record in records {
             let outcome = self
                 .log
-                .admit_with(record, |delta| self.state.apply(delta.clone()));
+                .admit_with(&mut self.state, record, |state, delta| {
+                    state.apply(delta.clone())
+                });
             assert_ne!(
                 outcome,
                 safemesh_crdt::Admission::Collision,
@@ -410,5 +414,34 @@ mod tests {
                 event_count: 4,
             }
         );
+    }
+}
+
+impl safemesh_crdt::Mergeable for ColdChainState {
+    fn merge(&mut self, other: &Self) {
+        self.samples.merge(&other.samples);
+        self.custody.merge(&other.custody);
+        self.alerts.merge(&other.alerts);
+        self.audit.merge(&other.audit);
+        self.event_count.merge(&other.event_count);
+    }
+}
+impl safemesh_crdt::Crdt for ColdChainState {
+    type Delta = ColdChainDelta;
+    fn validate_record(
+        &self,
+        id: safemesh_crdt::RecordId,
+        delta: &Self::Delta,
+    ) -> Result<(), safemesh_crdt::WireError> {
+        match delta {
+            ColdChainDelta::Sample(d) => self.samples.validate_record(id, d),
+            ColdChainDelta::Custody(d) => self.custody.validate_record(id, d),
+            ColdChainDelta::Alert(d) => self.alerts.validate_record(id, d),
+            ColdChainDelta::Audit(d) => self.audit.validate_record(id, d),
+            ColdChainDelta::Count(d) => self.event_count.validate_record(id, d),
+        }
+    }
+    fn apply_delta(&mut self, delta: Self::Delta) {
+        self.apply(delta);
     }
 }
