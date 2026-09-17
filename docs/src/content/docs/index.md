@@ -89,5 +89,5 @@ The linked repository documents follow the development branch and remain the sou
 
 ## Use this site
 
-Search covers these navigation guides; it does not index the contents of the linked GitHub documents.
+Site search covers all guides and the generated Rust reference, including source pages; it does not index the contents of linked GitHub documents. Rustdoc provides a separate item search for Rust items.
 The Lab entry opens the Lab at the address chosen when this documentation site is built; the hosted site includes the Lab under its own `lab/` path.
