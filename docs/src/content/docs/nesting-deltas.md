@@ -6,21 +6,7 @@ description: A compiled Rust composition pattern using public wire APIs and name
 **v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
 
 
-SafeMesh's Rust crate floor for consumers is **Rust 1.89**. For the source builds,
-demos and locked wasm-pack 0.15.0 installation on this page, use **Rust 1.96.1**,
-the full-gate CI version. Install rustup first (Linux/Bash, with curl and a native
-C compiler/linker), then select that toolchain:
-
-```sh
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.96.1
-. "$HOME/.cargo/env"
-rustup default 1.96.1
-```
-
-The default applies to your user account; the repository's `rust-toolchain.toml`
-also selects 1.96.1 inside this checkout. An outside application's toolchain remains
-its own choice; consuming the crate requires at least 1.89.
-
+## Framing and layout
 
 Use a length prefix around each delta's `to_wire_bytes()` output, then decode each bounded slice with that delta type's `from_wire_bytes()`. Public `WireCursor` reads and Rust's `u32::to_le_bytes` / `Vec::extend_from_slice` already provide everything required, so no new SafeMesh write helper or knowledge of inner byte layouts is needed.
 
@@ -36,11 +22,32 @@ The three public delta types used here are imported from `safemesh_crdt`. Constr
 
 Counter tallies are absolute values for the selected replica component, not amounts to add or subtract. `Inc` selects the positive component and `Dec` the negative component. Each of these types implements `WireEncode` and `WireDecode`; use the same framing helpers for any of them, preserving the agreed field order. For example, a two-field record can keep only `item: OrSetDelta<String, u64>` and `adjustment: PnCounterDelta`, writing and reading exactly those two fields in that order.
 
+## Prerequisites and run command
+
+See [Getting started: Before you start](/safemesh/getting-started/#before-you-start) for toolchain setup and checkout instructions.
+
+SafeMesh's Rust crate floor for consumers is **Rust 1.89**. For the source builds,
+demos and locked wasm-pack 0.15.0 installation on this page, use **Rust 1.96.1**,
+the full-gate CI version. Install rustup first (Linux/Bash, with curl and a native
+C compiler/linker), then select that toolchain:
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.96.1
+. "$HOME/.cargo/env"
+rustup default 1.96.1
+```
+
+The default applies to your user account; the repository's `rust-toolchain.toml`
+also selects 1.96.1 inside this checkout. An outside application's toolchain remains
+its own choice; consuming the crate requires at least 1.89.
+
 From the checkout's `rust/` directory, run the complete public-API example:
 
 ```sh
 cargo run -p safemesh-crdt --example nested_deltas --locked
 ```
+
+## Complete example
 
 The source is [`nested_deltas.rs`](https://github.com/velvetmonkey/safemesh/blob/5c0b3bb1d21b85bc2c66e0611b838b14ea8f738f/rust/crates/safemesh-crdt/examples/nested_deltas.rs). It checks all decoded values, both OR-Set and both PN-Counter variants, every truncated prefix, and the failures below. The complete copyable program is:
 
