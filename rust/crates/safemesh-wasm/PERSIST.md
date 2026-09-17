@@ -1,5 +1,9 @@
 # Persist, restore, partition and reconcile (TypeScript / Node)
 
+This caller-token example is an alternative for applications that intentionally
+own token allocation. For the recommended allocated-writer save/new-process
+restore path, follow the [TypeScript gold path](https://velvetmonkey.github.io/safemesh/getting-started/#typescript-gold-path-node).
+
 **v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](https://velvetmonkey.github.io/safemesh/#v0-support).
 
 
