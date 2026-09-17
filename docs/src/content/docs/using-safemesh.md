@@ -388,6 +388,15 @@ try {
 }
 ```
 
+**Storage and ownership contract:** persist the latest complete identity export
+with your storage after every local or peer edit, before acknowledging the edit
+or exporting its record/log bytes to peers. The API does **not** make storage
+atomic, and a **self-consistent stale snapshot is not detected** on import.
+Live-author checks apply only within the same WASM instance; the caller must
+ensure **one live writer per author** across instances, tabs and processes.
+v0 provides no shared browser lock or cross-tab/process fencing, and exporting
+an identity does not stop its live writer.
+
 `exportIdentity()` includes writer count, author, next sequence and the complete
 log in one local storage container. It does not change record or log wire bytes.
 The **allocation/history consistency check** on `importIdentity(bytes)` validates
@@ -546,13 +555,7 @@ package directory whole. Handles require `free()`; `finally` releases them even
 when a check throws. The locked build dependencies are installed by the first-use
 commands; there is no SafeMesh registry dependency.
 
-For the allocated path above, the caller must run **one live writer per author**
-across WASM instances, tabs and processes. SafeMesh's live-author check is local
-to one WASM instance; v0 has no shared browser lock or cross-tab/process fencing.
-A **self-consistent stale snapshot is not detected**. Persist the complete latest
-identity export with your storage before relying on it for restart; the API does
-not make storage atomic and an export does not stop its live writer. The legacy
-constructor does not acquire an allocated-author claim.
+The legacy constructor does not acquire an allocated-author claim.
 
 Unlike the Rust durable adapter, these replica classes do not provide writer
 fencing or atomic disk persistence. The fixture assumes one live process per
