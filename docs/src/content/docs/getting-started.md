@@ -25,8 +25,9 @@ to your chosen path; the optional Rust exercises are separate from the Node rout
 
 SafeMesh's Rust crate floor for consumers is **Rust 1.89**. For the source builds,
 demos and locked wasm-pack 0.15.0 installation on this page, use **Rust 1.96.1**,
-the full-gate CI version. Install rustup first (Linux/Bash, with curl and a native
-C compiler/linker), then select that toolchain:
+the prescribed toolchain for this guide and the full-gate CI version. Install
+rustup first (Linux/Bash, with curl and a native C compiler/linker), then select
+that toolchain:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.96.1
@@ -280,9 +281,20 @@ malformed input and check your record framing. Every WASM handle is freed in
 
 ## Environments run
 
-Measured on 11 September 2026; this is execution evidence, not a support pledge.
+Install the prescribed Rust 1.96.1 toolchain above for builds now. The measurements
+below are execution evidence, not a support pledge.
+
+The table records the historical measurement from 11 September 2026; its Rust
+1.98.1 entries describe the toolchain used for that run, not the toolchain to
+install now. The original measurement was reported at source revision
+[`2b0813ffbaf69148e4f5822daedb1e221ee01ed1`](https://github.com/velvetmonkey/safemesh/commit/2b0813ffbaf69148e4f5822daedb1e221ee01ed1)
+([first-use journeys PR #87](https://github.com/velvetmonkey/safemesh/pull/87));
+no CI run identifier was recorded for that local measurement.
+
 The allocated TypeScript journey was rerun on 17 September 2026 with Rust 1.96.1,
 wasm-pack 0.15.0, TypeScript 6.0.3, Node 22.22.3 and npm 10.9.8 on Linux x86_64.
+This later rerun is separate from the historical measurement in the table.
+
 The checkout’s `scripts/check-gold-paths.py` compares values, output and the
 source blocks on these pages in the
 [documentation workflow](https://github.com/velvetmonkey/safemesh/blob/main/.github/workflows/docs.yml).
@@ -291,7 +303,7 @@ source blocks on these pages in the
 | --- | --- | --- |
 | API present | Counter, UTF-8 OR-Set, durable local writer | Counter and UTF-8 OR-Set record/log binding |
 | Artifact available | Source path dependency, no registry release | Locally built Node WASM directory, no registry release |
-| Build checked | Linux x86_64, Rust 1.98.1 | Linux x86_64, Rust 1.98.1, wasm-pack 0.15.0, TypeScript 6.0.3 |
+| Build checked (historical toolchain) | Linux x86_64, Rust 1.98.1 | Linux x86_64, Rust 1.98.1, wasm-pack 0.15.0, TypeScript 6.0.3 |
 | Runtime tested | Ubuntu 24.04.4, native executable | Ubuntu 24.04.4, Node 22.22.3, npm 10.9.8 |
 | Integration tested | Edit, disk commit, process restart, new edit, byte exchange, malformed record | Edit, file save, process reload, new edit, byte exchange, malformed record |
 | Maintainer-supported | Unknown | Unknown |
