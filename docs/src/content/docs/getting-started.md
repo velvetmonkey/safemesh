@@ -16,6 +16,11 @@ There is no published SafeMesh package to install. The Rust and TypeScript progr
 are complete consumer fixtures, separate from the library workspace; their code,
 commands and stdout are checked by the existing documentation CI job.
 
+Choose the [Rust path](#rust-gold-path) for Linux durable storage or the
+[TypeScript path (Node)](#typescript-gold-path-node) for caller-owned Node storage.
+Complete [Before you start](#before-you-start) for either route, then jump directly
+to your chosen path; the optional Rust exercises are separate from the Node route.
+
 ## Before you start
 
 SafeMesh's Rust crate floor for consumers is **Rust 1.89**. For the source builds,
@@ -121,7 +126,9 @@ consistent history with its original identity and allocation metadata. Do not
 initialize over the damaged store. These are tested engineering outcomes, not
 proofs of crash safety. See the [recovery evidence](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md).
 
-## Predict, then run: a concurrent add and remove
+<a id="predict-then-run-a-concurrent-add-and-remove"></a>
+
+## Predict, then run: a concurrent add and remove (optional)
 
 Predict whether `milk` remains after one replica removes its observed token while
 another adds `milk` with a fresh token. Then replace the Rust gold-path fixture's
@@ -159,7 +166,9 @@ are fixed for this one-shot example. A real mutable writer must allocate unique
 tokens and preserve identity/allocation on restart as described in the
 [OR-Set lifecycle guide](/safemesh/using-safemesh/#rust).
 
-## Decrement with supported types
+<a id="decrement-with-supported-types"></a>
+
+## Decrement with supported types (optional)
 
 PN-Counter is **experimental** in v0. Use two supported G-Counters for stock:
 one totals additions and the other totals removals. Replace the same disposable
