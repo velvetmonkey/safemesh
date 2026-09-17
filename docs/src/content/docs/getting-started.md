@@ -209,7 +209,7 @@ Restore the original fixture source before running its `persist`/`restart` journ
 
 ## TypeScript gold path (Node)
 
-The complete application is in `examples/gold-path/typescript/`. Build the Node
+The recommended allocated-writer application is in `examples/gold-path/typescript/`. Build the Node
 WASM package locally, install the fixture's locked TypeScript build dependencies,
 compile against the generated declarations, and run the two processes:
 
@@ -233,6 +233,7 @@ saved counter=3 members=[compass]
 restored counter=3 members=[compass]
 synced counter=6 members=[compass,map,rope] records=3+3
 malformed record: SafeMeshError: failed to decode record
+saved latest identity members=[compass,map,rope] local-sequence=2
 cleaned exercise stores
 ```
 <!-- /gold -->
@@ -244,12 +245,24 @@ The import loads the generated Node CommonJS package synchronously; there is no
 `tsc` emits `main.js` only if compilation succeeds. Values passed to Rust `u64`
 parameters are `bigint` (`3n`), and exchanged bytes are `Uint8Array`.
 
-This Node program writes complete logs with `writeFileSync` and reloads them in a
-new process before making more edits. It demonstrates an **ordinary, single-writer
-restart**, with no crash-safe commit or writer fencing. The application owns
-storage and globally unique add tokens (`10n`, `11n`, `20n` here); never clone a
-writer or resume an old backup as a live writer. Rust's durable adapter is not
-exported by this binding. Two log writes are not an atomic pair.
+This Node program writes the counter log and the set's complete
+`exportIdentity()` bytes with `writeFileSync`. The second process calls
+`importIdentity()` before adding `map`: Rust allocates token `4` after
+`compass`'s token `2`; the peer's `rope` gets token `3`. After every set
+edit or peer merge, the program saves the latest identity before acknowledging
+or exchanging edits. It reloads the final saved identity to check that both the
+new add and peer history were persisted, then releases all handles and deletes
+only these disposable exercise files.
+
+It demonstrates an **ordinary, single-writer restart**, with no crash-safe commit
+or writer fencing. The application owns storage and exclusive author assignment;
+never clone a writer or resume an old backup as a live writer. Missing or invalid
+identity data stops the program; do not fall back to `createAllocated()`.
+Rust's durable adapter is not exported by this binding. The separate file writes
+are not an atomic transaction, and `writeFileSync` is not a crash-safe commit.
+The [full storage and refusal contract](/safemesh/using-safemesh/#wasm--typescript)
+also applies. The legacy caller-token API is an alternative for applications
+that intentionally own token allocation; it is not this recommended path.
 
 The fixture passes an empty `Uint8Array` to `mergeRecordBytes`, catches the real
 `SafeMeshError: failed to decode record`, and asserts no log mutation. Reject the
@@ -259,6 +272,8 @@ malformed input and check your record framing. Every WASM handle is freed in
 ## Environments run
 
 Measured on 11 September 2026; this is execution evidence, not a support pledge.
+The allocated TypeScript journey was rerun on 17 September 2026 with Rust 1.96.1,
+wasm-pack 0.15.0, TypeScript 6.0.3, Node 22.22.3 and npm 10.9.8 on Linux x86_64.
 The checkout’s `scripts/check-gold-paths.py` compares values, output and the
 source blocks on these pages in the
 [documentation workflow](https://github.com/velvetmonkey/safemesh/blob/main/.github/workflows/docs.yml).

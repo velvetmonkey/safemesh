@@ -1,4 +1,5 @@
 restored counter=3 members=[compass]
 synced counter=6 members=[compass,map,rope] records=3+3
 malformed record: SafeMeshError: failed to decode record
+saved latest identity members=[compass,map,rope] local-sequence=2
 cleaned exercise stores

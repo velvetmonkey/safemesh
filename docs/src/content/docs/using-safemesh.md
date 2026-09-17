@@ -360,33 +360,10 @@ The C ABI has carrier operations and a G-Counter delta-to-wire helper, **no repl
 
 For new UTF-8 OR-Set writers, use the allocated path. SafeMesh fixes the writer
 count and author at creation and allocates each add token through the Rust core.
-Build the Node package using the [TypeScript install commands](/safemesh/getting-started/#typescript-gold-path-node),
-then use its generated declarations:
-
-```ts
-import { SafeMeshStringOrSetReplica as Members } from "./pkg/safemesh_wasm";
-
-const left = Members.createAllocated(2n, 0n);
-left.appendAllocatedAdd("compass");
-const saved = left.exportIdentity(); // persist these bytes with your storage
-left.free(); // releases this WASM instance's live-author claim
-
-// Load the saved bytes on restart. Missing/invalid data throws; do not catch
-// that error and call createAllocated as a fallback.
-const restored = Members.importIdentity(saved);
-const peer = Members.createAllocated(2n, 1n);
-try {
-  restored.appendAllocatedAdd("map"); // no token cursor in the application
-  restored.appendRemoveObserved("compass");
-  restored.mergeRecordBytes(peer.appendAllocatedAdd("compass"));
-  console.log(restored.elements()); // ["compass", "map"]
-  const updated = restored.exportIdentity(); // persist after every local/peer edit
-  void updated;
-} finally {
-  restored.free();
-  peer.free();
-}
-```
+Follow the [TypeScript gold path](/safemesh/getting-started/#typescript-gold-path-node)
+to build the Node package and run the complete program below in two processes.
+It saves an identity file, imports it in the new process, allocates another add,
+and saves and checks the latest identity before releasing the handles.
 
 **Storage and ownership contract:** persist the latest complete identity export
 with your storage after every local or peer edit, before acknowledging the edit
@@ -420,7 +397,12 @@ caller tokens into an allocated writer makes subsequent allocated writes and
 identity export refuse the consistency check. Python and C numeric OR-Set paths
 continue to use caller-owned tokens.
 
-The following existing gold path exercises the legacy caller-token API:
+The legacy constructor and `appendAdd(element, token)` are an alternative for
+callers who intentionally own token allocation, not the recommended path for new
+writers. The [caller-token persistence walkthrough](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-wasm/PERSIST.md)
+demonstrates that alternative.
+
+The following gold path exercises the recommended allocated-writer API:
 
 Run the [TypeScript gold path](/safemesh/getting-started/#typescript-gold-path-node)
 to build the local Node package, compile this program with `tsc` and execute it.
@@ -430,7 +412,7 @@ The checkout’s `examples/gold-path/typescript/` contains these exact files,
 `main.ts` directly.
 
 <details>
-<summary>Complete legacy caller-token TypeScript program</summary>
+<summary>Complete allocated-writer TypeScript program</summary>
 
 <!-- gold:source ts:typescript/main.ts -->
 ```ts
@@ -441,8 +423,9 @@ import { SafeMeshGCounterReplica as Counter, SafeMeshStringOrSetReplica as Membe
 // tsc checks these imports against the generated package's .d.ts, with no `any` shim.
 const step = process.argv[2];
 const root = ".gold-typescript";
-const counter = new Counter(0n, 2);
-const members = new Members(0n);
+assert(["persist", "restart"].includes(step), "pass persist or restart");
+let counter: Counter | undefined;
+let members: Members | undefined;
 function memberState(replica: Members) {
   const entries = replica.addEntries();
   try {
@@ -458,35 +441,45 @@ function accepted(verdicts: ("accepted" | "duplicate" | "collision")[]) {
   assert(!verdicts.includes("collision"), `record collision: ${verdicts}`);
 }
 try {
+  counter = new Counter(0n, 2);
   if (step === "persist") {
     mkdirSync(root); // refuse to overwrite an existing exercise
+    members = Members.createAllocated(2n, 0n);
     counter.appendBump(0, 3n);
-    members.appendAdd("compass", 10n); // application-owned unique token
+    members.appendAllocatedAdd("compass"); // Rust allocates token 2
     writeFileSync(`${root}/counter.log`, counter.logBytes());
-    writeFileSync(`${root}/members.log`, members.logBytes());
+    writeFileSync(`${root}/members.identity`, members.exportIdentity());
     assert.equal(counter.value(), 3n);
     assert.deepEqual(members.elements(), ["compass"]);
     console.log("saved counter=3 members=[compass]");
   } else {
     assert.equal(step, "restart", "pass persist or restart");
-    // Single-writer exercise: restore the complete logs before allocating new edits.
+    // No fallback to a new identity if the saved file is missing or invalid.
+    members = Members.importIdentity(readFileSync(`${root}/members.identity`));
     accepted(counter.mergeLogBytes(readFileSync(`${root}/counter.log`)));
-    accepted(members.mergeLogBytes(readFileSync(`${root}/members.log`)));
     assert.equal(counter.value(), 3n);
     assert.deepEqual(members.elements(), ["compass"]);
     console.log("restored counter=3 members=[compass]");
     counter.appendBump(0, 4n); // new cumulative tally, not +4
-    members.appendAdd("map", 11n); // different from every previous add token
-    const peerCounter = new Counter(1n, 2);
-    const peerMembers = new Members(1n);
+    members.appendAllocatedAdd("map"); // restored allocation produces token 4
+    writeFileSync(`${root}/counter.log`, counter.logBytes());
+    writeFileSync(`${root}/members.identity`, members.exportIdentity());
+    let peerCounter: Counter | undefined;
+    let peerMembers: Members | undefined;
     try {
+      peerCounter = new Counter(1n, 2);
+      peerMembers = Members.createAllocated(2n, 1n);
       peerCounter.appendBump(1, 2n);
-      peerMembers.appendAdd("rope", 20n);
+      peerMembers.appendAllocatedAdd("rope"); // Rust allocates token 3
+      writeFileSync(`${root}/peer.identity`, peerMembers.exportIdentity());
       // Your transport delivers these Uint8Arrays; this exercise hands them across.
       accepted(peerCounter.mergeLogBytes(counter.logBytes()));
       accepted(peerMembers.mergeLogBytes(members.logBytes()));
+      writeFileSync(`${root}/peer.identity`, peerMembers.exportIdentity());
       accepted(counter.mergeLogBytes(peerCounter.logBytes()));
       accepted(members.mergeLogBytes(peerMembers.logBytes()));
+      writeFileSync(`${root}/counter.log`, counter.logBytes());
+      writeFileSync(`${root}/members.identity`, members.exportIdentity());
       assert.equal(counter.value(), 6n);
       assert.deepEqual(members.elements(), ["compass", "map", "rope"]);
       assert(counter.sameStateAs(peerCounter));
@@ -495,14 +488,15 @@ try {
       assert.deepEqual(counter.mergeLogBytes(peerCounter.logBytes()), ["duplicate", "duplicate", "duplicate"]);
       assert.deepEqual(members.mergeLogBytes(peerMembers.logBytes()), ["duplicate", "duplicate", "duplicate"]);
       assert.deepEqual(memberState(members), memberState(peerMembers));
-      assert.deepEqual(memberState(members), { adds: ["compass:10", "map:11", "rope:20"], tombstones: [] });
+      assert.deepEqual(memberState(members), { adds: ["compass:2", "map:4", "rope:3"], tombstones: [] });
       for (const replica of [counter, members, peerCounter, peerMembers]) {
         assert.equal(replica.versionFor(0n), 2n);
         assert.equal(replica.versionFor(1n), 1n);
       }
       console.log("synced counter=6 members=[compass,map,rope] records=3+3");
       const before = counter.logBytes();
-      assert.throws(() => counter.mergeRecordBytes(new Uint8Array()), (error: unknown) => {
+      const malformedTarget = counter;
+      assert.throws(() => malformedTarget.mergeRecordBytes(new Uint8Array()), (error: unknown) => {
         assert(error instanceof Error);
         assert.equal(error.name, "SafeMeshError");
         assert.equal(error.message, "failed to decode record");
@@ -511,17 +505,31 @@ try {
       });
       assert.deepEqual(counter.logBytes(), before);
     } finally {
-      peerCounter.free();
-      peerMembers.free();
+      peerCounter?.free();
+      peerMembers?.free();
     }
+    // Release the claim, then verify the latest file, including the post-restart add.
+    const latest = memberState(members);
+    members.free();
+    members = undefined;
+    members = Members.importIdentity(readFileSync(`${root}/members.identity`));
+    assert.deepEqual(memberState(members), latest);
+    assert.equal(members.versionFor(0n), 2n);
+    assert.equal(members.versionFor(1n), 1n);
+    console.log("saved latest identity members=[compass,map,rope] local-sequence=2");
+    counter.free();
+    counter = undefined;
+    members.free();
+    members = undefined;
     unlinkSync(`${root}/counter.log`);
-    unlinkSync(`${root}/members.log`);
+    unlinkSync(`${root}/members.identity`);
+    unlinkSync(`${root}/peer.identity`);
     rmdirSync(root);
     console.log("cleaned exercise stores");
   }
 } finally {
-  counter.free();
-  members.free();
+  counter?.free();
+  members?.free();
 }
 ```
 <!-- /gold -->
@@ -559,8 +567,8 @@ The legacy constructor does not acquire an allocated-author claim.
 
 Unlike the Rust durable adapter, these replica classes do not provide writer
 fencing or atomic disk persistence. The fixture assumes one live process per
-writer, a complete log from an ordinary exit, fixed counter width and unique add
-tokens chosen by the application. It does not authorize restoring an old backup
+writer, a complete identity export from an ordinary exit and fixed counter width.
+Rust allocates the set tokens from the saved writer configuration and sequence. It does not authorize restoring an old backup
 or cloning a live writer. Check every batch's admission verdicts: a collision can
 follow an already accepted prefix. Never apply rejected payloads yourself.
 
