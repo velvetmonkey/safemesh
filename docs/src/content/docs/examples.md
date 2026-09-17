@@ -69,7 +69,15 @@ The final stdout line is:
   CONVERGED=true counter=3 supplies={42} text_positions={10}
 ```
 
-The preceding stages show reversed delivery, duplicate replay, and anti-entropy heal.
+The preceding stages connect each modeled fault to an observable result:
+
+| Injected fault (output stage) | Expected temporary disagreement or unchanged state | Repair action | Resulting observation |
+| --- | --- | --- | --- |
+| `[2/5] Cut the mesh`: `delivery_order=reversed`, with 8 records delivered within partitions. | Reversing delivery puts C's removal of supply token 200 before its add at D. The removal must still suppress token 200; D's concurrent token 201 keeps supply 42 present. | No ordering repair is needed: the OR-Set retains the removal of token 200. | `[3/5]` prints `supplies={42}` for both C and D. |
+| `[2/5] Cut the mesh`: `dropped_cross_partition=16` across A,B and C,D. | A/B lack supply records; C/D lack the counter bumps, text insert at 10, and delete at 30. | `[4/5] Heal with anti-entropy`: `anti_entropy=all_to_all_merge coverage=same_modeled_record_set_after_heal`. | `[3/5]` prints `converged_during_partition=false`: A/B have `counter=3 supplies={} text_positions={10}`; C/D have `counter=0 supplies={42} text_positions={30}`. After repair, `[5/5]` prints `counter=3 supplies={42} text_positions={10}` for all four replicas. |
+| `[3/5] Replay a duplicate`: `duplicate=A -> B event=gcounter.bump(0,1) effect=idempotent`. | B's counter stays at 3: a bump carries a per-replica tally, merged by maximum, so replaying tally 1 does not add another increment. | None for the duplicate; `[4/5]` repairs the missing cross-partition records. | The `[3/5]` partition snapshot still shows B at `counter=3`; every `[5/5]` final snapshot also has `counter=3`. |
+
+These observations exercise modeled merge behavior; they do not prove real transport delivery.
 
 ## Python: cold-chain data mule
 
