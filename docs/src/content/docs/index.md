@@ -9,8 +9,16 @@ Bindings, storage and transport are outside that proof. See the [claims ceiling]
 It is for developers building state-sync systems who bring the transport and application schema.
 This page follows **main (unreleased)**, rather than a release manual.
 
-Try the [Rust break-it walkthrough](/safemesh/examples/): it partitions replicas, drops, duplicates,
-and reorders messages, heals with anti-entropy, and finishes with `CONVERGED=true`.
+## Primary path
+
+1. **Fault exploration — start here:** build and run the [Rust break-it walkthrough](/safemesh/examples/)
+   from **main (unreleased) source** with Rust/Cargo and a native C compiler/linker
+   (no Lean build needed) to partition replicas, drop, duplicate and reorder messages,
+   then heal with anti-entropy and finish with `CONVERGED=true`.
+2. **Integration:** follow [Get started](/safemesh/getting-started/) to save an edit,
+   restart and sync a second replica in a complete Rust or TypeScript program.
+3. **Assurance review:** [Understand the proof](/safemesh/proof/) before deciding
+   whether its guarantees and assumptions fit your application.
 
 
 ## v0 support
@@ -60,11 +68,11 @@ Application schemas, custom durable replicas and delivery/retry/storage remain c
 
 ## Start with a result
 
-1. [Get started](/safemesh/getting-started/): prepare a local experiment and recognize its first successful result.
-2. [Learn the concepts](/safemesh/concepts/): replicas, deltas, convergence and the five Lean-backed carriers.
-3. [Understand the proof](/safemesh/proof/): what Lean establishes and what remains tested or assumed.
-4. [Use SafeMesh in your code](/safemesh/using-safemesh/): Rust, C ABI, WASM/TypeScript and Python, with caller responsibilities.
-5. [Check the limits](/safemesh/limits/): decide whether the semantics and assurance fit your application.
+1. **Integration:** [Get started](/safemesh/getting-started/): prepare a local experiment and recognize its first successful result.
+2. **Assurance review:** [Learn the concepts](/safemesh/concepts/): replicas, deltas, convergence and the five Lean-backed carriers.
+3. **Assurance review:** [Understand the proof](/safemesh/proof/): what Lean establishes and what remains tested or assumed.
+4. **Integration:** [Use SafeMesh in your code](/safemesh/using-safemesh/): Rust, C ABI, WASM/TypeScript and Python, with caller responsibilities.
+5. **Assurance review:** [Check the limits](/safemesh/limits/): decide whether the semantics and assurance fit your application.
 
 ## Orientation and source map
 
@@ -73,11 +81,11 @@ The linked repository documents follow the development branch and remain the sou
 
 ## Choose a starting point
 
-- [Project entrypoint](https://github.com/velvetmonkey/safemesh/blob/main/README.md): start with the repository's current status and package instructions.
-- [Architecture guide](/safemesh/architecture/): locate the design overview.
-- [Claims and evidence guide](/safemesh/claims/): locate the proof boundaries and evaluation account.
-- [Examples guide](/safemesh/examples/): locate runnable demonstrations in their existing directories.
-- [Generated API reference](/safemesh/reference/): inspect the Rust core API from this build’s source.
+- **Integration:** [Project entrypoint](https://github.com/velvetmonkey/safemesh/blob/main/README.md): start with the repository's current status and package instructions.
+- **Integration:** [Architecture guide](/safemesh/architecture/): locate the design overview.
+- **Assurance review:** [Claims and evidence guide](/safemesh/claims/): locate the proof boundaries and evaluation account.
+- **Fault exploration:** [Examples guide](/safemesh/examples/): locate runnable demonstrations in their existing directories.
+- **Integration:** [Generated API reference](/safemesh/reference/): inspect the Rust core API from this build’s source.
 
 ## Use this site
 
