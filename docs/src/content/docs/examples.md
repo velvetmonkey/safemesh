@@ -5,6 +5,9 @@ description: Clone the source and run Rust, Python, and browser demonstrations.
 
 These examples use **main (unreleased)** source. They exercise modeled convergence;
 they do not establish real transport delivery, storage durability, or maintainer support.
+Success output establishes the stated example outcome, not the release status of
+every carrier shown. **Supported** below means selected for v0, within the
+[v0 scope table and language-path limits](/safemesh/#v0-support); main remains unreleased.
 
 ## Put SafeMesh in your program
 
@@ -51,6 +54,11 @@ package. Registry availability is not implied.
 
 ## Rust: partition and heal
 
+**Carriers used:** G-Counter (`GCounter`, counter) and numeric OR-Set (`OrSet`,
+supplies) are **v0-supported**; RGA/Text (`Rga`, text positions) is **experimental**.
+See the [demo source](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/examples/break_it.rs)
+and [v0 scope table](/safemesh/#v0-support).
+
 ```sh
 (cd rust && NO_COLOR=1 cargo run -p safemesh-crdt --example break_it)
 ```
@@ -64,6 +72,12 @@ The final stdout line is:
 The preceding stages show reversed delivery, duplicate replay, and anti-entropy heal.
 
 ## Python: cold-chain data mule
+
+**Carriers used:** G-Counter (`GCounterReplica`, audit counts) is **v0-supported**;
+LWW Map (`LwwMapReplica`, custody holder) and Enable-wins Flag
+(`EnableWinsFlagReplica`, temperature alert) are **experimental**, including their
+replica wrappers. See the [demo source](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-python/examples/data_mule_demo.py)
+and [v0 scope table](/safemesh/#v0-support).
 
 Create a virtual environment, install the build tool, build a local wheel, and run
 the demo with that environment's Python:
@@ -85,6 +99,12 @@ The final stdout line is:
 The preceding stages show modeled custody, audit counts, and temperature alerts.
 
 ## Browser: interactive convergence
+
+**Carriers used:** G-Counter (`SafeMeshGCounterReplica`, headcount) and UTF-8 OR-Set
+(`SafeMeshStringOrSetReplica`, supplies), both through Rust/WASM, are the two
+**v0-supported** carrier types. This demo uses no experimental carriers. See the
+[simulation source](https://github.com/velvetmonkey/safemesh/blob/main/web/src/sim/simulation.ts)
+and [v0 scope table and language-path limits](/safemesh/#v0-support).
 
 Install the WASM build tool and target, then start the server. Leave this command
 running while you use the browser; press Ctrl+C when finished. Port 4387 must be free.
