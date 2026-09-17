@@ -81,6 +81,45 @@ There is no compose/map combinator or public `WireCursor` write helper. Callers 
 
 There is no public EventLog snapshot/compaction API. Saving `EventLog` retains every record and payload; `since` selects missing records for exchange but does not shrink stored history. Callers must budget for growth and retain or archive complete history with a recovery plan. Some carriers can encode whole state, but that does not preserve record admission history, writer allocation or a protocol for peers that missed edits. Do not discard old records or tombstones as an optimization. If bounded history is required, design and validate an application checkpoint/epoch and peer-retirement protocol, or choose storage with that facility. Evidence: [`EventLog::records`](/safemesh/reference/rust/safemesh_crdt/struct.EventLog.html#method.records), [`EventLog::since`](/safemesh/reference/rust/safemesh_crdt/struct.EventLog.html#method.since), and its [`WireEncode` implementation](/safemesh/reference/rust/safemesh_crdt/struct.EventLog.html#trait-implementations).
 
+### Illustrative capacity estimate
+
+Start with `retained records = records per day × retention duration in days` and
+`encoded-log bytes = retained records × average bytes per record in the log + log framing bytes`.
+Count all retained records, including removes and updates that no longer affect the visible value.
+Measure the average length of successfully encoded `Record::to_wire_bytes()` results
+with your actual payload mix. Add **4 bytes per record** for the current `EventLog`
+length prefix before substituting that average into the formula. Measure the length of
+a successful `EventLog::to_wire_bytes()` result to include whole-log framing.
+
+For a concrete encoding example, a `GCounterDelta` occupies **17 bytes** (1-byte tag,
+8-byte replica, 8-byte tally). Its `Record` occupies **38 bytes** (1-byte record tag,
+two 8-byte ID fields, 4-byte delta length, 17-byte delta). With the log's 4-byte record
+length, that is **42 bytes per retained record**. A shaped G-Counter log adds **60 bytes**
+of fixed framing, including schema, replica count and checksum. These sizes come from
+the current [wire implementation](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/lib.rs)
+and [canonical-byte tests](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/tests/wire.rs),
+not a throughput benchmark. Other delta types, string lengths and remove-token counts change the average.
+
+**Illustrative workload, not measured traffic:** suppose one log retains **100,000 records/day**
+for **365 days**, all G-Counter records in the encoding above:
+
+- Retained records: `100,000 records/day × 365 days = 36,500,000 records`.
+- Encoded log: `36,500,000 records × 42 bytes/record + 60 bytes = 1,533,000,060 bytes`,
+  approximately **1.533 GB** (1 GB = 1,000,000,000 bytes).
+
+This is one encoded log copy, not a RAM or total disk budget. Budget separately for
+in-memory records, carrier state, tombstones where applicable, version/deduplication
+indexing and allocator overhead, plus storage metadata, temporary write copies and backups.
+Measure peak memory and storage on the target workload. Replay is another quantity to
+measure: this example retains **36.5 million records** to decode and replay on a full
+restore. Time that recovery on your hardware with your carrier and payload mix; these
+byte counts imply no replay throughput or recovery-time guarantee.
+
+The 365-day horizon is a sizing assumption, not permission to expire records on day 366.
+Archival does **not** authorize deleting active history or restoring from incomplete
+history. Keep complete history recoverable under the recovery plan above; without a
+validated checkpoint/epoch and peer-retirement protocol, extend the budget as history grows.
+
 ## You need physical or legal truth
 
 Cold-chain examples model software state. They do not prove sensor truth, legal custody, hardware puck behavior, or storage durability. A converged temperature alert does not prove that the sensor reading was true. [Evidence: evaluation limits](https://github.com/velvetmonkey/safemesh/blob/main/CLAIMS.md) and [Python example scope](/safemesh/examples/).
