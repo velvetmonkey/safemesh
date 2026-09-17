@@ -9,7 +9,7 @@ Reproduction commands use Rust 1.96.1 (full-gate CI); the consumer crate floor i
 
 SafeMesh's verified claim is deliberately narrow:
 
-> In-house CRDT types backed by the Lean suite are provably insensitive to duplicate and reordered delivery, and convergent after missing deltas are eventually recovered by merge/anti-entropy. The Rust product body earns that claim only when it continues to pass the Lean-generated differential oracle corpus. **PROVEN** — Evidence: [`delta_dissemination_sec; merge_deltaState`](lean/SafeMesh/Delta.lean). **TESTED** — Evidence: [`conformance`](rust/crates/safemesh-crdt/tests/conformance.rs); run from `rust/`: `cargo test -p safemesh-crdt --test conformance --locked`.
+> The Lean models of the in-house CRDT types backed by the Lean suite are universally proved insensitive to duplicate and reordered delivery, and convergent after missing deltas are eventually recovered by merge/anti-entropy; the separately implemented Rust product is finitely tested against the Lean-generated differential oracle corpus, not universally proved. Passing that corpus is conformance evidence for Rust. **PROVEN** — Evidence: [`delta_dissemination_sec; merge_deltaState`](lean/SafeMesh/Delta.lean). **TESTED** — Evidence: [`conformance`](rust/crates/safemesh-crdt/tests/conformance.rs); run from `rust/`: `cargo test -p safemesh-crdt --test conformance --locked`.
 
 ## Proven
 

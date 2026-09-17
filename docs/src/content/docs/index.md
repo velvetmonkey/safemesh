@@ -15,9 +15,15 @@ and reorders messages, heals with anti-entropy, and finishes with `CONVERGED=tru
 
 ## v0 support
 
-Ben's OR-1 option A ruling (11 September 2026) selects **G-Counter and OR-Set**
-as the two supported v0 types. All other carriers remain **experimental**.
-This is the v0 scope, not a claim that main is released or every platform qualified.
+**G-Counter and OR-Set** are the two types selected for v0; **Supported** in the
+table means this type selection, within the language-path limits below. All other
+carriers remain **experimental**. This selection records Ben's OR-1 option A
+ruling (11 September 2026).
+
+Main is **unreleased**. Release artifacts and measured platforms are separate
+from this selection; the [install matrix](https://github.com/velvetmonkey/safemesh/blob/main/README.md#install-matrix)
+records their availability and evidence. Maintainer support is **UNKNOWN** for
+all four language surfaces: this selection establishes no maintenance commitment.
 Proof breadth and release support are separate: the five existing carrier proofs remain valid.
 
 | Type | v0 status | Evidence |
