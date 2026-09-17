@@ -18,6 +18,21 @@ authorisation nor a no-overdraft guarantee; equal merged state does not mean a
 transfer was permitted. Paired counters can represent stock changes, but cannot
 prevent concurrent offline decrements from overselling.
 
+## Fit check
+
+Use these questions for an initial go/no-go decision, then follow the links for
+the detailed limits. Proceed only if your requirements fit the stated scope and
+you can own the application work; convergence alone does not close these gaps.
+
+| Requirement question | Library boundary | Decision consequence |
+| --- | --- | --- |
+| Do you need guaranteed delivery or coordinated decisions? | [Delivery is not proved](#you-need-guaranteed-delivery); [consensus and leader election are outside v0](#you-need-consensus-or-leader-election). | Own missing-delta recovery, authorisation and coordination in the application. If you require SafeMesh alone to guarantee delivery or enforce cross-writer invariants, it does not fit. |
+| Must stored history stay bounded? | There is [no public snapshot/compaction API](#you-need-snapshots-or-compaction); saving an EventLog retains all records and payloads. | Budget for complete history, or design and validate a checkpoint/epoch and peer-retirement protocol. If you need built-in bounded history, choose storage with that facility. |
+| Do you need durable restart on your target platform and CRDT? | [Public durable restart covers only `GCounter` and `OrSet<String, u64>`](#you-need-durable-restart-for-a-custom-crdt). The Rust journey requires Linux and suitable local filesystem locks/sync; [proofs do not establish disk durability or crash atomicity](#you-need-unconditional-crash-or-storage-guarantees). | Validate the storage/platform assumptions. Custom CRDT storage and writer ownership are yours; if you need generic restart or unconditional crash guarantees from the library, it does not fit. |
+| Does your data model require more than the supplied semantics? | [Trees, moves and object references are outside v0](#your-data-model-needs-trees-moves-or-object-references); there is [no built-in map of PN-counters](#you-need-a-map-of-pn-counters) or [compose/map combinator](#you-need-a-helper-to-nest-wire-layouts). | Use a fitting supplied type, or own the composition, consistency rules and wire schema without inheriting a proof. If you require these models ready-made, SafeMesh does not fit. |
+| Does your assurance requirement extend beyond the proved Lean definitions? | [Application code, bindings and adapters are outside the Lean claim](#you-need-a-proof-of-all-your-application-code); [flag, map and register are tested, not proved](#your-requirement-is-a-proved-flag-map-or-register). [Physical and legal truth are not proved](#you-need-physical-or-legal-truth). | Supply the additional assurance your application needs. If acceptance requires SafeMesh's proofs to cover these areas, it does not fit. |
+| Do you require established packages, platform coverage or maintainer support? | [Source examples do not establish registry availability or a platform matrix; maintainer support is UNKNOWN](#you-need-established-distribution-or-maintainer-support). | Verify distribution and your target environment, and arrange the support you need. If adoption requires established availability or support, defer until those requirements are evidenced. |
+
 ## You need guaranteed delivery
 
 SafeMesh's convergence claim is conditional on missing deltas eventually being recovered. It does not prove network or radio delivery. A partition-and-heal example exercises modeled delivery faults; it cannot establish that your real transport will repair every gap. [Evidence: `CLAIMS.md`](https://github.com/velvetmonkey/safemesh/blob/main/CLAIMS.md) and [example scope](/safemesh/examples/).
