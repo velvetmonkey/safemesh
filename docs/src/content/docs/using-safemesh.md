@@ -28,6 +28,16 @@ This guide uses **main (unreleased)** source. These are local build paths, not r
 
 SafeMesh supplies CRDT state, deltas, canonical bytes and event-log operations. Your application supplies the schema and moves records between replicas. `TransportAdapter` describes subscription, connectivity, sending batches and draining incoming envelopes; `InMemoryTransport` implements a deterministic test environment. Neither proves real delivery. [Evidence: transport interfaces](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/lib.rs).
 
+Choose a Rust API layer by the task and the storage/identity responsibilities you want it to handle:
+
+| API layer | Intended task and operations | Storage and identity ownership | Existing example |
+| --- | --- | --- | --- |
+| Raw carriers, such as `GCounter` | Merge in-memory state directly with `try_apply_bump` and `try_merge`. | The caller chooses counter width and writer coordinates (or fresh OR-Set tokens), and supplies any persistence. No event log or writer fencing is added. | [Direct G-Counter merge below](#pinned-git-dependency-for-a-separate-application) (historically pinned example). |
+| Caller-managed `EventLog` plus a carrier | Add record sequencing, duplicate/collision admission and history exchange with `append_with` / `admit_with`. | The log assigns record sequences; the caller owns writer identities, OR-Set tokens, storage and replay into the correctly shaped state. Admission is an in-memory transition. | [`m2slice.rs` caller-managed journey](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/examples/m2slice.rs). |
+| Linux `local::DurableReplica` (`local-writer` feature) | Use the supported Linux restart path for G-Counter or UTF-8 OR-Set, with `bump`, `add` and `receive` over a carrier and event log. | The caller fixes `WriterConfig` and a shared store directory. The adapter fences writers, allocates sequences/add tokens, commits transactions with file/directory sync before acknowledging accepted edits, and validates/replays on restart. | [Rust gold path below](#rust) and [durable process walkthrough](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md#persist-restore-partition-and-reconcile). |
+
+The `Replica<C>` in `m2slice.rs` is an example-defined helper, not a public library type. It combines public carrier and `EventLog` APIs; the same file's Linux durable journey uses the public `local::DurableReplica` instead. All three layers leave transport to the application.
+
 For an event-log integration, follow this sequence:
 
 1. **Create local state and its log.** Use consistent counter arity and your chosen replica identities. The Rust walkthrough's `Replica` combines a CRDT with an `EventLog`.
