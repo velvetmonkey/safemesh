@@ -7,11 +7,12 @@
   },
   "scripts": {
     "dev": "astro dev --host localhost --port 4321",
-    "build": "astro build && node check-assurance.mjs && python3 generate-reference.py && pagefind --site dist",
+    "build": "npm run check:images && astro build && node check-assurance.mjs && python3 generate-reference.py && pagefind --site dist",
     "preview": "astro preview --host localhost --port 4320",
     "build:site": "node build-site.mjs",
     "test": "node --test assurance.test.mjs",
-    "derive:images": "node derive-images.mjs"
+    "derive:images": "node derive-images.mjs",
+    "check:images": "node derive-images.mjs --check"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.42.0",
