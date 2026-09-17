@@ -77,7 +77,9 @@ The WASM/Node commands also need Node.js and npm; browser prerequisites are in
 
 Artifact available: the install flows below produce local Rust packages, WASM/TypeScript packages, and Python wheels. Registry artifact availability is not established by these local flows. Maintainer-supported status is unknown for Rust, C ABI, WASM/TypeScript, and Python. These commands are dry-run or local wheel/package flows; this branch does not publish to any registry.
 
-| Surface | Consumer command after registry publish | v0.1 dry-run/local command |
+**Not yet published:** `safemesh-crdt` on crates.io, `safemesh-wasm` on npm, and `safemesh-python` on PyPI are not available from their registries. Use the dry-run/local commands below today; the future consumer commands will work only after publication.
+
+| Surface | Future consumer command — NOT YET PUBLISHED | v0.1 dry-run/local command |
 |---|---|---|
 | Rust core | `cargo add safemesh-crdt@0.1.0` | `cd rust && cargo publish --dry-run -p safemesh-crdt --allow-dirty` |
 | WASM / TypeScript | `npm install safemesh-wasm@0.1.0` | `tmp=$(mktemp -d) && wasm-pack build rust/crates/safemesh-wasm --target bundler --out-dir "$tmp/pkg" --release && npm pack --dry-run "$tmp/pkg"` |
