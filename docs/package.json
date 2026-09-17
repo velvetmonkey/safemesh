@@ -10,7 +10,8 @@
     "build": "astro build && node check-assurance.mjs && python3 generate-reference.py && pagefind --site dist",
     "preview": "astro preview --host localhost --port 4320",
     "build:site": "node build-site.mjs",
-    "test": "node --test assurance.test.mjs"
+    "test": "node --test assurance.test.mjs",
+    "derive:images": "node derive-images.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.42.0",
@@ -25,6 +26,7 @@
     "remark-parse": "11.0.0",
     "remark-rehype": "11.1.2",
     "remark-smartypants": "3.0.3",
+    "sharp": "0.35.4",
     "unified": "11.0.5"
   }
 }

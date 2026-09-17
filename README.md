@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/safemesh-logo.png" width="300" alt="SafeMesh"></p>
+<p align="center"><img src="assets/delivery/safemesh-logo-600.png" width="300" alt="SafeMesh"></p>
 
 **v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](https://velvetmonkey.github.io/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
 
