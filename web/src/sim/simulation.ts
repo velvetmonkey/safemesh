@@ -336,7 +336,14 @@ export function dropNextPacket(sim: Simulation): Simulation {
 export function dropCounterPacketToPeer(sim: Simulation, peerId: number): Simulation {
   checkedInteger(peerId, 'peerId', sim.peers.length - 1)
   const index = sim.queue.findIndex((packet) => packet.to === peerId && packet.delta.kind === 'gcounter.bump')
-  if (index < 0) return dropNextPacket(sim)
+  if (index < 0) {
+    return appendLog(
+      sim,
+      `No queued G-Counter bump to drop for Camp ${peerId}`,
+      'drop',
+      `drop requested: no matching gcounter.bump packet queued for peer ${peerId}`,
+    )
+  }
   return dropPacketAtIndex(sim, index)
 }
 
