@@ -220,13 +220,7 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
     }
 
     fn validate_for<C: Crdt<Delta = D>>(&self, state: &C) -> Result<(), WireError> {
-        match (state.replica_count(), self.replica_count) {
-            (Some(expected), Some(actual)) if expected != actual => {
-                return Err(WireError::ReplicaCountMismatch { expected, actual })
-            }
-            (None, Some(_)) | (Some(_), None) => return Err(WireError::ArityKindMismatch),
-            _ => {}
-        }
+        self.validate_shape(state)?;
         for record in self.records() {
             state.validate_record(record.id, &record.delta)?;
         }
@@ -485,6 +479,7 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
         };
         let mut log = EventLog {
             replica_count,
+            shape_bound: true,
             ..EventLog::new()
         };
         for index in 0..body.read_len()? {

@@ -11,7 +11,7 @@ pub enum Admission {
     Accepted,
     Duplicate,
     Collision,
-    /// The record is outside the supplied carrier's domain.
+    /// The log shape or record is incompatible with the supplied carrier.
     Invalid(WireError),
 }
 
@@ -25,15 +25,19 @@ pub enum AppendError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EventLog<D> {
     pub(super) replica_count: Option<usize>,
+    pub(super) shape_bound: bool,
     pub(super) records: Vec<Record<D>>,
     pub(super) seen: BTreeMap<RecordId, usize>,
     pub(super) version: VersionVector,
 }
 
 impl<D> EventLog<D> {
+    /// Create an unbound log. The first accepted record binds its carrier shape.
+    /// Use `for_crdt` to declare a shape before any records are accepted.
     pub fn new() -> Self {
         EventLog {
             replica_count: None,
+            shape_bound: false,
             records: Vec::new(),
             seen: BTreeMap::new(),
             version: VersionVector::new(),
@@ -44,6 +48,7 @@ impl<D> EventLog<D> {
     pub fn with_replica_count(replica_count: usize) -> Self {
         Self {
             replica_count: Some(replica_count),
+            shape_bound: true,
             ..Self::new()
         }
     }
@@ -52,6 +57,7 @@ impl<D> EventLog<D> {
     pub fn for_crdt<C: Crdt<Delta = D>>(state: &C) -> Self {
         Self {
             replica_count: state.replica_count(),
+            shape_bound: true,
             ..Self::new()
         }
     }
@@ -117,7 +123,8 @@ impl<D> EventLog<D> {
             .collect()
     }
 
-    /// Validate against the destination carrier and check record identity.
+    /// Validate the log shape and record against the destination carrier, then
+    /// check record identity. An unbound log binds only on acceptance.
     /// Only Accepted invokes `apply`, with the same carrier used for validation.
     /// An invalid fresh record leaves the log, version, and carrier unchanged.
     /// Duplicate/Collision retain their identity verdicts, but also run validation.
@@ -134,6 +141,7 @@ impl<D> EventLog<D> {
         if outcome != Admission::Accepted {
             return outcome;
         }
+        self.bind_shape(state);
         self.commit_record(record);
         apply(state, &self.records.last().expect("accepted record").delta);
         Admission::Accepted
@@ -155,10 +163,34 @@ impl<D> EventLog<D> {
         D: PartialEq,
     {
         let identity = self.identity_admission(record);
-        let validation = state.validate_record(record.id, &record.delta);
+        let record_validation = state.validate_record(record.id, &record.delta);
+        let shape_validation = if self.shape_bound {
+            self.validate_shape(state)
+        } else {
+            Ok(())
+        };
+        let validation = shape_validation.and(record_validation);
         match (identity, validation) {
             (Admission::Accepted, Err(error)) => Admission::Invalid(error),
             (outcome, _) => outcome,
+        }
+    }
+
+    // Also used by checked restore, where even an empty decoded log has a shape.
+    pub(super) fn validate_shape<C: Crdt<Delta = D>>(&self, state: &C) -> Result<(), WireError> {
+        match (state.replica_count(), self.replica_count) {
+            (Some(expected), Some(actual)) if expected != actual => {
+                Err(WireError::ReplicaCountMismatch { expected, actual })
+            }
+            (None, Some(_)) | (Some(_), None) => Err(WireError::ArityKindMismatch),
+            _ => Ok(()),
+        }
+    }
+
+    fn bind_shape<C: Crdt<Delta = D>>(&mut self, state: &C) {
+        if !self.shape_bound {
+            self.replica_count = state.replica_count();
+            self.shape_bound = true;
         }
     }
 
@@ -189,6 +221,7 @@ impl<D> EventLog<D> {
     {
         let outcome = self.admission(state, &record);
         if outcome == Admission::Accepted {
+            self.bind_shape(state);
             self.commit_record(record);
         }
         outcome
