@@ -22,7 +22,8 @@ pub enum AppendError {
 }
 
 /// Append-only, deduplicating event log for CRDT deltas.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Equality compares log data, excluding the in-memory first-admission binding flag.
+#[derive(Clone, Debug)]
 pub struct EventLog<D> {
     pub(super) replica_count: Option<usize>,
     pub(super) shape_bound: bool,
@@ -30,6 +31,19 @@ pub struct EventLog<D> {
     pub(super) seen: BTreeMap<RecordId, usize>,
     pub(super) version: VersionVector,
 }
+
+// Binding an empty unbounded log during decode must not change payload equality:
+// logs can themselves be nested in records and compared for deduplication.
+impl<D: PartialEq> PartialEq for EventLog<D> {
+    fn eq(&self, other: &Self) -> bool {
+        self.replica_count == other.replica_count
+            && self.records == other.records
+            && self.seen == other.seen
+            && self.version == other.version
+    }
+}
+
+impl<D: Eq> Eq for EventLog<D> {}
 
 impl<D> EventLog<D> {
     /// Create an unbound log. The first accepted record binds its carrier shape.
