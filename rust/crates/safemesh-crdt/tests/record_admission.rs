@@ -1561,32 +1561,32 @@ fn unbound_log_binds_only_after_successful_admission() {
 
 #[test]
 fn admission_distinguishes_bound_unbounded_and_fixed_zero_domains() {
-    use safemesh_crdt::{GSet, MergeError, Mergeable, WireError};
-    struct ShapedSet(Option<usize>);
-    impl Mergeable for ShapedSet {
+    use safemesh_crdt::{EnableWinsFlag, EnableWinsFlagDelta, MergeError, Mergeable, WireError};
+    struct ShapedFlag(Option<usize>);
+    impl Mergeable for ShapedFlag {
         fn merge(&mut self, _: &Self) -> Result<(), MergeError> {
             Ok(())
         }
     }
-    impl Crdt for ShapedSet {
-        type Delta = u64;
+    impl Crdt for ShapedFlag {
+        type Delta = EnableWinsFlagDelta<u64>;
         fn replica_count(&self) -> Option<usize> {
             self.0
         }
-        fn validate_record(&self, _: RecordId, _: &u64) -> Result<(), WireError> {
+        fn validate_record(&self, _: RecordId, _: &Self::Delta) -> Result<(), WireError> {
             Ok(())
         }
-        fn apply_delta(&mut self, _: u64) {}
+        fn apply_delta(&mut self, _: Self::Delta) {}
     }
     let record = Record {
         id: RecordId {
             replica: 0,
             sequence: 1,
         },
-        delta: 5u64,
+        delta: EnableWinsFlagDelta::Enable { token: 5 },
     };
     for shape in [None, Some(0), Some(2)] {
-        let state = ShapedSet(shape);
+        let state = ShapedFlag(shape);
         let declared = EventLog::for_crdt(&state);
         let decoded = EventLog::from_wire_bytes(&declared.to_wire_bytes().unwrap()).unwrap();
         let mut bound_on_admission = EventLog::new();
@@ -1595,7 +1595,7 @@ fn admission_distinguishes_bound_unbounded_and_fixed_zero_domains() {
             Admission::Accepted
         );
         for mut log in [declared, decoded, bound_on_admission] {
-            let opposite = ShapedSet(if shape.is_none() { Some(0) } else { None });
+            let opposite = ShapedFlag(if shape.is_none() { Some(0) } else { None });
             let fresh = Record {
                 id: RecordId {
                     sequence: 2,
@@ -1605,7 +1605,7 @@ fn admission_distinguishes_bound_unbounded_and_fixed_zero_domains() {
             };
             let before = log.clone();
             assert_eq!(
-                log.admit_with(&mut ShapedSet(opposite.0), fresh, |_, _| panic!(
+                log.admit_with(&mut ShapedFlag(opposite.0), fresh, |_, _| panic!(
                     "kind mismatch applied"
                 )),
                 Admission::Invalid(WireError::ArityKindMismatch)
@@ -1615,7 +1615,7 @@ fn admission_distinguishes_bound_unbounded_and_fixed_zero_domains() {
     }
     let mut fixed_zero = EventLog::with_replica_count(0);
     assert_eq!(
-        fixed_zero.insert_record(&GSet::new(), record),
+        fixed_zero.insert_record(&EnableWinsFlag::new(), record),
         Admission::Invalid(WireError::ArityKindMismatch)
     );
 }
