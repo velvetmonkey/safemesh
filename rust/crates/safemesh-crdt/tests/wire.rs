@@ -811,3 +811,131 @@ fn wire_log<D: WireEncode + WireDecode + safemesh_crdt::WireSchema + PartialEq>(
     EventLog::encode_records(shape, records, &mut bytes).unwrap();
     EventLog::from_wire_bytes(&bytes).unwrap()
 }
+
+std::thread_local! {
+    static BUDGET_PAYLOAD_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BudgetPayload(u64);
+
+impl safemesh_crdt::WireSchema for BudgetPayload {
+    fn wire_schema() -> Vec<u8> {
+        b"test/decode-budget/v1".to_vec()
+    }
+}
+
+impl WireEncode for BudgetPayload {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        out.extend_from_slice(&self.0.to_le_bytes());
+        Ok(())
+    }
+}
+
+impl WireDecode for BudgetPayload {
+    fn decode_wire(cursor: &mut safemesh_crdt::WireCursor<'_>) -> Result<Self, WireError> {
+        BUDGET_PAYLOAD_READS.with(|reads| reads.set(reads.get() + 1));
+        Ok(Self(cursor.read_u64()?))
+    }
+}
+
+fn budget_frame(count: usize, duplicate: bool) -> (Vec<u8>, Vec<Record<BudgetPayload>>) {
+    let records: Vec<_> = (0..count)
+        .map(|i| Record {
+            id: RecordId {
+                replica: 0,
+                sequence: if duplicate { 1 } else { i as u64 + 1 },
+            },
+            delta: BudgetPayload(if duplicate { 0 } else { i as u64 }),
+        })
+        .collect();
+    let mut bytes = Vec::new();
+    EventLog::encode_records(None, &records, &mut bytes).unwrap();
+    (bytes, records)
+}
+
+#[test]
+fn decode_budget_compatibility_control() {
+    let (bytes, records) = budget_frame(1024, false);
+    BUDGET_PAYLOAD_READS.with(|reads| reads.set(0));
+    let decoded = EventLog::<BudgetPayload>::from_wire_bytes(&bytes).unwrap();
+    assert_eq!(decoded.records(), records);
+    assert_eq!(decoded.to_wire_bytes().unwrap(), bytes);
+    assert_eq!(BUDGET_PAYLOAD_READS.with(|reads| reads.get()), 1024);
+}
+
+#[test]
+fn decode_budget_stops_planted_frame() {
+    let (bytes, _) = budget_frame(1024, false);
+    BUDGET_PAYLOAD_READS.with(|reads| reads.set(0));
+    let result = EventLog::<BudgetPayload>::from_wire_bytes_with_limits(
+        &bytes,
+        safemesh_crdt::DecodeLimits {
+            max_records: Some(8),
+        },
+    );
+    assert_eq!(
+        result,
+        Err(safemesh_crdt::DecodeError::RecordLimitExceeded { max_records: 8 })
+    );
+    assert_eq!(BUDGET_PAYLOAD_READS.with(|reads| reads.get()), 8);
+}
+
+#[test]
+fn decode_budget_boundaries_duplicates_and_default() {
+    use safemesh_crdt::{DecodeError, DecodeLimits};
+    for (count, duplicate) in [(0, false), (1, false), (1024, false), (1024, true)] {
+        let (bytes, _) = budget_frame(count, duplicate);
+        let old = EventLog::<BudgetPayload>::from_wire_bytes(&bytes).unwrap();
+        for limit in [None, Some(count), Some(count + 1)] {
+            BUDGET_PAYLOAD_READS.with(|reads| reads.set(0));
+            let decoded = EventLog::<BudgetPayload>::from_wire_bytes_with_limits(
+                &bytes,
+                DecodeLimits { max_records: limit },
+            )
+            .unwrap();
+            assert_eq!(decoded, old);
+            assert_eq!(decoded.to_wire_bytes(), old.to_wire_bytes());
+            assert_eq!(BUDGET_PAYLOAD_READS.with(|reads| reads.get()), count);
+        }
+        if count > 0 {
+            for max_records in [0, count - 1] {
+                BUDGET_PAYLOAD_READS.with(|reads| reads.set(0));
+                assert_eq!(
+                    EventLog::<BudgetPayload>::from_wire_bytes_with_limits(
+                        &bytes,
+                        DecodeLimits {
+                            max_records: Some(max_records)
+                        }
+                    ),
+                    Err(DecodeError::RecordLimitExceeded { max_records })
+                );
+                assert_eq!(BUDGET_PAYLOAD_READS.with(|reads| reads.get()), max_records);
+            }
+        }
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        let mut corrupt = bytes.clone();
+        *corrupt.last_mut().unwrap() ^= 1;
+        for input in [&bytes[..bytes.len() - 1], &trailing, &corrupt, &[0]] {
+            assert_eq!(
+                EventLog::<BudgetPayload>::from_wire_bytes_with_limits(
+                    input,
+                    DecodeLimits::default()
+                ),
+                EventLog::<BudgetPayload>::from_wire_bytes(input).map_err(DecodeError::Wire)
+            );
+        }
+        BUDGET_PAYLOAD_READS.with(|reads| reads.set(0));
+        assert_eq!(
+            EventLog::<BudgetPayload>::from_wire_bytes_with_limits(
+                &corrupt,
+                DecodeLimits {
+                    max_records: Some(0)
+                }
+            ),
+            Err(DecodeError::Wire(WireError::IntegrityMismatch))
+        );
+        assert_eq!(BUDGET_PAYLOAD_READS.with(|reads| reads.get()), 0);
+    }
+}
