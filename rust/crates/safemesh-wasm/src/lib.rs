@@ -187,6 +187,7 @@ pub fn gcounter_delta_to_wire_js(
 }
 
 #[wasm_bindgen]
+#[derive(Default)]
 pub struct SafeMeshLwwRegister {
     inner: LwwRegister<u64>,
 }
@@ -210,7 +211,8 @@ impl SafeMeshLwwRegister {
         let timestamp = checked_u64(timestamp, "timestamp")?;
         let replica = checked_u64(replica, "replica")?;
         let value = checked_u64(value, "value")?;
-        Ok(self.set(timestamp, replica, value))
+        self.set(timestamp, replica, value);
+        Ok(())
     }
 
     #[wasm_bindgen(js_name = hasValue)]
@@ -259,6 +261,7 @@ pub fn lww_register_delta_to_wire_js(
 }
 
 #[wasm_bindgen]
+#[derive(Default)]
 pub struct SafeMeshLwwMap {
     inner: LwwMap<u64, u64>,
 }
@@ -284,7 +287,8 @@ impl SafeMeshLwwMap {
         let timestamp = checked_u64(timestamp, "timestamp")?;
         let replica = checked_u64(replica, "replica")?;
         let value = checked_u64(value, "value")?;
-        Ok(self.set(key, timestamp, replica, value))
+        self.set(key, timestamp, replica, value);
+        Ok(())
     }
 
     #[wasm_bindgen(js_name = remove)]
@@ -297,7 +301,8 @@ impl SafeMeshLwwMap {
         let key = checked_u64(key, "key")?;
         let timestamp = checked_u64(timestamp, "timestamp")?;
         let replica = checked_u64(replica, "replica")?;
-        Ok(self.remove(key, timestamp, replica))
+        self.remove(key, timestamp, replica);
+        Ok(())
     }
 
     #[wasm_bindgen(js_name = hasKey)]
@@ -363,6 +368,7 @@ pub fn lww_map_remove_delta_to_wire_js(
 }
 
 #[wasm_bindgen]
+#[derive(Default)]
 pub struct SafeMeshEnableWinsFlag {
     inner: EnableWinsFlag<u64>,
 }
@@ -382,7 +388,8 @@ impl SafeMeshEnableWinsFlag {
         #[wasm_bindgen(unchecked_param_type = "bigint")] token: JsValue,
     ) -> Result<(), JsValue> {
         let token = checked_u64(token, "token")?;
-        Ok(self.enable(token))
+        self.enable(token);
+        Ok(())
     }
 
     #[wasm_bindgen(js_name = disableObserved)]
@@ -972,6 +979,7 @@ impl SafeMeshLwwRegisterReplica {
 
 /// Observed-remove set of u64 elements and u64 tokens; tokens are global to the set.
 #[wasm_bindgen]
+#[derive(Default)]
 pub struct SafeMeshOrSet {
     inner: OrSet<u64, u64>,
 }
@@ -994,7 +1002,8 @@ impl SafeMeshOrSet {
     ) -> Result<(), JsValue> {
         let element = checked_u64(element, "element")?;
         let token = checked_u64(token, "token")?;
-        Ok(self.add(element, token))
+        self.add(element, token);
+        Ok(())
     }
     /// Tombstone tokens globally, including tokens whose adds have not arrived yet.
     #[wasm_bindgen(js_name = applyRemove)]
@@ -1003,7 +1012,8 @@ impl SafeMeshOrSet {
         #[wasm_bindgen(unchecked_param_type = "BigUint64Array")] tokens: JsValue,
     ) -> Result<(), JsValue> {
         let tokens = checked_tokens(tokens)?;
-        Ok(self.apply_remove(tokens))
+        self.apply_remove(tokens);
+        Ok(())
     }
     #[wasm_bindgen(js_name = observedTokens)]
     pub fn observed_tokens_js(

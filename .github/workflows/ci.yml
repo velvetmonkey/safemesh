@@ -6,9 +6,42 @@ on:
   pull_request:
 
 jobs:
-  full-gate:
+  clippy:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install declared Rust toolchain and Clippy
+        run: |
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')"
+          rustup toolchain install "$version" --profile minimal --component clippy
+          rustup target add thumbv7em-none-eabihf wasm32-unknown-unknown x86_64-apple-darwin
+
+      - name: Lint workspace and shipped configurations
+        working-directory: rust
+        run: |
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo clippy -p safemesh-crdt --all-targets --no-default-features --locked -- -D warnings
+          cargo clippy -p safemesh-crdt --all-targets --features laws --locked -- -D warnings
+          cargo clippy --workspace --all-targets --features "safemesh-crdt/laws safemesh-crdt/local-writer" --locked -- -D warnings
+          cargo clippy -p safemesh-python --release --features extension-module --locked -- -D warnings
+          cargo clippy -p safemesh-ffi --release --locked -- -D warnings
+          cargo clippy -p safemesh-crdt --target thumbv7em-none-eabihf --locked -- -D warnings
+          cargo clippy -p safemesh-wasm --release --target wasm32-unknown-unknown --locked -- -D warnings
+          cargo clippy -p safemesh-crdt --features laws --all-targets --target x86_64-apple-darwin --locked -- -D warnings
+
+  full-gate:
+    # Keep the existing required check red even when its dependency fails.
+    needs: clippy
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Clippy success
+        env:
+          CLIPPY_RESULT: ${{ needs.clippy.result }}
+        run: test "$CLIPPY_RESULT" = success
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
