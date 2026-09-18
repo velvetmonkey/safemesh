@@ -11,6 +11,17 @@ import EvidenceBridge from '../../components/home/EvidenceBridge.astro';
 
 export const labUrl = import.meta.env.LAB_URL || 'http://localhost:4173/';
 
+<nav class="sm-docs-entry" aria-label="Documentation entry">
+  <div>
+    <strong>SafeMesh documentation</strong>
+    <p>Start with Getting started, then follow the table of contents in the sidebar
+    (Menu on mobile).</p>
+  </div>
+  <a class="sm-button sm-button-primary" href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/getting-started/`}>
+    Next: Getting started <span aria-hidden="true">→</span>
+  </a>
+</nav>
+
 <div class="sm-hero">
   <Hero />
   <ConvergenceExplainer labUrl={labUrl} />

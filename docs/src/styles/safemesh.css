@@ -85,6 +85,28 @@
 }
 
 @layer components {
+  .sm-docs-entry {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.25rem;
+    border: 1px solid var(--sm-line);
+    border-inline-start: 4px solid var(--sm-accent);
+    border-radius: .4rem;
+    background: var(--sm-tint);
+    color: var(--sm-text);
+  }
+  .sm-docs-entry > div { flex: 1 1 20rem; }
+  .sm-docs-entry strong { font-size: 1.1rem; }
+  .sm-docs-entry p { margin: .35rem 0 0; font-size: .9rem; }
+  .sm-docs-entry > a { margin: 0; }
+  .sm-docs-entry > a:focus-visible {
+    outline: 3px solid var(--sm-blue);
+    outline-offset: 3px;
+  }
+
   /* Hero (index.mdx): what SafeMesh does, plus the primary task routes. */
   .sm-hero {
     display: grid;
