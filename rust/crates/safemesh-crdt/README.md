@@ -72,7 +72,7 @@ let delta = GCounterDelta {
 };
 left.apply_delta(delta.clone());
 right.apply_delta(delta);
-left.merge(&right);
+left.merge(&right).expect("counters have equal replica counts");
 
 assert_eq!(left.value(), right.value());
 ```
@@ -465,6 +465,17 @@ returns `ArityKindMismatch`. Plain `from_wire_bytes` decodes the log, checks its
 delta schema, and retains the saved arity; it does not apply records to a CRDT.
 The Python/WASM replica loaders and the `m2slice` persistence example use the
 destination-aware decoder.
+
+Rust callers can opt into `EventLog::from_wire_bytes_with_limits(bytes,
+DecodeLimits { max_records: Some(n) })`. The budget counts top-level record
+occurrences, including duplicates, and returns `DecodeError::RecordLimitExceeded`
+before decoding occurrence n+1; no partial log is returned. `DecodeLimits::default()`
+is unbounded and preserves existing output and wire errors (wrapped in
+`DecodeError::Wire`). Existing loaders retain their signatures and behavior.
+This inert decoder checks the saved schema but does not validate a destination
+CRDT. The limit does not cap bytes, nested records, or payload collection entries;
+CRC verification still scans the whole frame. Python/WASM loaders do not expose
+this Rust-only option yet.
 
 Existing `0x03` files without the shape header now return `MissingShape`.
 There is no automatic migration: old bytes cannot establish the original arity,
