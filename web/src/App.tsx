@@ -443,7 +443,7 @@ function App() {
                 <Scissors size={17} />
                 {sandboxSim.partitioned ? 'Reconnect' : 'Partition'}
               </button>
-              <button type="button" onClick={healNow} title="Reconnect and run anti-entropy immediately">
+              <button type="button" onClick={healNow} title="Reconnect and queue anti-entropy repair through the simulated network">
                 <RefreshCw size={17} />
                 Heal
               </button>
