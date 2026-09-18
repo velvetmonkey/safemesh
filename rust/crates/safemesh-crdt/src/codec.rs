@@ -1,0 +1,508 @@
+// SafeMesh — delta-state CRDT convergence, built on crdt-lean.
+// Copyright (C) 2026 Ben Cassie
+// SPDX-License-Identifier: Apache-2.0
+
+use crate::{
+    Admission, Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounterDelta, GSet, LwwMap,
+    LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta, PnCounterDelta, Record, Rga,
+};
+use alloc::{string::String, vec::Vec};
+
+pub(super) const TAG_RECORD: u8 = 0x01;
+pub(super) const TAG_EVENT_LOG: u8 = 0x03;
+pub(super) const TAG_GCOUNTER_DELTA: u8 = 0x10;
+pub(super) const TAG_PNCOUNTER_INC: u8 = 0x11;
+pub(super) const TAG_PNCOUNTER_DEC: u8 = 0x12;
+pub(super) const TAG_GSET_U64: u8 = 0x20;
+pub(super) const TAG_ORSET_U64: u8 = 0x30;
+pub(super) const TAG_ORSET_ADD_U64: u8 = 0x31;
+pub(super) const TAG_ORSET_REMOVE_U64: u8 = 0x32;
+pub(super) const TAG_ORSET_ADD_STRING: u8 = 0x33;
+pub(super) const TAG_ORSET_REMOVE_STRING: u8 = 0x34;
+pub(super) const TAG_RGA_U64: u8 = 0x40;
+pub(super) const TAG_LWW_REGISTER_DELTA_U64: u8 = 0x50;
+pub(super) const TAG_LWW_REGISTER_U64: u8 = 0x51;
+pub(super) const TAG_ENABLE_WINS_FLAG_ENABLE_U64: u8 = 0x60;
+pub(super) const TAG_ENABLE_WINS_FLAG_DISABLE_U64: u8 = 0x61;
+pub(super) const TAG_ENABLE_WINS_FLAG_U64: u8 = 0x62;
+pub(super) const TAG_LWW_MAP_SET_U64: u8 = 0x70;
+pub(super) const TAG_LWW_MAP_REMOVE_U64: u8 = 0x71;
+pub(super) const TAG_LWW_MAP_U64: u8 = 0x72;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WireError {
+    OwnershipViolation,
+    UnexpectedEof,
+    InvalidTag,
+    TrailingBytes,
+    LengthOverflow,
+    RecordCollision,
+    IntegrityMismatch,
+    InvalidUtf8,
+    /// Legacy frame, or a fixed-domain log constructed without its arity.
+    MissingShape,
+    DeltaTypeMismatch,
+    ReplicaCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    /// Fixed and unbounded replica domains are incompatible.
+    ArityKindMismatch,
+}
+
+/// Optional limits for [`EventLog::from_wire_bytes_with_limits`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DecodeLimits {
+    /// Maximum top-level record occurrences decoded, including duplicates.
+    /// `None` is unbounded; `Some(0)` admits only empty logs.
+    /// This does not bound bytes, nested records, or collection entries in a payload.
+    pub max_records: Option<usize>,
+}
+
+/// Failure from the opt-in bounded event-log decoder.
+/// Separate from [`WireError`] to preserve existing exhaustive matches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecodeError {
+    Wire(WireError),
+    /// Stopped before decoding the next record; no partial log is returned.
+    RecordLimitExceeded {
+        max_records: usize,
+    },
+}
+
+impl From<WireError> for DecodeError {
+    fn from(error: WireError) -> Self {
+        Self::Wire(error)
+    }
+}
+
+/// Stable, versioned identity for persisted payloads, independent of Rust names.
+/// External implementations must use a globally unique schema and change it when
+/// the wire interpretation changes. Never reuse a built-in `safemesh/` identity.
+pub trait WireSchema {
+    fn wire_schema() -> Vec<u8>;
+    const REQUIRES_ARITY: bool = false;
+}
+
+macro_rules! wire_schema {
+    ($ty:ty, $name:literal, $fixed:expr) => {
+        impl WireSchema for $ty {
+            fn wire_schema() -> Vec<u8> {
+                $name.as_bytes().to_vec()
+            }
+            const REQUIRES_ARITY: bool = $fixed;
+        }
+    };
+}
+
+wire_schema!(GCounterDelta, "safemesh/gcounter-delta/v1", true);
+wire_schema!(PnCounterDelta, "safemesh/pncounter-delta/v1", true);
+wire_schema!(GSet<u64>, "safemesh/gset-u64/v1", false);
+wire_schema!(OrSetDelta<u64, u64>, "safemesh/orset-delta-u64-u64/v1", false);
+wire_schema!(OrSetDelta<String, u64>, "safemesh/orset-delta-utf8-u64/v1", false);
+wire_schema!(OrSet<u64, u64>, "safemesh/orset-u64-u64/v1", false);
+wire_schema!(Rga<u64, u64>, "safemesh/rga-u64-u64/v1", false);
+wire_schema!(
+    LwwRegisterDelta<u64>,
+    "safemesh/lww-register-delta-u64/v1",
+    false
+);
+wire_schema!(LwwRegister<u64>, "safemesh/lww-register-u64/v1", false);
+wire_schema!(
+    EnableWinsFlagDelta<u64>,
+    "safemesh/enable-wins-flag-delta-u64/v1",
+    false
+);
+wire_schema!(
+    EnableWinsFlag<u64>,
+    "safemesh/enable-wins-flag-u64/v1",
+    false
+);
+wire_schema!(LwwMapDelta<u64, u64>, "safemesh/lww-map-delta-u64-u64/v1", false);
+wire_schema!(LwwMap<u64, u64>, "safemesh/lww-map-u64-u64/v1", false);
+
+impl<D: WireSchema> WireSchema for Record<D> {
+    fn wire_schema() -> Vec<u8> {
+        let mut schema = b"safemesh/record/v1/".to_vec();
+        schema.extend(D::wire_schema());
+        schema
+    }
+}
+
+impl<D: WireSchema> WireSchema for EventLog<D> {
+    fn wire_schema() -> Vec<u8> {
+        let mut schema = b"safemesh/event-log/v2/".to_vec();
+        schema.extend(D::wire_schema());
+        schema
+    }
+}
+
+impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
+    /// Decode an inert log with an optional top-level record budget.
+    ///
+    /// Checks frame integrity and shape first, then stops before reading record
+    /// `max_records + 1`, counting duplicate occurrences before deduplication.
+    /// Returns [`DecodeError::RecordLimitExceeded`] without a partial result.
+    /// CRC verification still scans the entire frame; callers must separately
+    /// cap input bytes and payload complexity (including nested logs).
+    /// As with [`WireDecode::from_wire_bytes`], this does not validate a destination
+    /// CRDT for replay. The option is currently exposed only in Rust.
+    ///
+    /// [`DecodeLimits::default`] preserves the unbounded decoder's values and
+    /// wire errors (wrapped in [`DecodeError::Wire`]).
+    ///
+    /// ```
+    /// use safemesh_crdt::{DecodeError, DecodeLimits, EventLog, GSet, Record, RecordId};
+    /// let records = [Record { id: RecordId { replica: 0, sequence: 1 }, delta: GSet::<u64>::new() }];
+    /// let mut bytes = Vec::new();
+    /// EventLog::encode_records(None, &records, &mut bytes).unwrap();
+    /// assert_eq!(EventLog::<GSet<u64>>::from_wire_bytes_with_limits(
+    ///     &bytes, DecodeLimits { max_records: Some(0) }),
+    ///     Err(DecodeError::RecordLimitExceeded { max_records: 0 }));
+    /// ```
+    pub fn from_wire_bytes_with_limits(
+        bytes: &[u8],
+        limits: DecodeLimits,
+    ) -> Result<Self, DecodeError> {
+        let mut cursor = WireCursor::new(bytes);
+        let log = Self::decode_with(
+            &mut cursor,
+            |_| {},
+            |index| {
+                if let Some(max_records) = limits.max_records {
+                    if index >= max_records {
+                        return Err(DecodeError::RecordLimitExceeded { max_records });
+                    }
+                }
+                Ok(())
+            },
+        )?;
+        if !cursor.is_empty() {
+            return Err(WireError::TrailingBytes.into());
+        }
+        Ok(log)
+    }
+
+    /// Decode and compare the saved shape with the destination before replay.
+    /// Plain `from_wire_bytes` decodes a log and retains its domain; it does not
+    /// load a CRDT. Use this method at every persisted-state loading boundary.
+    pub fn from_wire_bytes_for<C: Crdt<Delta = D>>(
+        bytes: &[u8],
+        state: &C,
+    ) -> Result<Self, WireError> {
+        let log = Self::from_wire_bytes(bytes)?;
+        log.validate_for(state)?;
+        Ok(log)
+    }
+
+    /// Decode all input occurrences in order for per-record admission reporting.
+    /// Validate the entire frame, collisions and destination shape before returning.
+    /// The ordinary log loaders continue to deduplicate identical records.
+    pub fn records_from_wire_bytes_for<C: Crdt<Delta = D>>(
+        bytes: &[u8],
+        state: &C,
+    ) -> Result<Vec<Record<D>>, WireError>
+    where
+        D: Clone,
+    {
+        let mut records = Vec::new();
+        let mut cursor = WireCursor::new(bytes);
+        let log = Self::decode_with(
+            &mut cursor,
+            |record| records.push(record.clone()),
+            |_| Ok::<(), WireError>(()),
+        )?;
+        if !cursor.is_empty() {
+            return Err(WireError::TrailingBytes);
+        }
+        log.validate_for(state)?;
+        Ok(records)
+    }
+
+    fn validate_for<C: Crdt<Delta = D>>(&self, state: &C) -> Result<(), WireError> {
+        match (state.replica_count(), self.replica_count) {
+            (Some(expected), Some(actual)) if expected != actual => {
+                return Err(WireError::ReplicaCountMismatch { expected, actual })
+            }
+            (None, Some(_)) | (Some(_), None) => return Err(WireError::ArityKindMismatch),
+            _ => {}
+        }
+        for record in self.records() {
+            state.validate_record(record.id, &record.delta)?;
+        }
+        Ok(())
+    }
+}
+
+/// Encode a payload using the canonical wire primitives.
+///
+/// Custom payloads choose their own layout and, for persistence, a unique [`WireSchema`].
+pub trait WireEncode {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError>;
+
+    fn to_wire_bytes(&self) -> Result<Vec<u8>, WireError> {
+        let mut out = Vec::new();
+        self.encode_wire(&mut out)?;
+        Ok(out)
+    }
+}
+
+/// Decode one payload from a shared cursor using its public read methods.
+/// [`Self::from_wire_bytes`] additionally rejects trailing bytes.
+///
+/// ```
+/// use safemesh_crdt::{WireCursor, WireDecode, WireEncode, WireError};
+/// #[derive(Debug, PartialEq)]
+/// struct Reading(u64);
+/// impl WireEncode for Reading {
+///     fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+///         out.extend_from_slice(&self.0.to_le_bytes());
+///         Ok(())
+///     }
+/// }
+/// impl WireDecode for Reading {
+///     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+///         Ok(Self(cursor.read_u64()?))
+///     }
+/// }
+/// let reading = Reading(42);
+/// assert_eq!(Reading::from_wire_bytes(&reading.to_wire_bytes()?)?, reading);
+/// # Ok::<(), WireError>(())
+/// ```
+pub trait WireDecode: Sized {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError>;
+
+    fn from_wire_bytes(bytes: &[u8]) -> Result<Self, WireError> {
+        let mut cursor = WireCursor::new(bytes);
+        let value = Self::decode_wire(&mut cursor)?;
+        if cursor.is_empty() {
+            Ok(value)
+        } else {
+            Err(WireError::TrailingBytes)
+        }
+    }
+}
+
+/// Borrowed, bounds-checked reader for canonical wire primitives.
+///
+/// Integers are little-endian; lengths occupy an unsigned 32-bit field.
+/// These widths, byte order and documented consumption/error semantics are
+/// public compatibility commitments. Storage and bounds-checking internals
+/// remain private; custom payload schemas define their own interpretation.
+/// Failed byte reads leave the cursor unchanged. Conversion failures in
+/// [`Self::read_len`] consume the length field.
+pub struct WireCursor<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> WireCursor<'a> {
+    pub fn new(bytes: &'a [u8]) -> Self {
+        WireCursor { bytes, offset: 0 }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.offset == self.bytes.len()
+    }
+
+    /// Read one byte, or return `UnexpectedEof` without advancing.
+    pub fn read_u8(&mut self) -> Result<u8, WireError> {
+        let byte = *self
+            .bytes
+            .get(self.offset)
+            .ok_or(WireError::UnexpectedEof)?;
+        self.offset += 1;
+        Ok(byte)
+    }
+
+    /// Read four bytes as a little-endian `u32`, or return `UnexpectedEof` without advancing.
+    pub fn read_u32(&mut self) -> Result<u32, WireError> {
+        let bytes = self.read_exact(4)?;
+        Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    /// Read eight bytes as a little-endian `u64`, or return `UnexpectedEof` without advancing.
+    pub fn read_u64(&mut self) -> Result<u64, WireError> {
+        let bytes = self.read_exact(8)?;
+        Ok(u64::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ]))
+    }
+
+    /// Read a little-endian `u32` length and convert it to `usize`.
+    /// Returns `UnexpectedEof` without advancing for a truncated field.
+    /// If the value cannot fit `usize`, consumes four bytes and returns `LengthOverflow`.
+    pub fn read_len(&mut self) -> Result<usize, WireError> {
+        usize::try_from(self.read_u32()?).map_err(|_| WireError::LengthOverflow)
+    }
+
+    /// Borrow and consume exactly `len` bytes, including zero bytes.
+    /// Returns `LengthOverflow` if offset + len overflows, otherwise
+    /// `UnexpectedEof` if the range exceeds the input. Both leave the cursor
+    /// unchanged. This operation never allocates or panics for any length.
+    pub fn read_exact(&mut self, len: usize) -> Result<&'a [u8], WireError> {
+        let end = self
+            .offset
+            .checked_add(len)
+            .ok_or(WireError::LengthOverflow)?;
+        let bytes = self
+            .bytes
+            .get(self.offset..end)
+            .ok_or(WireError::UnexpectedEof)?;
+        self.offset = end;
+        Ok(bytes)
+    }
+}
+
+/// Append one byte.
+pub(super) fn write_u8(out: &mut Vec<u8>, value: u8) {
+    out.push(value);
+}
+
+/// Append a `u32` as four little-endian bytes.
+pub(super) fn write_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+/// Append a `u64` as eight little-endian bytes.
+pub(super) fn write_u64(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+/// Append `len` as a four-byte little-endian `u32`.
+/// Returns `LengthOverflow` without changing `out` if `len` exceeds `u32::MAX`.
+pub(super) fn write_len(out: &mut Vec<u8>, len: usize) -> Result<(), WireError> {
+    let len = u32::try_from(len).map_err(|_| WireError::LengthOverflow)?;
+    write_u32(out, len);
+    Ok(())
+}
+
+/// Append a `u32` length prefix followed by the bytes verbatim.
+/// Returns `LengthOverflow` without changing `out` if the slice length exceeds `u32::MAX`.
+pub(super) fn write_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), WireError> {
+    write_len(out, bytes.len())?;
+    out.extend_from_slice(bytes);
+    Ok(())
+}
+
+/// Consume one byte and check it against `expected`.
+/// A mismatch returns `InvalidTag` after consuming the byte; an empty input
+/// returns `UnexpectedEof` without advancing.
+pub(super) fn read_tag(cursor: &mut WireCursor<'_>, expected: u8) -> Result<(), WireError> {
+    match cursor.read_u8()? {
+        tag if tag == expected => Ok(()),
+        _ => Err(WireError::InvalidTag),
+    }
+}
+
+// CRC-32/ISO-HDLC: reflected polynomial, all-ones initialization and final XOR.
+// Detects accidental corruption, including every single-byte change; not a MAC.
+pub(super) fn frame_crc32(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for &byte in bytes {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
+        }
+    }
+    !crc
+}
+
+impl<D: WireEncode + WireSchema> EventLog<D> {
+    /// Encode an inert batch without admitting it into a live log.
+    ///
+    /// This preserves input occurrences, including duplicates and invalid records.
+    /// Receivers must use `records_from_wire_bytes_for` or `from_wire_bytes_for`
+    /// before applying the payload. Encoding does not validate a CRDT domain.
+    pub fn encode_records(
+        replica_count: Option<usize>,
+        records: &[Record<D>],
+        out: &mut Vec<u8>,
+    ) -> Result<(), WireError> {
+        if D::REQUIRES_ARITY && replica_count.is_none() {
+            return Err(WireError::MissingShape);
+        }
+        let mut body = Vec::new();
+        write_u32(&mut body, u32::MAX);
+        write_bytes(&mut body, &D::wire_schema())?;
+        match replica_count {
+            Some(count) => {
+                write_u8(&mut body, 1);
+                write_u64(
+                    &mut body,
+                    u64::try_from(count).map_err(|_| WireError::LengthOverflow)?,
+                );
+            }
+            None => write_u8(&mut body, 0),
+        }
+        write_len(&mut body, records.len())?;
+        for record in records {
+            write_bytes(&mut body, &record.to_wire_bytes()?)?;
+        }
+        let len = u32::try_from(body.len()).map_err(|_| WireError::LengthOverflow)?;
+        write_u8(out, TAG_EVENT_LOG);
+        let start = out.len();
+        write_u32(out, len);
+        write_u32(out, !len);
+        out.extend_from_slice(&body);
+        let checksum = frame_crc32(&out[start..]);
+        write_u32(out, checksum);
+        Ok(())
+    }
+}
+
+impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
+    pub(super) fn decode_with<E: From<WireError>>(
+        cursor: &mut WireCursor<'_>,
+        mut occurrence: impl FnMut(&Record<D>),
+        mut before_record: impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Self, E> {
+        read_tag(cursor, TAG_EVENT_LOG)?;
+        let start = cursor.offset;
+        let len = cursor.read_u32()?;
+        if cursor.read_u32()? != !len {
+            return Err(WireError::IntegrityMismatch.into());
+        }
+        let body =
+            cursor.read_exact(usize::try_from(len).map_err(|_| WireError::LengthOverflow)?)?;
+        let checksum = frame_crc32(&cursor.bytes[start..cursor.offset]);
+        if cursor.read_u32()? != checksum {
+            return Err(WireError::IntegrityMismatch.into());
+        }
+        let mut body = WireCursor::new(body);
+        if body.read_u32()? != u32::MAX {
+            return Err(WireError::MissingShape.into());
+        }
+        let schema_len = body.read_len()?;
+        if body.read_exact(schema_len)? != D::wire_schema() {
+            return Err(WireError::DeltaTypeMismatch.into());
+        }
+        let replica_count = match body.read_u8()? {
+            0 if !D::REQUIRES_ARITY => None,
+            0 => return Err(WireError::MissingShape.into()),
+            1 => Some(usize::try_from(body.read_u64()?).map_err(|_| WireError::LengthOverflow)?),
+            _ => return Err(WireError::ArityKindMismatch.into()),
+        };
+        let mut log = EventLog {
+            replica_count,
+            ..EventLog::new()
+        };
+        for index in 0..body.read_len()? {
+            before_record(index)?;
+            let record_len = body.read_len()?;
+            let record_bytes = body.read_exact(record_len)?;
+            let record = Record::<D>::from_wire_bytes(record_bytes)?;
+            occurrence(&record);
+            match log.identity_admission(&record) {
+                Admission::Collision => return Err(WireError::RecordCollision.into()),
+                Admission::Accepted => log.commit_record(record),
+                Admission::Duplicate => {}
+                Admission::Invalid(_) => unreachable!("identity check does not validate a carrier"),
+            }
+        }
+        if !body.is_empty() {
+            return Err(WireError::TrailingBytes.into());
+        }
+        Ok(log)
+    }
+}
