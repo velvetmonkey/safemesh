@@ -142,7 +142,9 @@ describe('native simulation handle ownership', () => {
       counter.free()
     }
     expect(mesh.convergence(sim).sameRawState).toBe(true)
-    const repaired = mesh.runAntiEntropyNow(sim)
+    const queued = mesh.runAntiEntropyNow(sim)
+    expect(queued.peers[1].gcounterLog).not.toEqual(queued.peers[0].gcounterLog)
+    const repaired = mesh.tick(queued, 2000, () => 0.5)
     expect(repaired.peers[1].gcounterLog).toEqual(repaired.peers[0].gcounterLog)
     expect(repaired.log.some((entry) => entry.tone === 'anti-entropy')).toBe(true)
     balanced(before)
