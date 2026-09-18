@@ -82,34 +82,14 @@ if ! command -v wasm-pack >/dev/null 2>&1; then
   cargo install wasm-pack --version 0.15.0 --locked
 fi
 
-# wasm-pack runs unlocked cargo metadata before forwarding --locked to its build.
-# Reject a stale workspace lock before that metadata call can regenerate it.
-cargo metadata --locked --format-version 1 \
-  --manifest-path "$repo_root/rust/crates/safemesh-wasm/Cargo.toml" >/dev/null
-
-wasm-pack build "$repo_root/rust/crates/safemesh-wasm" \
-  --target bundler \
-  --out-dir "$tmp_dir/wasm-pkg" \
-  --release -- --locked
-
-# wasm-pack 0.15 omits inline-JS snippets from its npm files allowlist.
-# Include them in the artifact before packing; never repair the consumer install.
-node --input-type=module - "$tmp_dir/wasm-pkg/package.json" <<'JS'
-import { readFileSync, writeFileSync } from "node:fs";
-const path = process.argv[2];
-const manifest = JSON.parse(readFileSync(path, "utf8"));
-manifest.files = [...new Set([...manifest.files, "snippets/"])];
-writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
-JS
-
-mkdir "$tmp_dir/tarballs" "$tmp_dir/consumer"
-npm pack "$tmp_dir/wasm-pkg" --pack-destination "$tmp_dir/tarballs" --json \
+mkdir "$tmp_dir/consumer"
+"$repo_root/scripts/package-wasm.sh" bundler "$tmp_dir/wasm-pkg" \
   > "$tmp_dir/pack.json"
 tarball="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[0].filename' "$tmp_dir/pack.json")"
 (
   cd "$tmp_dir/consumer"
   npm init -y >/dev/null
-  npm install "$tmp_dir/tarballs/$tarball"
+  npm install "$tmp_dir/wasm-pkg/$tarball"
 
   node --input-type=module - <<'JS'
 import assert from "node:assert/strict";
@@ -161,15 +141,8 @@ console.log("NPM_TARBALL_INSTALL_SMOKE=true");
 JS
 )
 
-# wasm-pack runs unlocked cargo metadata before forwarding --locked to its build.
-# Reject a stale workspace lock before that metadata call can regenerate it.
-cargo metadata --locked --format-version 1 \
-  --manifest-path "$repo_root/rust/crates/safemesh-wasm/Cargo.toml" >/dev/null
-
-wasm-pack build "$repo_root/rust/crates/safemesh-wasm" \
-  --target nodejs \
-  --out-dir "$tmp_dir/wasm-node-pkg" \
-  --release -- --locked
+"$repo_root/scripts/package-wasm.sh" nodejs "$tmp_dir/wasm-node-pkg" \
+  > "$tmp_dir/node-pack.json"
 
 node "$repo_root/rust/crates/safemesh-wasm/examples/node-convergence.mjs" \
   "$tmp_dir/wasm-node-pkg"
