@@ -1,4 +1,5 @@
 import { defineConfig } from 'astro/config';
+import mdx from '@astrojs/mdx';
 import starlight from '@astrojs/starlight';
 import assurance from './assurance.mjs';
 import { siteUrl } from './site-url.mjs';
@@ -12,6 +13,7 @@ export default defineConfig({
   base: site.pathname.replace(/\/$/, '') || '/',
   integrations: [starlight({
     title: 'SafeMesh documentation',
+    customCss: ['./src/styles/safemesh.css'],
     components: { Header: './src/components/Header.astro' },
     sidebar: [
       { label: 'Orientation', slug: '' },
@@ -30,5 +32,5 @@ export default defineConfig({
     pagefind: {
       ranking: { pageLength: 0.5, metaWeights: { title: 0 } },
     },
-  })],
+  }), mdx()],
 });

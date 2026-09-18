@@ -1,0 +1,37 @@
+---
+// Task routes: build, understand and connect. Every href is BASE_URL-aware so
+// the GitHub Pages `/safemesh/` prefix survives (DESIGN-AND-INTEGRATION.md
+// section 3) — a hardcoded root-relative link would lose it.
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const cards = [
+  {
+    number: '01 / BUILD',
+    title: 'Save. Restart. Sync.',
+    body: 'One counter, one membership set, two processes. Start with output you can recognize.',
+    href: `${base}/getting-started/`,
+  },
+  {
+    number: '02 / UNDERSTAND',
+    title: 'See why they agree.',
+    body: 'Learn what a delta carries, what a merge does, and why a duplicate is harmless.',
+    href: `${base}/concepts/`,
+  },
+  {
+    number: '03 / CONNECT',
+    title: 'Use your own stack.',
+    body: 'Choose Rust, TypeScript, Python or C. See exactly which responsibilities are yours.',
+    href: `${base}/using-safemesh/`,
+  },
+];
+---
+
+<nav class="sm-path-grid" aria-label="Choose a starting point">
+  {cards.map((card) => (
+    <a class="sm-path-card" href={card.href}>
+      <span class="sm-path-number">{card.number}</span>
+      <span class="sm-path-card-title">{card.title}</span>
+      <p>{card.body}</p>
+      <span class="sm-path-arrow" aria-hidden="true">↗</span>
+    </a>
+  ))}
+</nav>
