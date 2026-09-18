@@ -1,0 +1,43 @@
+---
+// The "evaluate the fit" evidence bridge: model → generated corpus → finite Rust
+// comparison. This is an EDITORIAL entry point only, in friendlier language than
+// CLAIMS.md/WHAT-IS-PROVEN.md. It links to the real /proof/ and /claims/ pages
+// and never restates, replaces or overrides their rendered content — those pages
+// keep rendering straight from their root-source Markdown via assurance.mjs.
+// (DESIGN-AND-INTEGRATION.md section 4; hard limit on this task.)
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const steps = [
+  {
+    tag: 'Lean',
+    title: 'Model',
+    body: 'Merge is proved to be a join: commutative, associative and idempotent, for the five Lean-backed carriers.',
+    href: `${base}/proof/`,
+    linkText: 'Read the proof and its boundary',
+  },
+  {
+    tag: 'Corpus',
+    title: 'Generated oracle',
+    body: 'Compiled Lean definitions emit a finite, generated set of expected results — evidence, not production code.',
+    href: `${base}/proof/`,
+    linkText: 'See how the corpus is generated',
+  },
+  {
+    tag: 'Rust',
+    title: 'Differential test',
+    body: 'Rust is checked against that corpus. Bindings, storage and transport are TESTED engineering, not a Lean proof.',
+    href: `${base}/claims/`,
+    linkText: 'Read the claims ceiling',
+  },
+];
+---
+
+<ul class="sm-assurance-map" aria-label="How the proof bridges to code">
+  {steps.map((step) => (
+    <li class="sm-assurance-step">
+      <span class="sm-path-number">{step.tag}</span>
+      <strong>{step.title}</strong>
+      <p>{step.body}</p>
+      <p><a href={step.href}>{step.linkText} →</a></p>
+    </li>
+  ))}
+</ul>

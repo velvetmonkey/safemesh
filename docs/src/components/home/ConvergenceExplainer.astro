@@ -1,0 +1,97 @@
+---
+// A small labeled explanation of G-Counter convergence: three replicas, joined by
+// componentwise maximum. This is NOT the Rust/WASM runtime; the real behavior is
+// in the Lab (see the link below `sm-mesh-foot`, which the caller supplies).
+//
+// Ported from the reviewed reference bundle's `mesh()`/`assets/mesh.js` component
+// (DESIGN-AND-INTEGRATION.md, section 2). Native <button> elements make it
+// keyboard-operable; aria-pressed marks the active phase; the caption is an
+// aria-live region. Without JavaScript the controls stay hidden and the diagram
+// remains a static, meaningful "offline" snapshot with real numbers and labels.
+const { labUrl } = Astro.props as { labUrl: string };
+---
+
+<figure class="sm-mesh sm-point-grid" data-mesh data-phase="offline" aria-label="Illustration of three G-Counter replicas">
+  <div class="sm-mesh-top">
+    <span>G-COUNTER / THREE REPLICAS</span>
+    <span class="sm-mesh-status" data-mesh-status>PARTITIONED</span>
+  </div>
+  <div class="sm-mesh-field">
+    <svg class="sm-mesh-wires" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      <path d="M50 25 23 72 77 72Z"></path>
+    </svg>
+    <div class="sm-replica sm-replica-a">
+      <div class="sm-replica-core">
+        <span class="sm-replica-label">REPLICA A</span>
+        <strong class="sm-replica-total" data-replica-total>3</strong>
+      </div>
+      <span class="sm-replica-vector" data-replica-vector>[3, 0, 0]</span>
+    </div>
+    <div class="sm-replica sm-replica-b">
+      <div class="sm-replica-core">
+        <span class="sm-replica-label">REPLICA B</span>
+        <strong class="sm-replica-total" data-replica-total>2</strong>
+      </div>
+      <span class="sm-replica-vector" data-replica-vector>[0, 2, 0]</span>
+    </div>
+    <div class="sm-replica sm-replica-c">
+      <div class="sm-replica-core">
+        <span class="sm-replica-label">REPLICA C</span>
+        <strong class="sm-replica-total" data-replica-total>1</strong>
+      </div>
+      <span class="sm-replica-vector" data-replica-vector>[0, 0, 1]</span>
+    </div>
+    <span class="sm-mesh-center" data-mesh-center>no delivery</span>
+  </div>
+  <div class="sm-mesh-controls" role="group" aria-label="Explore the counter example" data-mesh-controls hidden>
+    <button type="button" data-phase-button="offline" aria-pressed="true">1. Offline edits</button>
+    <button type="button" data-phase-button="sync" aria-pressed="false">2. Exchange</button>
+    <button type="button" data-phase-button="replay" aria-pressed="false">3. Replay</button>
+  </div>
+  <figcaption class="sm-mesh-caption" data-mesh-caption aria-live="polite">
+    Each replica has its own updates. A reads 3, B reads 2, and C reads 1. They do not agree yet.
+  </figcaption>
+</figure>
+<p class="sm-mesh-foot">
+  Interactive explanation, implemented in JavaScript. It models one CRDT (a
+  G-Counter joined by componentwise maximum), not the product's transport,
+  storage or wire format. For the real Rust/WASM behavior, <a href={labUrl}>open SafeMesh Lab ↗</a>.
+</p>
+
+<script>
+  // A small pedagogical G-Counter model, NOT the SafeMesh Rust/WASM runtime.
+  const seeds = [[3, 0, 0], [0, 2, 0], [0, 0, 1]];
+  const join = (a: number[], b: number[]) => a.map((value, i) => Math.max(value, b[i]));
+  const union = seeds.reduce(join, [0, 0, 0]);
+  const captions: Record<string, string> = {
+    offline: 'Each replica has its own updates. A reads 3, B reads 2, and C reads 1. They do not agree yet.',
+    sync: 'All three have now received the same updates. Componentwise maximum gives [3, 2, 1], so every replica reads 6.',
+    replay: 'Exchange first, then replay A’s [3, 0, 0] update. Each coordinate keeps its maximum. Every replica still reads 6.',
+  };
+  for (const mesh of document.querySelectorAll<HTMLElement>('[data-mesh]')) {
+    const buttons = mesh.querySelectorAll<HTMLButtonElement>('[data-phase-button]');
+    const controls = mesh.querySelector('[data-mesh-controls]');
+    if (controls) controls.removeAttribute('hidden');
+    for (const button of buttons) {
+      button.addEventListener('click', () => {
+        const phase = button.dataset.phaseButton as 'offline' | 'sync' | 'replay';
+        const states = phase === 'offline' ? seeds : seeds.map(() => (phase === 'sync' ? union : join(union, seeds[0])));
+        mesh.dataset.phase = phase;
+        const replicas = mesh.querySelectorAll('.sm-replica');
+        replicas.forEach((replica, i) => {
+          const total = replica.querySelector('[data-replica-total]');
+          const vector = replica.querySelector('[data-replica-vector]');
+          if (total) total.textContent = String(states[i].reduce((a, b) => a + b, 0));
+          if (vector) vector.textContent = `[${states[i].join(', ')}]`;
+        });
+        const status = mesh.querySelector('[data-mesh-status]');
+        const center = mesh.querySelector('[data-mesh-center]');
+        const caption = mesh.querySelector('[data-mesh-caption]');
+        if (status) status.textContent = phase === 'offline' ? 'PARTITIONED' : phase === 'sync' ? 'SAME STATE' : 'UNCHANGED';
+        if (center) center.textContent = phase === 'offline' ? 'no delivery' : phase === 'sync' ? 'max per coordinate' : 'duplicate absorbed';
+        if (caption) caption.textContent = captions[phase];
+        for (const choice of buttons) choice.setAttribute('aria-pressed', String(choice === button));
+      });
+    }
+  }
+</script>

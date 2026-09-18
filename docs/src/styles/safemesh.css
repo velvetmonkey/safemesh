@@ -1,0 +1,352 @@
+/*
+ * SafeMesh visual identity, layered on top of Starlight's existing article/sidebar
+ * wrappers rather than replacing them (see DESIGN-AND-INTEGRATION.md, section 1).
+ *
+ * Ported from the reviewed reference bundle's `assets/styles.css` `--sm-*` tokens:
+ * cool ink-blue surfaces, mint actions, a restrained point grid. Seal's docs keep
+ * warm paper/rust; this file gives SafeMesh its own palette while inheriting
+ * Starlight's actual layout mechanics (sidebar, TOC, search dialog, code blocks).
+ *
+ * Two kinds of rules live here:
+ *  1. Re-pointing Starlight's own `--sl-*` custom properties at the SafeMesh
+ *     palette, so the existing article/sidebar/header DOM is restyled in place.
+ *  2. New `.sm-*` component classes used only by the new homepage components
+ *     under `src/components/home/`. Nothing here touches assurance markup
+ *     (`[data-assurance-source]`) or the gold-path fixture blocks.
+ */
+
+@layer tokens {
+  :root {
+    --sm-bg: #0c1621;
+    --sm-panel: #142331;
+    --sm-text: #e6f2f6;
+    --sm-muted: #a4baca;
+    --sm-line: #304554;
+    --sm-accent: #80e6c2;
+    --sm-accent-ink: #102d25;
+    --sm-tint: #193d36;
+    --sm-blue: #9ec5ff;
+    --sm-blue-tint: #1d304a;
+    --sm-warn: #f2c58e;
+    --sm-warn-bg: #3b2b1b;
+    --sm-grid: #1c2b3a;
+    --sm-code: #101f2d;
+    --sm-code-text: #e5f3f5;
+    --sm-font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --sm-mono: ui-monospace, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace;
+  }
+
+  :root[data-theme='light'] {
+    --sm-bg: #f3f7fa;
+    --sm-panel: #ffffff;
+    --sm-text: #102b3b;
+    --sm-muted: #516774;
+    --sm-line: #ccdae2;
+    --sm-accent: #006756;
+    --sm-accent-ink: #ffffff;
+    --sm-tint: #d9f3e9;
+    --sm-blue: #244f95;
+    --sm-blue-tint: #e5edfa;
+    --sm-warn: #7a480e;
+    --sm-warn-bg: #fff0db;
+    --sm-grid: #dbe5eb;
+  }
+}
+
+/* Re-point Starlight's own variables. This restyles the existing sidebar, TOC,
+   header chrome and article typography without forking their markup. */
+@layer starlight.base {
+  :root {
+    --sl-color-accent-low: var(--sm-tint);
+    --sl-color-accent: var(--sm-accent);
+    --sl-color-accent-high: var(--sm-accent);
+    --sl-color-white: var(--sm-text);
+    --sl-color-text: var(--sm-muted);
+    --sl-color-text-accent: var(--sm-accent);
+    --sl-color-bg: var(--sm-bg);
+    --sl-color-bg-nav: var(--sm-panel);
+    --sl-color-bg-sidebar: var(--sm-panel);
+    --sl-color-bg-inline-code: var(--sm-blue-tint);
+    --sl-color-bg-accent: var(--sm-accent);
+    --sl-color-hairline-light: var(--sm-line);
+    --sl-color-hairline: var(--sm-line);
+    --sl-color-hairline-shade: var(--sm-line);
+    --sl-font: var(--sm-font);
+    --sl-font-mono: var(--sm-mono);
+  }
+}
+
+@layer base {
+  /* A restrained point grid behind the hero/mesh area only, not the whole page. */
+  .sm-point-grid {
+    background-image: radial-gradient(var(--sm-grid) 1px, transparent 1px);
+    background-size: 16px 16px;
+  }
+}
+
+@layer components {
+  /* Hero (index.mdx): what SafeMesh does, plus the primary task routes. */
+  .sm-hero {
+    display: grid;
+    grid-template-columns: 1.05fr 1fr;
+    gap: 3rem;
+    align-items: center;
+    margin: 1.5rem 0 3rem;
+  }
+  .sm-hero-eyebrow {
+    font: 0.7rem/1.5 var(--sm-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--sm-accent);
+    margin: 0 0 0.6rem;
+  }
+  .sm-hero-tagline {
+    font-size: clamp(1.5rem, 2.6vw, 2.1rem);
+    line-height: 1.2;
+    letter-spacing: -0.03em;
+    font-weight: 600;
+    margin: 0 0 1rem;
+  }
+  .sm-hero-lead {
+    max-width: 32rem;
+    font-size: 1.05rem;
+    color: var(--sm-muted);
+    margin: 0 0 1.5rem;
+  }
+  .sm-hero-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+  .sm-hero-note {
+    margin-top: 1rem;
+    font: 0.7rem/1.7 var(--sm-mono);
+    color: var(--sm-muted);
+  }
+  .sm-button {
+    min-height: 2.8rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    padding: 0.65rem 1.1rem;
+    border-radius: 0.4rem;
+    border: 1px solid var(--sm-line);
+    background: var(--sm-panel);
+    color: var(--sm-text) !important;
+    font-size: 0.87rem;
+    font-weight: 650;
+    text-decoration: none !important;
+  }
+  .sm-button:hover {
+    background: var(--sm-tint);
+  }
+  .sm-button.sm-button-primary {
+    background: var(--sm-accent);
+    border-color: var(--sm-accent);
+    color: var(--sm-accent-ink) !important;
+  }
+  .sm-button.sm-button-primary:hover {
+    filter: brightness(0.95);
+  }
+  .sm-text-link {
+    font-size: 0.87rem;
+    font-weight: 550;
+  }
+
+  /* Convergence explanation: a labeled, keyboard-operable model. Not the Lab. */
+  .sm-mesh {
+    background: var(--sm-panel);
+    border: 1px solid var(--sm-line);
+    border-radius: 0.6rem;
+    overflow: hidden;
+    min-width: 0;
+    margin: 0;
+  }
+  .sm-mesh-top {
+    padding: 1rem 1.3rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    border-bottom: 1px solid var(--sm-line);
+    font: 0.65rem/1.5 var(--sm-mono);
+    color: var(--sm-muted);
+  }
+  .sm-mesh-status { color: var(--sm-accent); }
+  .sm-mesh-field {
+    position: relative;
+    isolation: isolate;
+    height: 19rem;
+  }
+  .sm-mesh-wires {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: -1;
+    color: var(--sm-line);
+  }
+  .sm-mesh-wires path {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-dasharray: 5 5;
+    vector-effect: non-scaling-stroke;
+  }
+  .sm-mesh[data-phase='sync'] .sm-mesh-wires,
+  .sm-mesh[data-phase='replay'] .sm-mesh-wires {
+    color: var(--sm-accent);
+  }
+  .sm-mesh[data-phase='sync'] .sm-mesh-wires path,
+  .sm-mesh[data-phase='replay'] .sm-mesh-wires path {
+    stroke-dasharray: none;
+  }
+  .sm-replica {
+    position: absolute;
+    width: 6.6rem;
+    text-align: center;
+    transform: translate(-50%, -50%);
+  }
+  .sm-replica-a { left: 50%; top: 24%; }
+  .sm-replica-b { left: 23%; top: 74%; }
+  .sm-replica-c { left: 77%; top: 74%; }
+  .sm-replica-core {
+    width: 4.6rem;
+    height: 4.6rem;
+    margin: auto;
+    display: grid;
+    place-content: center;
+    border-radius: 50%;
+    background: var(--sm-panel);
+    border: 1px solid var(--sm-line);
+    box-shadow: 0 0 0 7px var(--sm-bg);
+  }
+  .sm-replica-label { font: 0.6rem/1.3 var(--sm-mono); color: var(--sm-muted); }
+  .sm-replica-total { font: 550 1.7rem/1.2 var(--sm-font); letter-spacing: -0.06em; }
+  .sm-replica-vector {
+    display: inline-block;
+    margin-top: 0.7rem;
+    background: var(--sm-panel);
+    padding: 0 0.3rem;
+    font: 0.68rem/1.6 var(--sm-mono);
+    color: var(--sm-muted);
+  }
+  .sm-mesh[data-phase='sync'] .sm-replica-core,
+  .sm-mesh[data-phase='replay'] .sm-replica-core {
+    border-color: var(--sm-accent);
+    background: var(--sm-tint);
+  }
+  .sm-mesh-center {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--sm-panel);
+    font: 0.63rem/1.5 var(--sm-mono);
+    color: var(--sm-muted);
+    padding: 0.2rem 0.5rem;
+    border-radius: 0.3rem;
+    white-space: nowrap;
+  }
+  .sm-mesh-controls {
+    display: flex;
+    padding: 0.6rem;
+    gap: 0.35rem;
+    border-top: 1px solid var(--sm-line);
+  }
+  .sm-mesh-controls button {
+    flex: 1;
+    min-height: 2.75rem;
+    border: 0;
+    background: transparent;
+    color: var(--sm-muted);
+    border-radius: 0.3rem;
+    font-size: 0.72rem;
+    font: inherit;
+    cursor: pointer;
+  }
+  .sm-mesh-controls button[aria-pressed='true'] {
+    background: var(--sm-tint);
+    color: var(--sm-accent);
+    font-weight: 650;
+  }
+  .sm-mesh-controls button:hover { background: var(--sm-bg); }
+  .sm-mesh-controls button:focus-visible {
+    outline: 3px solid var(--sm-blue);
+    outline-offset: -3px;
+  }
+  .sm-mesh-caption {
+    padding: 0 1.3rem 1rem;
+    font-size: 0.78rem;
+    color: var(--sm-muted);
+    min-height: 4rem;
+    margin: 0;
+  }
+  .sm-mesh-foot {
+    font-size: 0.75rem;
+    color: var(--sm-muted);
+    margin-top: 0.75rem;
+    line-height: 1.6;
+  }
+
+  /* Task routes. */
+  .sm-path-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border-top: 1px solid var(--sm-line);
+    border-bottom: 1px solid var(--sm-line);
+    margin: 0 0 3rem;
+    padding: 0;
+    list-style: none;
+  }
+  .sm-path-card {
+    padding: 1.7rem 1.5rem;
+    text-decoration: none !important;
+    color: var(--sm-text) !important;
+    position: relative;
+    border-right: 1px solid var(--sm-line);
+    display: block;
+  }
+  .sm-path-card:first-child { padding-left: 0; }
+  .sm-path-card:last-child { border-right: 0; }
+  .sm-path-card:hover .sm-path-card-title { text-decoration: underline; text-underline-offset: 0.2em; }
+  .sm-path-card .sm-path-number { font: 0.75rem var(--sm-mono); color: var(--sm-accent); }
+  .sm-path-card-title { display: block; font-size: 1.2rem; font-weight: 650; letter-spacing: -0.03em; margin: 0.75rem 0 0.4rem; }
+  .sm-path-card p { font-size: 0.85rem; color: var(--sm-muted); max-width: 24rem; margin: 0; }
+  .sm-path-card .sm-path-arrow { position: absolute; right: 1.4rem; top: 1.6rem; color: var(--sm-accent); }
+
+  /* Evidence bridge: model → generated corpus → finite Rust comparison. Links to
+     the real /proof/ and /claims/ pages; it never restates or overrides them. */
+  .sm-assurance-map {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1.25rem;
+    margin: 1.5rem 0;
+    padding: 0;
+    list-style: none;
+  }
+  .sm-assurance-step {
+    border-top: 2px solid var(--sm-blue);
+    padding-top: 0.7rem;
+  }
+  .sm-assurance-step strong { display: block; font-size: 0.92rem; }
+  .sm-assurance-step p { font-size: 0.82rem; margin: 0.35rem 0 0; }
+
+  @media (max-width: 45rem) {
+    .sm-hero { grid-template-columns: 1fr; gap: 2rem; }
+    .sm-path-grid { grid-template-columns: 1fr; }
+    .sm-path-card, .sm-path-card:first-child {
+      padding: 1.2rem 0;
+      border-right: 0;
+      border-bottom: 1px solid var(--sm-line);
+    }
+    .sm-path-card:last-child { border-bottom: 0; }
+    .sm-assurance-map { grid-template-columns: 1fr; }
+    .sm-mesh-field { height: 17rem; }
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .sm-button, .sm-path-card, .sm-replica-core { transition: background-color .18s, border-color .18s; }
+  }
+}

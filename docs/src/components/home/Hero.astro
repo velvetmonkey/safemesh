@@ -1,0 +1,26 @@
+---
+// The text side of the homepage hero. Starlight's own <PageTitle/> already
+// renders the page's single <h1> from frontmatter (index.mdx has no `hero:`
+// frontmatter, so Starlight falls through to that default). This component
+// supplies the supporting tagline, lead paragraph and primary task actions —
+// no heading elements of its own, to keep the page at exactly one H1.
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const labUrl = import.meta.env.LAB_URL || 'http://localhost:4173/';
+---
+
+<div class="sm-hero-copy">
+  <p class="sm-hero-eyebrow">Small state. Distributed.</p>
+  <p class="sm-hero-tagline">Local changes. Shared state.</p>
+  <p class="sm-hero-lead">
+    Keep replicas working while disconnected, then bring their updates together
+    with small, embeddable CRDTs and a Rust core. You bring the transport and
+    application schema.
+  </p>
+  <div class="sm-hero-actions">
+    <a class="sm-button sm-button-primary" href={`${base}/getting-started/`}>
+      Build your first sync <span aria-hidden="true">→</span>
+    </a>
+    <a class="sm-text-link" href={labUrl}>Explore the Lab ↗</a>
+  </div>
+  <p class="sm-hero-note">Start from source · Rust + TypeScript guides · No Lean build needed</p>
+</div>
