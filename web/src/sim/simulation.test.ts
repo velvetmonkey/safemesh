@@ -9,6 +9,7 @@ import {
   dropNextPacket,
   duplicateNextPacket,
   queueAntiEntropyPackets,
+  readORSet,
   removeElement,
   reorderQueue,
   runAntiEntropyNow,
@@ -145,6 +146,47 @@ describe('mesh simulation', () => {
 
     expect(sim.queue).toHaveLength(1)
     expect(sim.log[0].technical).toContain('operator dropped')
+  })
+
+  it('preserves an OR-Set packet when no counter packet matches and delivers it on schedule', () => {
+    let sim = setAntiEntropyMs(setDropRate(createSimulation(3), 0), 0)
+    sim = addElement(sim, 0, 'insulin')
+    sim = tick(sim, sim.queue[0].deliverAt)
+    const queued = sim.queue
+    expect(queued).toHaveLength(1)
+    expect(queued[0]).toMatchObject({ to: 2, delta: { kind: 'orset.add' } })
+    const before = structuredClone(queued)
+
+    sim = dropCounterPacketToPeer(sim, 2)
+
+    expect(sim.queue).toEqual(before)
+    expect(sim.queue).toBe(queued)
+    expect(sim.log[0]).toMatchObject({
+      plain: 'No queued G-Counter bump to drop for Camp 2',
+      technical: 'drop requested: no matching gcounter.bump packet queued for peer 2',
+      tone: 'drop',
+    })
+    sim = tick(sim, queued[0].deliverAt - sim.now - 1)
+    expect(sim.queue).toEqual(before)
+    expect(readORSet(sim.peers[2].orset)).toEqual([])
+    sim = tick(sim, 1)
+    expect(sim.queue).toEqual([])
+    expect(readORSet(sim.peers[2].orset)).toEqual(['insulin'])
+    expect(sim.log[0].tone).toBe('deliver')
+  })
+
+  it('drops only one matching counter packet from a mixed queue', () => {
+    let sim = addElement(createSimulation(3), 0, 'insulin')
+    sim = bumpCounter(bumpCounter(sim, 0), 0)
+    const before = structuredClone(sim.queue)
+    const index = before.findIndex((packet) => packet.to === 2 && packet.delta.kind === 'gcounter.bump')
+    expect(index).toBeGreaterThan(0)
+
+    sim = dropCounterPacketToPeer(sim, 2)
+
+    expect(sim.queue).toEqual(before.filter((_, packetIndex) => packetIndex !== index))
+    expect(sim.queue.some((packet) => packet.to === 2 && packet.delta.kind === 'gcounter.bump')).toBe(true)
+    expect(sim.log[0].technical).toContain('operator dropped G(0:=1) 0->2')
   })
 
   it('can queue visible anti-entropy repair packets before state changes', () => {
