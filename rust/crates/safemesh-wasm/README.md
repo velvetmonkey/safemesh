@@ -37,11 +37,13 @@ See the repository `CLAIMS.md` and `WHAT-IS-PROVEN.md` for the full wording rule
 ## Install
 
 The v0.1 distribution flow builds an npm package with `wasm-pack`; it does not publish to npm.
+The shared script includes the required JavaScript snippets and runs `npm pack`,
+leaving an installable `.tgz` in `pkg` (bundler) or `pkg-node` (Node).
+It accepts an optional output directory as its second argument.
 
 ```sh
 cd rust/crates/safemesh-wasm
-wasm-pack build . --target bundler --release
-npm pack --dry-run ./pkg
+../../../scripts/package-wasm.sh bundler
 ```
 
 ## Counter read compatibility (main, unreleased)
@@ -84,7 +86,7 @@ Run the Node convergence demo against a freshly generated Node-target package:
 
 ```sh
 cd rust/crates/safemesh-wasm
-wasm-pack build . --target nodejs --out-dir pkg-node --release
+../../../scripts/package-wasm.sh nodejs
 node examples/node-convergence.mjs pkg-node
 ```
 
@@ -98,7 +100,7 @@ python3 -m http.server 8000
 
 Then open `http://127.0.0.1:8000/examples/browser-convergence.html`.
 
-Run `./scripts/package-smoke.sh` from the repository root to build the bundler package, run `npm pack --dry-run`, and execute the Node convergence demo without publishing.
+Run `./scripts/package-smoke.sh` from the repository root to pack both WASM targets, install the bundler tarball in a fresh consumer, and execute the Node convergence demo without publishing.
 
 ## Checked coordinates and OR-Set
 
@@ -114,7 +116,7 @@ apply to readers and wire helpers. Token arrays must be `BigUint64Array` values.
 Invalid inputs raise `SafeMeshError` with code 2 before state or log mutation.
 
 Build a Node package from this crate directory with
-`wasm-pack build . --target nodejs --out-dir pkg-node --release`. Save this as
+`../../../scripts/package-wasm.sh nodejs`. Save this as
 `orset.mjs` here and run `node orset.mjs`.
 
 ```js
