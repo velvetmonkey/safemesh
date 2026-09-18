@@ -245,7 +245,8 @@ fn split_delivery_merge_agrees_with_oracle() {
             let target = if idx % 2 == 0 { &mut left } else { &mut right };
             target.apply_bump(as_usize(&b[0]), b[1].as_u64().unwrap());
         }
-        left.merge(&right);
+        left.merge(&right)
+            .expect("corpus counters have equal widths");
         let expected_state: Vec<u64> = case["expected_state"]
             .as_array()
             .unwrap()
