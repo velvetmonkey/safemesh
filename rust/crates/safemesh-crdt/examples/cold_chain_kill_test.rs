@@ -339,10 +339,10 @@ fn anti_entropy_round(transport: &mut InMemoryTransport<ColdChainDelta>, replica
 }
 
 fn drain_all(transport: &mut InMemoryTransport<ColdChainDelta>, replicas: &mut [Replica]) {
-    for peer in 0..replicas.len() {
+    for (peer, replica) in replicas.iter_mut().enumerate() {
         let incoming = transport.drain(peer as u64);
         for envelope in incoming {
-            replicas[peer].receive(envelope.records);
+            replica.receive(envelope.records);
         }
     }
 }

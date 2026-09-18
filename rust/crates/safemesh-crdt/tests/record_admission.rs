@@ -1378,7 +1378,7 @@ fn raw_admission_uses_custom_crdt_hook_and_preserves_identity_verdicts() {
             _: RecordId,
             delta: &u64,
         ) -> Result<(), safemesh_crdt::WireError> {
-            if delta % 2 == 0 {
+            if delta.is_multiple_of(2) {
                 Ok(())
             } else {
                 Err(safemesh_crdt::WireError::InvalidTag)
