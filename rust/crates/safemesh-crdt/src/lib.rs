@@ -154,7 +154,8 @@ impl GCounter {
 
     /// Number of replica coordinates.
     pub fn len(&self) -> usize {
-        self.counts.len()
+        let count = self.counts.len();
+        count
     }
 
     pub fn is_empty(&self) -> bool {
