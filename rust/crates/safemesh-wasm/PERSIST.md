@@ -117,7 +117,7 @@ Change into `walk`. Everything below runs from there, and `walk` needs nothing b
 // Each step is a separate process. State survives only through the log files.
 
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const [packageDir, logDir, step] = process.argv.slice(2);
@@ -150,7 +150,7 @@ function save(side, replica) {
   mkdirSync(logDir, { recursive: true });
   for (const kind of ["counter", "set"]) {
     const bytes = replica[kind].logBytes();
-    writeFileSync(logPath(side, kind), bytes);
+    writeFileSync(logPath(side, kind), bytes, { flag: step === "persist" ? "wx" : "w" });
     console.log(`  wrote ${logPath(side, kind)} (${bytes.length} bytes)`);
   }
 }
@@ -204,6 +204,18 @@ function exchange(a, b) {
 
 switch (step) {
   case "persist": {
+    // Check every store before writing any: even a partial history must survive.
+    // lstat also detects dangling symlinks at a store path.
+    const existing = Object.keys(SIDES).flatMap(side =>
+      ["counter", "set"].map(kind => logPath(side, kind)),
+    ).filter(path => lstatSync(path, { throwIfNoEntry: false }));
+    if (existing.length) {
+      console.error(
+        `PERSIST REFUSED: existing store files: ${existing.join(", ")}. ` +
+        "Use a different, empty directory for a new exercise; use restore to read this history.",
+      );
+      process.exit(2);
+    }
     console.log("persist: two fresh replicas, one edit each, full exchange, then write logs");
     const left = fresh("left");
     const right = fresh("right");
@@ -286,6 +298,11 @@ Three facts about the calls the program makes:
   do not move state, so merging the same file twice is harmless.
   The return value contains an ordered `accepted`, `duplicate`, or `collision`
   verdict for every input record, including any accepted prefix before a collision.
+
+`persist` initializes a new exercise and refuses if any of the four store paths
+already exists, including a partial history. The error names those paths. Use
+`restore` to read the existing history, or choose a different, empty log directory
+to start another exercise. There is no reset command.
 
 ## 3. Persist
 

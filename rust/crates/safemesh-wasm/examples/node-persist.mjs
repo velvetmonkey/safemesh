@@ -9,7 +9,7 @@
 // Each step is a separate process. State survives only through the log files.
 
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const [packageDir, logDir, step] = process.argv.slice(2);
@@ -42,7 +42,7 @@ function save(side, replica) {
   mkdirSync(logDir, { recursive: true });
   for (const kind of ["counter", "set"]) {
     const bytes = replica[kind].logBytes();
-    writeFileSync(logPath(side, kind), bytes);
+    writeFileSync(logPath(side, kind), bytes, { flag: step === "persist" ? "wx" : "w" });
     console.log(`  wrote ${logPath(side, kind)} (${bytes.length} bytes)`);
   }
 }
@@ -96,6 +96,18 @@ function exchange(a, b) {
 
 switch (step) {
   case "persist": {
+    // Check every store before writing any: even a partial history must survive.
+    // lstat also detects dangling symlinks at a store path.
+    const existing = Object.keys(SIDES).flatMap(side =>
+      ["counter", "set"].map(kind => logPath(side, kind)),
+    ).filter(path => lstatSync(path, { throwIfNoEntry: false }));
+    if (existing.length) {
+      console.error(
+        `PERSIST REFUSED: existing store files: ${existing.join(", ")}. ` +
+        "Use a different, empty directory for a new exercise; use restore to read this history.",
+      );
+      process.exit(2);
+    }
     console.log("persist: two fresh replicas, one edit each, full exchange, then write logs");
     const left = fresh("left");
     const right = fresh("right");
