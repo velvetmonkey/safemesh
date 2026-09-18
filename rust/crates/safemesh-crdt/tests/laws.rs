@@ -194,3 +194,22 @@ fn convergence_harness_hammers_delta_delivery_shapes() {
     .unwrap();
     println!("LwwMap convergence scenarios: {}", report.scenarios);
 }
+
+#[test]
+fn merge_laws_report_incompatible_replica_domains() {
+    use safemesh_crdt::laws::{Law, LawFailure};
+    let expected = Err(LawFailure {
+        law: Law::Identity,
+        a: 0,
+        b: None,
+        c: None,
+    });
+    assert_eq!(
+        check_merge_laws(&GCounter::new(2), &[GCounter::new(3)]),
+        expected
+    );
+    assert_eq!(
+        check_merge_laws(&PnCounter::new(2), &[PnCounter::new(3)]),
+        expected
+    );
+}

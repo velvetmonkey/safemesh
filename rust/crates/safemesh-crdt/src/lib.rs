@@ -40,7 +40,8 @@ use alloc::vec::Vec;
 /// contract enforced by the laws harness, not a proof. Admission is a separate
 /// obligation: user-defined CRDTs must implement [`Crdt::validate_record`].
 pub trait Mergeable {
-    fn merge(&mut self, other: &Self);
+    /// Join compatible states, returning an error if their replica domains differ.
+    fn merge(&mut self, other: &Self) -> Result<(), MergeError>;
 }
 
 /// Delta application surface for CRDT product types.
@@ -55,7 +56,9 @@ pub trait Mergeable {
 ///     use safemesh_crdt::{Crdt, Mergeable};
 ///     pub struct MissingValidation;
 ///     impl Mergeable for MissingValidation {
-///         fn merge(&mut self, _: &Self) {}
+///         fn merge(&mut self, _: &Self) -> Result<(), safemesh_crdt::MergeError> {
+///             Ok(())
+///         }
 ///     }
 ///     impl Crdt for MissingValidation {
 ///         type Delta = ();
@@ -91,7 +94,7 @@ pub trait Crdt: Mergeable {
     fn apply_delta(&mut self, delta: Self::Delta);
 }
 
-/// Error raised by the checked full-state merge (`try_merge`).
+/// Error raised by full-state merge (`merge` or `try_merge`).
 ///
 /// The Lean model fixes the replica set (`Fin n`), so a length mismatch is
 /// unrepresentable there. At the Rust boundary an untrusted peer can hand us a
@@ -216,13 +219,10 @@ impl GCounter {
     /// delta replica and a full-state replica fed the same bumps agree:
     /// `SafeMesh.deltaGCounter_matches_full`.
     ///
-    /// Infallible variant for the proven equal-length invariant (fixed replica
-    /// set). Panics on a replica-count mismatch rather than dropping state; use
-    /// [`GCounter::try_merge`] for untrusted input.
-    pub fn merge(&mut self, other: &GCounter) {
-        self.try_merge(other).expect(
-            "GCounter::merge requires equal replica counts; use try_merge for untrusted input",
-        );
+    /// Returns [`MergeError::ReplicaCountMismatch`] without changing state if
+    /// the replica counts differ, just like [`GCounter::try_merge`].
+    pub fn merge(&mut self, other: &GCounter) -> Result<(), MergeError> {
+        self.try_merge(other)
     }
 
     /// Per-coordinate state (the `ι → ℕ` vector).
@@ -245,8 +245,8 @@ impl GCounter {
 }
 
 impl Mergeable for GCounter {
-    fn merge(&mut self, other: &Self) {
-        GCounter::merge(self, other);
+    fn merge(&mut self, other: &Self) -> Result<(), MergeError> {
+        GCounter::merge(self, other)
     }
 }
 
@@ -309,8 +309,9 @@ impl<T: Ord> Default for GSet<T> {
 }
 
 impl<T: Ord + Clone> Mergeable for GSet<T> {
-    fn merge(&mut self, other: &Self) {
+    fn merge(&mut self, other: &Self) -> Result<(), MergeError> {
         GSet::merge(self, other);
+        Ok(())
     }
 }
 
@@ -414,12 +415,10 @@ impl PnCounter {
     /// Full-state merge: componentwise G-Counter merge —
     /// `Crdt.pncounter_merge_apply`.
     ///
-    /// Infallible variant for the proven equal-length invariant; panics on a
-    /// replica-count mismatch. Use [`PnCounter::try_merge`] for untrusted input.
-    pub fn merge(&mut self, other: &PnCounter) {
-        self.try_merge(other).expect(
-            "PnCounter::merge requires equal replica counts; use try_merge for untrusted input",
-        );
+    /// Returns [`MergeError::ReplicaCountMismatch`] without changing either
+    /// side if the replica counts differ, just like [`PnCounter::try_merge`].
+    pub fn merge(&mut self, other: &PnCounter) -> Result<(), MergeError> {
+        self.try_merge(other)
     }
 
     /// Increment-side state.
@@ -447,8 +446,8 @@ impl PnCounter {
 }
 
 impl Mergeable for PnCounter {
-    fn merge(&mut self, other: &Self) {
-        PnCounter::merge(self, other);
+    fn merge(&mut self, other: &Self) -> Result<(), MergeError> {
+        PnCounter::merge(self, other)
     }
 }
 
@@ -566,8 +565,9 @@ impl<T: Ord, K: Ord> Default for OrSet<T, K> {
 }
 
 impl<T: Ord + Clone, K: Ord + Clone> Mergeable for OrSet<T, K> {
-    fn merge(&mut self, other: &Self) {
+    fn merge(&mut self, other: &Self) -> Result<(), MergeError> {
         OrSet::merge(self, other);
+        Ok(())
     }
 }
 
@@ -679,8 +679,9 @@ impl<P: Ord, V: Ord> Default for Rga<P, V> {
 }
 
 impl<P: Ord + Clone, V: Ord + Clone> Mergeable for Rga<P, V> {
-    fn merge(&mut self, other: &Self) {
+    fn merge(&mut self, other: &Self) -> Result<(), MergeError> {
         Rga::merge(self, other);
+        Ok(())
     }
 }
 
@@ -776,8 +777,9 @@ impl<K: Ord> Default for EnableWinsFlag<K> {
 }
 
 impl<K: Ord + Clone> Mergeable for EnableWinsFlag<K> {
-    fn merge(&mut self, other: &Self) {
+    fn merge(&mut self, other: &Self) -> Result<(), MergeError> {
         EnableWinsFlag::merge(self, other);
+        Ok(())
     }
 }
 
@@ -875,8 +877,9 @@ impl<V: Ord + Clone> LwwRegister<V> {
 }
 
 impl<V: Ord + Clone> Mergeable for LwwRegister<V> {
-    fn merge(&mut self, other: &Self) {
+    fn merge(&mut self, other: &Self) -> Result<(), MergeError> {
         LwwRegister::merge(self, other);
+        Ok(())
     }
 }
 
@@ -1015,8 +1018,9 @@ impl<K: Ord, V: Ord> Default for LwwMap<K, V> {
 }
 
 impl<K: Ord + Clone, V: Ord + Clone> Mergeable for LwwMap<K, V> {
-    fn merge(&mut self, other: &Self) {
+    fn merge(&mut self, other: &Self) -> Result<(), MergeError> {
         LwwMap::merge(self, other);
+        Ok(())
     }
 }
 
@@ -2647,7 +2651,12 @@ pub mod laws {
 
         for (a_idx, a) in samples.iter().enumerate() {
             let mut aa = a.clone();
-            aa.merge(a);
+            aa.merge(a).map_err(|_| LawFailure {
+                law: Law::Idempotent,
+                a: a_idx,
+                b: None,
+                c: None,
+            })?;
             scenarios += 1;
             if aa != *a {
                 return Err(LawFailure {
@@ -2659,9 +2668,19 @@ pub mod laws {
             }
 
             let mut left_identity = identity.clone();
-            left_identity.merge(a);
+            left_identity.merge(a).map_err(|_| LawFailure {
+                law: Law::Identity,
+                a: a_idx,
+                b: None,
+                c: None,
+            })?;
             let mut right_identity = a.clone();
-            right_identity.merge(identity);
+            right_identity.merge(identity).map_err(|_| LawFailure {
+                law: Law::Identity,
+                a: a_idx,
+                b: None,
+                c: None,
+            })?;
             scenarios += 2;
             if left_identity != *a || right_identity != *a {
                 return Err(LawFailure {
@@ -2674,9 +2693,19 @@ pub mod laws {
 
             for (b_idx, b) in samples.iter().enumerate() {
                 let mut ab = a.clone();
-                ab.merge(b);
+                ab.merge(b).map_err(|_| LawFailure {
+                    law: Law::Commutative,
+                    a: a_idx,
+                    b: Some(b_idx),
+                    c: None,
+                })?;
                 let mut ba = b.clone();
-                ba.merge(a);
+                ba.merge(a).map_err(|_| LawFailure {
+                    law: Law::Commutative,
+                    a: a_idx,
+                    b: Some(b_idx),
+                    c: None,
+                })?;
                 scenarios += 1;
                 if ab != ba {
                     return Err(LawFailure {
@@ -2689,13 +2718,33 @@ pub mod laws {
 
                 for (c_idx, c) in samples.iter().enumerate() {
                     let mut left = a.clone();
-                    left.merge(b);
-                    left.merge(c);
+                    left.merge(b).map_err(|_| LawFailure {
+                        law: Law::Associative,
+                        a: a_idx,
+                        b: Some(b_idx),
+                        c: Some(c_idx),
+                    })?;
+                    left.merge(c).map_err(|_| LawFailure {
+                        law: Law::Associative,
+                        a: a_idx,
+                        b: Some(b_idx),
+                        c: Some(c_idx),
+                    })?;
 
                     let mut right_inner = b.clone();
-                    right_inner.merge(c);
+                    right_inner.merge(c).map_err(|_| LawFailure {
+                        law: Law::Associative,
+                        a: a_idx,
+                        b: Some(b_idx),
+                        c: Some(c_idx),
+                    })?;
                     let mut right = a.clone();
-                    right.merge(&right_inner);
+                    right.merge(&right_inner).map_err(|_| LawFailure {
+                        law: Law::Associative,
+                        a: a_idx,
+                        b: Some(b_idx),
+                        c: Some(c_idx),
+                    })?;
 
                     scenarios += 1;
                     if left != right {
@@ -2761,7 +2810,7 @@ pub mod laws {
                 odd.apply_delta(delta);
             }
         }
-        even.merge(&odd);
+        even.merge(&odd).map_err(|_| convergence_failure(5))?;
         scenarios += 1;
         if even != expected {
             return Err(convergence_failure(5));
@@ -2776,7 +2825,9 @@ pub mod laws {
                 lossy_a.apply_delta(delta);
             }
         }
-        lossy_a.merge(&lossy_b);
+        lossy_a
+            .merge(&lossy_b)
+            .map_err(|_| convergence_failure(6))?;
         scenarios += 1;
         if lossy_a != expected {
             return Err(convergence_failure(6));

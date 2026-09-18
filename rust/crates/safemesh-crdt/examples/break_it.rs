@@ -30,10 +30,11 @@ impl Replica {
         }
     }
 
-    fn merge(&mut self, other: &Self) {
-        self.counter.merge(&other.counter);
+    fn merge(&mut self, other: &Self) -> Result<(), safemesh_crdt::MergeError> {
+        self.counter.merge(&other.counter)?;
         self.supplies.merge(&other.supplies);
         self.text.merge(&other.text);
+        Ok(())
     }
 }
 
@@ -295,10 +296,14 @@ fn script() -> Vec<ScriptStep> {
 fn anti_entropy(replicas: &mut [Replica]) {
     let mut joined = replicas[0].clone();
     for replica in replicas.iter().skip(1) {
-        joined.merge(replica);
+        joined
+            .merge(replica)
+            .expect("replicas share a fixed domain");
     }
     for replica in replicas {
-        replica.merge(&joined);
+        replica
+            .merge(&joined)
+            .expect("replicas share a fixed domain");
     }
 }
 

@@ -1366,8 +1366,9 @@ fn raw_admission_uses_custom_crdt_hook_and_preserves_identity_verdicts() {
     #[derive(Default)]
     struct EvenSet(safemesh_crdt::GSet<u64>);
     impl safemesh_crdt::Mergeable for EvenSet {
-        fn merge(&mut self, other: &Self) {
+        fn merge(&mut self, other: &Self) -> Result<(), safemesh_crdt::MergeError> {
             self.0.merge(&other.0);
+            Ok(())
         }
     }
     impl Crdt for EvenSet {

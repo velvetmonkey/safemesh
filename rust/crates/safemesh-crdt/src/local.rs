@@ -839,8 +839,9 @@ mod durable_tests {
         }
         struct State(u64);
         impl crate::Mergeable for State {
-            fn merge(&mut self, other: &Self) {
+            fn merge(&mut self, other: &Self) -> Result<(), crate::MergeError> {
                 self.0 = self.0.max(other.0);
+                Ok(())
             }
         }
         impl Crdt for State {
