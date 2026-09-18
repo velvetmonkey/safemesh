@@ -1153,6 +1153,7 @@ impl VersionVector {
     /// - zero-acknowledgement count bounds set cloning;
     /// - encoded byte size, enforced before decoding, bounds input allocation
     ///   and parsing (including duplicate entries before collection deduplication).
+    ///
     /// No built-in version wire codec or universal application budget is imposed.
     /// Reconstruction takes O(entries.len() + zero_replicas.len()) time and space.
     pub fn from_peer_prefixes(
@@ -1404,10 +1405,7 @@ impl<D> EventLog<D> {
     }
 
     fn advance_contiguous_version(&mut self, replica: u64) {
-        loop {
-            let Some(next) = self.version.get(replica).checked_add(1) else {
-                break;
-            };
+        while let Some(next) = self.version.get(replica).checked_add(1) {
             if self.seen.contains_key(&RecordId {
                 replica,
                 sequence: next,
@@ -2747,7 +2745,7 @@ pub mod laws {
             .enumerate()
         {
             let shuffled = shuffled(deltas, seed);
-            let shuffled_state = apply_all(seed_state, shuffled.into_iter());
+            let shuffled_state = apply_all(seed_state, shuffled);
             scenarios += 1;
             if shuffled_state != expected {
                 return Err(convergence_failure(2 + seed_idx));
@@ -3285,7 +3283,8 @@ mod version_vector_tests {
         let remote_version =
             VersionVector::from_peer_prefixes(&BTreeMap::from([(7, 1)]), &BTreeSet::new()).unwrap();
         let before = local.since(&remote_version);
-        for (prefix, error) in [(0, VersionVectorError::ZeroPrefix { replica: 7 })] {
+        {
+            let (prefix, error) = (0, VersionVectorError::ZeroPrefix { replica: 7 });
             assert_eq!(
                 VersionVector::from_peer_prefixes(&BTreeMap::from([(7, prefix)]), &BTreeSet::new()),
                 Err(error)

@@ -65,58 +65,74 @@ pub struct PyGCounter {
     inner: GCounter,
 }
 
-#[pymethods]
-impl PyGCounter {
-    #[new]
-    pub fn new(#[pyo3(from_py_with = "numeric_replicas")] replicas: usize) -> Self {
-        PyGCounter {
-            inner: GCounter::new(replicas),
+// PyO3 0.22 generates redundant PyErr conversions outside the annotated item.
+// Scope this lint allowance to this entry point and its generated wrappers.
+#[allow(clippy::useless_conversion)]
+mod py_g_counter_python {
+    use super::*;
+
+    #[pymethods]
+    impl PyGCounter {
+        #[new]
+        pub fn new(#[pyo3(from_py_with = "numeric_replicas")] replicas: usize) -> Self {
+            PyGCounter {
+                inner: GCounter::new(replicas),
+            }
+        }
+
+        pub fn apply_bump(
+            &mut self,
+            #[pyo3(from_py_with = "numeric")] replica: usize,
+            #[pyo3(from_py_with = "numeric")] tally: u64,
+        ) -> PyResult<()> {
+            self.try_apply_bump(replica, tally)
+        }
+
+        /// Apply a coordinate delta, raising IndexError without mutation for a bad index.
+        pub fn try_apply_bump(
+            &mut self,
+            #[pyo3(from_py_with = "numeric")] replica: usize,
+            #[pyo3(from_py_with = "numeric")] tally: u64,
+        ) -> PyResult<()> {
+            self.inner
+                .try_apply_bump(replica, tally)
+                .map_err(|error| pyo3::exceptions::PyIndexError::new_err(format!("{error:?}")))
+        }
+
+        /// The counter total as a Python `int`, exact past the 64-bit boundary.
+        pub fn value(&self) -> u128 {
+            self.inner.value()
+        }
+
+        pub fn state(&self) -> Vec<u64> {
+            self.inner.state().to_vec()
         }
     }
-
-    pub fn apply_bump(
-        &mut self,
-        #[pyo3(from_py_with = "numeric")] replica: usize,
-        #[pyo3(from_py_with = "numeric")] tally: u64,
-    ) -> PyResult<()> {
-        self.try_apply_bump(replica, tally)
-    }
-
-    /// Apply a coordinate delta, raising IndexError without mutation for a bad index.
-    pub fn try_apply_bump(
-        &mut self,
-        #[pyo3(from_py_with = "numeric")] replica: usize,
-        #[pyo3(from_py_with = "numeric")] tally: u64,
-    ) -> PyResult<()> {
-        self.inner
-            .try_apply_bump(replica, tally)
-            .map_err(|error| pyo3::exceptions::PyIndexError::new_err(format!("{error:?}")))
-    }
-
-    /// The counter total as a Python `int`, exact past the 64-bit boundary.
-    pub fn value(&self) -> u128 {
-        self.inner.value()
-    }
-
-    pub fn state(&self) -> Vec<u64> {
-        self.inner.state().to_vec()
-    }
 }
 
-#[pyfunction]
-pub fn gcounter_delta_to_wire(
-    py: Python<'_>,
-    #[pyo3(from_py_with = "numeric")] replica: usize,
-    #[pyo3(from_py_with = "numeric")] tally: u64,
-) -> PyResult<Bound<'_, PyBytes>> {
-    encode_bytes(
-        py,
-        GCounterDelta { replica, tally }.to_wire_bytes(),
-        "failed to encode G-Counter delta",
-    )
+// PyO3 0.22 generates redundant PyErr conversions outside the annotated item.
+// Scope this lint allowance to this entry point and its generated wrappers.
+#[allow(clippy::useless_conversion)]
+mod gcounter_delta_to_wire_python {
+    use super::*;
+
+    #[pyfunction]
+    pub fn gcounter_delta_to_wire(
+        py: Python<'_>,
+        #[pyo3(from_py_with = "numeric")] replica: usize,
+        #[pyo3(from_py_with = "numeric")] tally: u64,
+    ) -> PyResult<Bound<'_, PyBytes>> {
+        encode_bytes(
+            py,
+            GCounterDelta { replica, tally }.to_wire_bytes(),
+            "failed to encode G-Counter delta",
+        )
+    }
 }
+pub use gcounter_delta_to_wire_python::gcounter_delta_to_wire;
 
 #[pyclass(name = "LwwRegister")]
+#[derive(Default)]
 pub struct PyLwwRegister {
     inner: LwwRegister<u64>,
 }
@@ -162,26 +178,35 @@ impl PyLwwRegister {
     }
 }
 
-#[pyfunction]
-pub fn lww_register_delta_to_wire(
-    py: Python<'_>,
-    #[pyo3(from_py_with = "numeric")] timestamp: u64,
-    #[pyo3(from_py_with = "numeric")] replica: u64,
-    #[pyo3(from_py_with = "numeric")] value: u64,
-) -> PyResult<Bound<'_, PyBytes>> {
-    encode_bytes(
-        py,
-        LwwRegisterDelta {
-            timestamp,
-            replica,
-            value,
-        }
-        .to_wire_bytes(),
-        "failed to encode LWW register delta",
-    )
+// PyO3 0.22 generates redundant PyErr conversions outside the annotated item.
+// Scope this lint allowance to this entry point and its generated wrappers.
+#[allow(clippy::useless_conversion)]
+mod lww_register_delta_to_wire_python {
+    use super::*;
+
+    #[pyfunction]
+    pub fn lww_register_delta_to_wire(
+        py: Python<'_>,
+        #[pyo3(from_py_with = "numeric")] timestamp: u64,
+        #[pyo3(from_py_with = "numeric")] replica: u64,
+        #[pyo3(from_py_with = "numeric")] value: u64,
+    ) -> PyResult<Bound<'_, PyBytes>> {
+        encode_bytes(
+            py,
+            LwwRegisterDelta {
+                timestamp,
+                replica,
+                value,
+            }
+            .to_wire_bytes(),
+            "failed to encode LWW register delta",
+        )
+    }
 }
+pub use lww_register_delta_to_wire_python::lww_register_delta_to_wire;
 
 #[pyclass(name = "LwwMap")]
+#[derive(Default)]
 pub struct PyLwwMap {
     inner: LwwMap<u64, u64>,
 }
@@ -239,47 +264,64 @@ impl PyLwwMap {
     }
 }
 
-#[pyfunction]
-pub fn lww_map_set_delta_to_wire(
-    py: Python<'_>,
-    #[pyo3(from_py_with = "numeric")] key: u64,
-    #[pyo3(from_py_with = "numeric")] timestamp: u64,
-    #[pyo3(from_py_with = "numeric")] replica: u64,
-    #[pyo3(from_py_with = "numeric")] value: u64,
-) -> PyResult<Bound<'_, PyBytes>> {
-    encode_bytes(
-        py,
-        LwwMapDelta::Set {
-            key,
-            timestamp,
-            replica,
-            value,
-        }
-        .to_wire_bytes(),
-        "failed to encode LWW map set delta",
-    )
-}
+// PyO3 0.22 generates redundant PyErr conversions outside the annotated item.
+// Scope this lint allowance to this entry point and its generated wrappers.
+#[allow(clippy::useless_conversion)]
+mod lww_map_set_delta_to_wire_python {
+    use super::*;
 
-#[pyfunction]
-pub fn lww_map_remove_delta_to_wire(
-    py: Python<'_>,
-    #[pyo3(from_py_with = "numeric")] key: u64,
-    #[pyo3(from_py_with = "numeric")] timestamp: u64,
-    #[pyo3(from_py_with = "numeric")] replica: u64,
-) -> PyResult<Bound<'_, PyBytes>> {
-    encode_bytes(
-        py,
-        LwwMapDelta::<u64, u64>::Remove {
-            key,
-            timestamp,
-            replica,
-        }
-        .to_wire_bytes(),
-        "failed to encode LWW map remove delta",
-    )
+    #[pyfunction]
+    pub fn lww_map_set_delta_to_wire(
+        py: Python<'_>,
+        #[pyo3(from_py_with = "numeric")] key: u64,
+        #[pyo3(from_py_with = "numeric")] timestamp: u64,
+        #[pyo3(from_py_with = "numeric")] replica: u64,
+        #[pyo3(from_py_with = "numeric")] value: u64,
+    ) -> PyResult<Bound<'_, PyBytes>> {
+        encode_bytes(
+            py,
+            LwwMapDelta::Set {
+                key,
+                timestamp,
+                replica,
+                value,
+            }
+            .to_wire_bytes(),
+            "failed to encode LWW map set delta",
+        )
+    }
 }
+pub use lww_map_set_delta_to_wire_python::lww_map_set_delta_to_wire;
+
+// PyO3 0.22 generates redundant PyErr conversions outside the annotated item.
+// Scope this lint allowance to this entry point and its generated wrappers.
+#[allow(clippy::useless_conversion)]
+mod lww_map_remove_delta_to_wire_python {
+    use super::*;
+
+    #[pyfunction]
+    pub fn lww_map_remove_delta_to_wire(
+        py: Python<'_>,
+        #[pyo3(from_py_with = "numeric")] key: u64,
+        #[pyo3(from_py_with = "numeric")] timestamp: u64,
+        #[pyo3(from_py_with = "numeric")] replica: u64,
+    ) -> PyResult<Bound<'_, PyBytes>> {
+        encode_bytes(
+            py,
+            LwwMapDelta::<u64, u64>::Remove {
+                key,
+                timestamp,
+                replica,
+            }
+            .to_wire_bytes(),
+            "failed to encode LWW map remove delta",
+        )
+    }
+}
+pub use lww_map_remove_delta_to_wire_python::lww_map_remove_delta_to_wire;
 
 #[pyclass(name = "EnableWinsFlag")]
+#[derive(Default)]
 pub struct PyEnableWinsFlag {
     inner: EnableWinsFlag<u64>,
 }
@@ -315,29 +357,45 @@ impl PyEnableWinsFlag {
     }
 }
 
-#[pyfunction]
-pub fn enable_wins_flag_enable_delta_to_wire(
-    py: Python<'_>,
-    #[pyo3(from_py_with = "numeric")] token: u64,
-) -> PyResult<Bound<'_, PyBytes>> {
-    encode_bytes(
-        py,
-        EnableWinsFlagDelta::Enable { token }.to_wire_bytes(),
-        "failed to encode enable-wins flag enable delta",
-    )
-}
+// PyO3 0.22 generates redundant PyErr conversions outside the annotated item.
+// Scope this lint allowance to this entry point and its generated wrappers.
+#[allow(clippy::useless_conversion)]
+mod enable_wins_flag_enable_delta_to_wire_python {
+    use super::*;
 
-#[pyfunction]
-pub fn enable_wins_flag_disable_delta_to_wire(
-    py: Python<'_>,
-    #[pyo3(from_py_with = "numeric_tokens")] tokens: Vec<u64>,
-) -> PyResult<Bound<'_, PyBytes>> {
-    encode_bytes(
-        py,
-        EnableWinsFlagDelta::Disable { tokens }.to_wire_bytes(),
-        "failed to encode enable-wins flag disable delta",
-    )
+    #[pyfunction]
+    pub fn enable_wins_flag_enable_delta_to_wire(
+        py: Python<'_>,
+        #[pyo3(from_py_with = "numeric")] token: u64,
+    ) -> PyResult<Bound<'_, PyBytes>> {
+        encode_bytes(
+            py,
+            EnableWinsFlagDelta::Enable { token }.to_wire_bytes(),
+            "failed to encode enable-wins flag enable delta",
+        )
+    }
 }
+pub use enable_wins_flag_enable_delta_to_wire_python::enable_wins_flag_enable_delta_to_wire;
+
+// PyO3 0.22 generates redundant PyErr conversions outside the annotated item.
+// Scope this lint allowance to this entry point and its generated wrappers.
+#[allow(clippy::useless_conversion)]
+mod enable_wins_flag_disable_delta_to_wire_python {
+    use super::*;
+
+    #[pyfunction]
+    pub fn enable_wins_flag_disable_delta_to_wire(
+        py: Python<'_>,
+        #[pyo3(from_py_with = "numeric_tokens")] tokens: Vec<u64>,
+    ) -> PyResult<Bound<'_, PyBytes>> {
+        encode_bytes(
+            py,
+            EnableWinsFlagDelta::Disable { tokens }.to_wire_bytes(),
+            "failed to encode enable-wins flag disable delta",
+        )
+    }
+}
+pub use enable_wins_flag_disable_delta_to_wire_python::enable_wins_flag_disable_delta_to_wire;
 
 #[pyclass(name = "GCounterReplica")]
 pub struct PyGCounterReplica {
@@ -346,96 +404,255 @@ pub struct PyGCounterReplica {
     log: EventLog<GCounterDelta>,
 }
 
-#[pymethods]
-impl PyGCounterReplica {
-    #[new]
-    pub fn new(
-        #[pyo3(from_py_with = "numeric")] replica_id: u64,
-        #[pyo3(from_py_with = "numeric_replicas")] replicas: usize,
-    ) -> Self {
-        PyGCounterReplica {
-            replica_id,
-            state: GCounter::new(replicas),
-            log: EventLog::with_replica_count(replicas),
-        }
-    }
+// PyO3 0.22 generates redundant PyErr conversions outside the annotated item.
+// Scope this lint allowance to this entry point and its generated wrappers.
+#[allow(clippy::useless_conversion)]
+mod py_g_counter_replica_python {
+    use super::*;
 
-    pub fn append_bump<'py>(
-        &mut self,
-        py: Python<'py>,
-        #[pyo3(from_py_with = "numeric")] counter_replica: usize,
-        #[pyo3(from_py_with = "numeric")] tally: u64,
-    ) -> PyResult<Bound<'py, PyBytes>> {
-        if safemesh_crdt::ownership::check_counter_record(
-            self.state.len(),
-            safemesh_crdt::RecordId {
-                replica: self.replica_id,
-                sequence: 1,
-            },
-            &GCounterDelta {
-                replica: counter_replica,
-                tally,
-            },
-        )
-        .is_err()
-        {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "counter coordinate out of range or not owned by record author",
-            ));
+    #[pymethods]
+    impl PyGCounterReplica {
+        #[new]
+        pub fn new(
+            #[pyo3(from_py_with = "numeric")] replica_id: u64,
+            #[pyo3(from_py_with = "numeric_replicas")] replicas: usize,
+        ) -> Self {
+            PyGCounterReplica {
+                replica_id,
+                state: GCounter::new(replicas),
+                log: EventLog::with_replica_count(replicas),
+            }
         }
-        let delta = GCounterDelta {
-            replica: counter_replica,
-            tally,
-        };
-        let id = self
-            .log
-            .append_with(
-                &mut self.state,
-                self.replica_id,
-                delta.clone(),
-                |state, delta| {
-                    state.apply_delta(delta.clone());
+
+        pub fn append_bump<'py>(
+            &mut self,
+            py: Python<'py>,
+            #[pyo3(from_py_with = "numeric")] counter_replica: usize,
+            #[pyo3(from_py_with = "numeric")] tally: u64,
+        ) -> PyResult<Bound<'py, PyBytes>> {
+            if safemesh_crdt::ownership::check_counter_record(
+                self.state.len(),
+                safemesh_crdt::RecordId {
+                    replica: self.replica_id,
+                    sequence: 1,
+                },
+                &GCounterDelta {
+                    replica: counter_replica,
+                    tally,
                 },
             )
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("event log sequence exhausted"))?;
-        encode_bytes(
-            py,
-            Record { id, delta }.to_wire_bytes(),
-            "failed to encode record",
-        )
-    }
-
-    pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
-        let record = Record::<GCounterDelta>::from_wire_bytes(bytes)
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode record"))?;
-        if safemesh_crdt::ownership::check_counter_record(
-            self.state.len(),
-            record.id,
-            &record.delta,
-        )
-        .is_err()
-        {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "counter coordinate out of range or not owned by record author",
-            ));
+            .is_err()
+            {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "counter coordinate out of range or not owned by record author",
+                ));
+            }
+            let delta = GCounterDelta {
+                replica: counter_replica,
+                tally,
+            };
+            let id = self
+                .log
+                .append_with(
+                    &mut self.state,
+                    self.replica_id,
+                    delta.clone(),
+                    |state, delta| {
+                        state.apply_delta(delta.clone());
+                    },
+                )
+                .map_err(|_| {
+                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
+                })?;
+            encode_bytes(
+                py,
+                Record { id, delta }.to_wire_bytes(),
+                "failed to encode record",
+            )
         }
-        if self
-            .log
-            .admit_with(&mut self.state, record, |state, delta| {
-                state.apply_delta(delta.clone());
-            })
-            == safemesh_crdt::Admission::Collision
-        {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "record ID collision",
-            ));
-        }
-        Ok(())
-    }
 
-    /// Return one core admission verdict for every decoded input record.
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
-        let log = EventLog::<GCounterDelta>::records_from_wire_bytes_for(bytes, &self.state)
+        pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
+            let record = Record::<GCounterDelta>::from_wire_bytes(bytes)
+                .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode record"))?;
+            if safemesh_crdt::ownership::check_counter_record(
+                self.state.len(),
+                record.id,
+                &record.delta,
+            )
+            .is_err()
+            {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "counter coordinate out of range or not owned by record author",
+                ));
+            }
+            if self
+                .log
+                .admit_with(&mut self.state, record, |state, delta| {
+                    state.apply_delta(delta.clone());
+                })
+                == safemesh_crdt::Admission::Collision
+            {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "record ID collision",
+                ));
+            }
+            Ok(())
+        }
+
+        /// Return one core admission verdict for every decoded input record.
+        pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
+            let log = EventLog::<GCounterDelta>::records_from_wire_bytes_for(bytes, &self.state)
+                .map_err(|error| {
+                    pyo3::exceptions::PyValueError::new_err(match error {
+                        safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                        safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
+                            "replica count mismatch"
+                        }
+                        safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
+                        safemesh_crdt::WireError::MissingShape => "event log missing shape",
+                        _ => "failed to decode event log",
+                    })
+                })?;
+            if log.iter().any(|r| {
+                safemesh_crdt::ownership::check_counter_record(self.state.len(), r.id, &r.delta)
+                    .is_err()
+            }) {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "counter coordinate out of range or not owned by record author",
+                ));
+            }
+            Ok(log
+                .iter()
+                .cloned()
+                .map(|record| {
+                    self.log
+                        .admit_with(&mut self.state, record, |state, delta| {
+                            state.apply_delta(delta.clone());
+                        })
+                })
+                .map(admission_name)
+                .collect())
+        }
+
+        pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+            encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
+        }
+
+        pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
+            self.log.version().get(replica)
+        }
+
+        /// The counter total as a Python `int`, exact past the 64-bit boundary.
+        pub fn value(&self) -> u128 {
+            self.state.value()
+        }
+
+        pub fn state(&self) -> Vec<u64> {
+            self.state.state().to_vec()
+        }
+    }
+}
+
+#[pyclass(name = "EnableWinsFlagReplica")]
+pub struct PyEnableWinsFlagReplica {
+    replica_id: u64,
+    state: EnableWinsFlag<u64>,
+    log: EventLog<EnableWinsFlagDelta<u64>>,
+}
+
+// PyO3 0.22 generates redundant PyErr conversions outside the annotated item.
+// Scope this lint allowance to this entry point and its generated wrappers.
+#[allow(clippy::useless_conversion)]
+mod py_enable_wins_flag_replica_python {
+    use super::*;
+
+    #[pymethods]
+    impl PyEnableWinsFlagReplica {
+        #[new]
+        pub fn new(#[pyo3(from_py_with = "numeric")] replica_id: u64) -> Self {
+            PyEnableWinsFlagReplica {
+                replica_id,
+                state: EnableWinsFlag::new(),
+                log: EventLog::new(),
+            }
+        }
+
+        pub fn append_enable<'py>(
+            &mut self,
+            py: Python<'py>,
+            #[pyo3(from_py_with = "numeric")] token: u64,
+        ) -> PyResult<Bound<'py, PyBytes>> {
+            let delta = EnableWinsFlagDelta::Enable { token };
+            let id = self
+                .log
+                .append_with(
+                    &mut self.state,
+                    self.replica_id,
+                    delta.clone(),
+                    |state, delta| {
+                        state.apply_delta(delta.clone());
+                    },
+                )
+                .map_err(|_| {
+                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
+                })?;
+            encode_bytes(
+                py,
+                Record { id, delta }.to_wire_bytes(),
+                "failed to encode record",
+            )
+        }
+
+        pub fn append_disable_observed<'py>(
+            &mut self,
+            py: Python<'py>,
+        ) -> PyResult<Bound<'py, PyBytes>> {
+            let delta = EnableWinsFlagDelta::Disable {
+                tokens: self.state.observed_tokens().into_iter().collect(),
+            };
+            let id = self
+                .log
+                .append_with(
+                    &mut self.state,
+                    self.replica_id,
+                    delta.clone(),
+                    |state, delta| {
+                        state.apply_delta(delta.clone());
+                    },
+                )
+                .map_err(|_| {
+                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
+                })?;
+            encode_bytes(
+                py,
+                Record { id, delta }.to_wire_bytes(),
+                "failed to encode record",
+            )
+        }
+
+        pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
+            let record = Record::<EnableWinsFlagDelta<u64>>::from_wire_bytes(bytes)
+                .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode record"))?;
+            if self
+                .log
+                .admit_with(&mut self.state, record, |state, delta| {
+                    state.apply_delta(delta.clone());
+                })
+                == safemesh_crdt::Admission::Collision
+            {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "record ID collision",
+                ));
+            }
+            Ok(())
+        }
+
+        /// Return one core admission verdict for every decoded input record.
+        pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
+            let log = EventLog::<EnableWinsFlagDelta<u64>>::records_from_wire_bytes_for(
+                bytes,
+                &self.state,
+            )
             .map_err(|error| {
                 pyo3::exceptions::PyValueError::new_err(match error {
                     safemesh_crdt::WireError::RecordCollision => "record ID collision",
@@ -447,175 +664,38 @@ impl PyGCounterReplica {
                     _ => "failed to decode event log",
                 })
             })?;
-        if log.iter().any(|r| {
-            safemesh_crdt::ownership::check_counter_record(self.state.len(), r.id, &r.delta)
-                .is_err()
-        }) {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "counter coordinate out of range or not owned by record author",
-            ));
-        }
-        Ok(log
-            .iter()
-            .cloned()
-            .map(|record| {
-                self.log
-                    .admit_with(&mut self.state, record, |state, delta| {
-                        state.apply_delta(delta.clone());
-                    })
-            })
-            .map(admission_name)
-            .collect())
-    }
-
-    pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-        encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
-    }
-
-    pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
-        self.log.version().get(replica)
-    }
-
-    /// The counter total as a Python `int`, exact past the 64-bit boundary.
-    pub fn value(&self) -> u128 {
-        self.state.value()
-    }
-
-    pub fn state(&self) -> Vec<u64> {
-        self.state.state().to_vec()
-    }
-}
-
-#[pyclass(name = "EnableWinsFlagReplica")]
-pub struct PyEnableWinsFlagReplica {
-    replica_id: u64,
-    state: EnableWinsFlag<u64>,
-    log: EventLog<EnableWinsFlagDelta<u64>>,
-}
-
-#[pymethods]
-impl PyEnableWinsFlagReplica {
-    #[new]
-    pub fn new(#[pyo3(from_py_with = "numeric")] replica_id: u64) -> Self {
-        PyEnableWinsFlagReplica {
-            replica_id,
-            state: EnableWinsFlag::new(),
-            log: EventLog::new(),
-        }
-    }
-
-    pub fn append_enable<'py>(
-        &mut self,
-        py: Python<'py>,
-        #[pyo3(from_py_with = "numeric")] token: u64,
-    ) -> PyResult<Bound<'py, PyBytes>> {
-        let delta = EnableWinsFlagDelta::Enable { token };
-        let id = self
-            .log
-            .append_with(
-                &mut self.state,
-                self.replica_id,
-                delta.clone(),
-                |state, delta| {
-                    state.apply_delta(delta.clone());
-                },
-            )
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("event log sequence exhausted"))?;
-        encode_bytes(
-            py,
-            Record { id, delta }.to_wire_bytes(),
-            "failed to encode record",
-        )
-    }
-
-    pub fn append_disable_observed<'py>(
-        &mut self,
-        py: Python<'py>,
-    ) -> PyResult<Bound<'py, PyBytes>> {
-        let delta = EnableWinsFlagDelta::Disable {
-            tokens: self.state.observed_tokens().into_iter().collect(),
-        };
-        let id = self
-            .log
-            .append_with(
-                &mut self.state,
-                self.replica_id,
-                delta.clone(),
-                |state, delta| {
-                    state.apply_delta(delta.clone());
-                },
-            )
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("event log sequence exhausted"))?;
-        encode_bytes(
-            py,
-            Record { id, delta }.to_wire_bytes(),
-            "failed to encode record",
-        )
-    }
-
-    pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
-        let record = Record::<EnableWinsFlagDelta<u64>>::from_wire_bytes(bytes)
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode record"))?;
-        if self
-            .log
-            .admit_with(&mut self.state, record, |state, delta| {
-                state.apply_delta(delta.clone());
-            })
-            == safemesh_crdt::Admission::Collision
-        {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "record ID collision",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Return one core admission verdict for every decoded input record.
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
-        let log =
-            EventLog::<EnableWinsFlagDelta<u64>>::records_from_wire_bytes_for(bytes, &self.state)
-                .map_err(|error| {
-                pyo3::exceptions::PyValueError::new_err(match error {
-                    safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                    safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
-                        "replica count mismatch"
-                    }
-                    safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
-                    safemesh_crdt::WireError::MissingShape => "event log missing shape",
-                    _ => "failed to decode event log",
+            Ok(log
+                .iter()
+                .cloned()
+                .map(|record| {
+                    self.log
+                        .admit_with(&mut self.state, record, |state, delta| {
+                            state.apply_delta(delta.clone());
+                        })
                 })
-            })?;
-        Ok(log
-            .iter()
-            .cloned()
-            .map(|record| {
-                self.log
-                    .admit_with(&mut self.state, record, |state, delta| {
-                        state.apply_delta(delta.clone());
-                    })
-            })
-            .map(admission_name)
-            .collect())
-    }
+                .map(admission_name)
+                .collect())
+        }
 
-    pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-        encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
-    }
+        pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+            encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
+        }
 
-    pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
-        self.log.version().get(replica)
-    }
+        pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
+            self.log.version().get(replica)
+        }
 
-    pub fn value(&self) -> bool {
-        self.state.value()
-    }
+        pub fn value(&self) -> bool {
+            self.state.value()
+        }
 
-    pub fn enabled_tokens(&self) -> Vec<u64> {
-        self.state.enables().iter().copied().collect()
-    }
+        pub fn enabled_tokens(&self) -> Vec<u64> {
+            self.state.enables().iter().copied().collect()
+        }
 
-    pub fn tombstone_tokens(&self) -> Vec<u64> {
-        self.state.tombstones().iter().copied().collect()
+        pub fn tombstone_tokens(&self) -> Vec<u64> {
+            self.state.tombstones().iter().copied().collect()
+        }
     }
 }
 
@@ -626,154 +706,165 @@ pub struct PyLwwMapReplica {
     log: EventLog<LwwMapDelta<u64, u64>>,
 }
 
-#[pymethods]
-impl PyLwwMapReplica {
-    #[new]
-    pub fn new(#[pyo3(from_py_with = "numeric")] replica_id: u64) -> Self {
-        PyLwwMapReplica {
-            replica_id,
-            state: LwwMap::new(),
-            log: EventLog::new(),
+// PyO3 0.22 generates redundant PyErr conversions outside the annotated item.
+// Scope this lint allowance to this entry point and its generated wrappers.
+#[allow(clippy::useless_conversion)]
+mod py_lww_map_replica_python {
+    use super::*;
+
+    #[pymethods]
+    impl PyLwwMapReplica {
+        #[new]
+        pub fn new(#[pyo3(from_py_with = "numeric")] replica_id: u64) -> Self {
+            PyLwwMapReplica {
+                replica_id,
+                state: LwwMap::new(),
+                log: EventLog::new(),
+            }
         }
-    }
 
-    pub fn append_set<'py>(
-        &mut self,
-        py: Python<'py>,
-        #[pyo3(from_py_with = "numeric")] key: u64,
-        #[pyo3(from_py_with = "numeric")] timestamp: u64,
-        #[pyo3(from_py_with = "numeric")] writer_replica: u64,
-        #[pyo3(from_py_with = "numeric")] value: u64,
-    ) -> PyResult<Bound<'py, PyBytes>> {
-        let delta = LwwMapDelta::Set {
-            key,
-            timestamp,
-            replica: writer_replica,
-            value,
-        };
-        let id = self
-            .log
-            .append_with(
-                &mut self.state,
-                self.replica_id,
-                delta.clone(),
-                |state, delta| {
-                    state.apply_delta(delta.clone());
-                },
-            )
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("event log sequence exhausted"))?;
-        encode_bytes(
-            py,
-            Record { id, delta }.to_wire_bytes(),
-            "failed to encode record",
-        )
-    }
-
-    pub fn append_remove<'py>(
-        &mut self,
-        py: Python<'py>,
-        #[pyo3(from_py_with = "numeric")] key: u64,
-        #[pyo3(from_py_with = "numeric")] timestamp: u64,
-        #[pyo3(from_py_with = "numeric")] writer_replica: u64,
-    ) -> PyResult<Bound<'py, PyBytes>> {
-        let delta = LwwMapDelta::Remove {
-            key,
-            timestamp,
-            replica: writer_replica,
-        };
-        let id = self
-            .log
-            .append_with(
-                &mut self.state,
-                self.replica_id,
-                delta.clone(),
-                |state, delta| {
-                    state.apply_delta(delta.clone());
-                },
-            )
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("event log sequence exhausted"))?;
-        encode_bytes(
-            py,
-            Record { id, delta }.to_wire_bytes(),
-            "failed to encode record",
-        )
-    }
-
-    pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
-        let record = Record::<LwwMapDelta<u64, u64>>::from_wire_bytes(bytes)
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode record"))?;
-        if self
-            .log
-            .admit_with(&mut self.state, record, |state, delta| {
-                state.apply_delta(delta.clone());
-            })
-            == safemesh_crdt::Admission::Collision
-        {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "record ID collision",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Return one core admission verdict for every decoded input record.
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
-        let log =
-            EventLog::<LwwMapDelta<u64, u64>>::records_from_wire_bytes_for(bytes, &self.state)
-                .map_err(|error| {
-                    pyo3::exceptions::PyValueError::new_err(match error {
-                        safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                        safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
-                            "replica count mismatch"
-                        }
-                        safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
-                        safemesh_crdt::WireError::MissingShape => "event log missing shape",
-                        _ => "failed to decode event log",
-                    })
-                })?;
-        Ok(log
-            .iter()
-            .cloned()
-            .map(|record| {
-                self.log
-                    .admit_with(&mut self.state, record, |state, delta| {
+        pub fn append_set<'py>(
+            &mut self,
+            py: Python<'py>,
+            #[pyo3(from_py_with = "numeric")] key: u64,
+            #[pyo3(from_py_with = "numeric")] timestamp: u64,
+            #[pyo3(from_py_with = "numeric")] writer_replica: u64,
+            #[pyo3(from_py_with = "numeric")] value: u64,
+        ) -> PyResult<Bound<'py, PyBytes>> {
+            let delta = LwwMapDelta::Set {
+                key,
+                timestamp,
+                replica: writer_replica,
+                value,
+            };
+            let id = self
+                .log
+                .append_with(
+                    &mut self.state,
+                    self.replica_id,
+                    delta.clone(),
+                    |state, delta| {
                         state.apply_delta(delta.clone());
-                    })
-            })
-            .map(admission_name)
-            .collect())
-    }
+                    },
+                )
+                .map_err(|_| {
+                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
+                })?;
+            encode_bytes(
+                py,
+                Record { id, delta }.to_wire_bytes(),
+                "failed to encode record",
+            )
+        }
 
-    pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-        encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
-    }
+        pub fn append_remove<'py>(
+            &mut self,
+            py: Python<'py>,
+            #[pyo3(from_py_with = "numeric")] key: u64,
+            #[pyo3(from_py_with = "numeric")] timestamp: u64,
+            #[pyo3(from_py_with = "numeric")] writer_replica: u64,
+        ) -> PyResult<Bound<'py, PyBytes>> {
+            let delta = LwwMapDelta::Remove {
+                key,
+                timestamp,
+                replica: writer_replica,
+            };
+            let id = self
+                .log
+                .append_with(
+                    &mut self.state,
+                    self.replica_id,
+                    delta.clone(),
+                    |state, delta| {
+                        state.apply_delta(delta.clone());
+                    },
+                )
+                .map_err(|_| {
+                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
+                })?;
+            encode_bytes(
+                py,
+                Record { id, delta }.to_wire_bytes(),
+                "failed to encode record",
+            )
+        }
 
-    pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
-        self.log.version().get(replica)
-    }
+        pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
+            let record = Record::<LwwMapDelta<u64, u64>>::from_wire_bytes(bytes)
+                .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode record"))?;
+            if self
+                .log
+                .admit_with(&mut self.state, record, |state, delta| {
+                    state.apply_delta(delta.clone());
+                })
+                == safemesh_crdt::Admission::Collision
+            {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "record ID collision",
+                ));
+            }
+            Ok(())
+        }
 
-    pub fn has_key(&self, #[pyo3(from_py_with = "numeric")] key: u64) -> bool {
-        self.state.get(&key).is_some()
-    }
+        /// Return one core admission verdict for every decoded input record.
+        pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
+            let log =
+                EventLog::<LwwMapDelta<u64, u64>>::records_from_wire_bytes_for(bytes, &self.state)
+                    .map_err(|error| {
+                        pyo3::exceptions::PyValueError::new_err(match error {
+                            safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                            safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
+                                "replica count mismatch"
+                            }
+                            safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
+                            safemesh_crdt::WireError::MissingShape => "event log missing shape",
+                            _ => "failed to decode event log",
+                        })
+                    })?;
+            Ok(log
+                .iter()
+                .cloned()
+                .map(|record| {
+                    self.log
+                        .admit_with(&mut self.state, record, |state, delta| {
+                            state.apply_delta(delta.clone());
+                        })
+                })
+                .map(admission_name)
+                .collect())
+        }
 
-    pub fn value_or(
-        &self,
-        #[pyo3(from_py_with = "numeric")] key: u64,
-        #[pyo3(from_py_with = "numeric")] default_value: u64,
-    ) -> u64 {
-        self.state.get(&key).copied().unwrap_or(default_value)
-    }
+        pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+            encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
+        }
 
-    pub fn visible_keys(&self) -> Vec<u64> {
-        self.state.value().keys().copied().collect()
-    }
+        pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
+            self.log.version().get(replica)
+        }
 
-    pub fn entry_keys(&self) -> Vec<u64> {
-        self.state.entries().keys().copied().collect()
-    }
+        pub fn has_key(&self, #[pyo3(from_py_with = "numeric")] key: u64) -> bool {
+            self.state.get(&key).is_some()
+        }
 
-    pub fn removal_keys(&self) -> Vec<u64> {
-        self.state.removals().keys().copied().collect()
+        pub fn value_or(
+            &self,
+            #[pyo3(from_py_with = "numeric")] key: u64,
+            #[pyo3(from_py_with = "numeric")] default_value: u64,
+        ) -> u64 {
+            self.state.get(&key).copied().unwrap_or(default_value)
+        }
+
+        pub fn visible_keys(&self) -> Vec<u64> {
+            self.state.value().keys().copied().collect()
+        }
+
+        pub fn entry_keys(&self) -> Vec<u64> {
+            self.state.entries().keys().copied().collect()
+        }
+
+        pub fn removal_keys(&self) -> Vec<u64> {
+            self.state.removals().keys().copied().collect()
+        }
     }
 }
 
@@ -784,120 +875,132 @@ pub struct PyLwwRegisterReplica {
     log: EventLog<LwwRegisterDelta<u64>>,
 }
 
-#[pymethods]
-impl PyLwwRegisterReplica {
-    #[new]
-    pub fn new(#[pyo3(from_py_with = "numeric")] replica_id: u64) -> Self {
-        PyLwwRegisterReplica {
-            replica_id,
-            state: LwwRegister::new(),
-            log: EventLog::new(),
+// PyO3 0.22 generates redundant PyErr conversions outside the annotated item.
+// Scope this lint allowance to this entry point and its generated wrappers.
+#[allow(clippy::useless_conversion)]
+mod py_lww_register_replica_python {
+    use super::*;
+
+    #[pymethods]
+    impl PyLwwRegisterReplica {
+        #[new]
+        pub fn new(#[pyo3(from_py_with = "numeric")] replica_id: u64) -> Self {
+            PyLwwRegisterReplica {
+                replica_id,
+                state: LwwRegister::new(),
+                log: EventLog::new(),
+            }
         }
-    }
 
-    pub fn append_set<'py>(
-        &mut self,
-        py: Python<'py>,
-        #[pyo3(from_py_with = "numeric")] timestamp: u64,
-        #[pyo3(from_py_with = "numeric")] writer_replica: u64,
-        #[pyo3(from_py_with = "numeric")] value: u64,
-    ) -> PyResult<Bound<'py, PyBytes>> {
-        let delta = LwwRegisterDelta {
-            timestamp,
-            replica: writer_replica,
-            value,
-        };
-        let id = self
-            .log
-            .append_with(
-                &mut self.state,
-                self.replica_id,
-                delta.clone(),
-                |state, delta| {
-                    state.apply_delta(delta.clone());
-                },
-            )
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("event log sequence exhausted"))?;
-        encode_bytes(
-            py,
-            Record { id, delta }.to_wire_bytes(),
-            "failed to encode record",
-        )
-    }
-
-    pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
-        let record = Record::<LwwRegisterDelta<u64>>::from_wire_bytes(bytes)
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode record"))?;
-        if self
-            .log
-            .admit_with(&mut self.state, record, |state, delta| {
-                state.apply_delta(delta.clone());
-            })
-            == safemesh_crdt::Admission::Collision
-        {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "record ID collision",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Return one core admission verdict for every decoded input record.
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
-        let log =
-            EventLog::<LwwRegisterDelta<u64>>::records_from_wire_bytes_for(bytes, &self.state)
-                .map_err(|error| {
-                    pyo3::exceptions::PyValueError::new_err(match error {
-                        safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                        safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
-                            "replica count mismatch"
-                        }
-                        safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
-                        safemesh_crdt::WireError::MissingShape => "event log missing shape",
-                        _ => "failed to decode event log",
-                    })
-                })?;
-        Ok(log
-            .iter()
-            .cloned()
-            .map(|record| {
-                self.log
-                    .admit_with(&mut self.state, record, |state, delta| {
+        pub fn append_set<'py>(
+            &mut self,
+            py: Python<'py>,
+            #[pyo3(from_py_with = "numeric")] timestamp: u64,
+            #[pyo3(from_py_with = "numeric")] writer_replica: u64,
+            #[pyo3(from_py_with = "numeric")] value: u64,
+        ) -> PyResult<Bound<'py, PyBytes>> {
+            let delta = LwwRegisterDelta {
+                timestamp,
+                replica: writer_replica,
+                value,
+            };
+            let id = self
+                .log
+                .append_with(
+                    &mut self.state,
+                    self.replica_id,
+                    delta.clone(),
+                    |state, delta| {
                         state.apply_delta(delta.clone());
-                    })
-            })
-            .map(admission_name)
-            .collect())
-    }
+                    },
+                )
+                .map_err(|_| {
+                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
+                })?;
+            encode_bytes(
+                py,
+                Record { id, delta }.to_wire_bytes(),
+                "failed to encode record",
+            )
+        }
 
-    pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-        encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
-    }
+        pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
+            let record = Record::<LwwRegisterDelta<u64>>::from_wire_bytes(bytes)
+                .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode record"))?;
+            if self
+                .log
+                .admit_with(&mut self.state, record, |state, delta| {
+                    state.apply_delta(delta.clone());
+                })
+                == safemesh_crdt::Admission::Collision
+            {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "record ID collision",
+                ));
+            }
+            Ok(())
+        }
 
-    pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
-        self.log.version().get(replica)
-    }
+        /// Return one core admission verdict for every decoded input record.
+        pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
+            let log =
+                EventLog::<LwwRegisterDelta<u64>>::records_from_wire_bytes_for(bytes, &self.state)
+                    .map_err(|error| {
+                        pyo3::exceptions::PyValueError::new_err(match error {
+                            safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                            safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
+                                "replica count mismatch"
+                            }
+                            safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
+                            safemesh_crdt::WireError::MissingShape => "event log missing shape",
+                            _ => "failed to decode event log",
+                        })
+                    })?;
+            Ok(log
+                .iter()
+                .cloned()
+                .map(|record| {
+                    self.log
+                        .admit_with(&mut self.state, record, |state, delta| {
+                            state.apply_delta(delta.clone());
+                        })
+                })
+                .map(admission_name)
+                .collect())
+        }
 
-    pub fn has_value(&self) -> bool {
-        self.state.value().is_some()
-    }
+        pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+            encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
+        }
 
-    pub fn value_or(&self, #[pyo3(from_py_with = "numeric")] default_value: u64) -> u64 {
-        self.state.value().copied().unwrap_or(default_value)
-    }
+        pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
+            self.log.version().get(replica)
+        }
 
-    pub fn timestamp_or(&self, #[pyo3(from_py_with = "numeric")] default_value: u64) -> u64 {
-        self.state
-            .entry()
-            .map(|entry| entry.dot.timestamp)
-            .unwrap_or(default_value)
-    }
+        pub fn has_value(&self) -> bool {
+            self.state.value().is_some()
+        }
 
-    pub fn writer_replica_or(&self, #[pyo3(from_py_with = "numeric")] default_value: u64) -> u64 {
-        self.state
-            .entry()
-            .map(|entry| entry.dot.replica)
-            .unwrap_or(default_value)
+        pub fn value_or(&self, #[pyo3(from_py_with = "numeric")] default_value: u64) -> u64 {
+            self.state.value().copied().unwrap_or(default_value)
+        }
+
+        pub fn timestamp_or(&self, #[pyo3(from_py_with = "numeric")] default_value: u64) -> u64 {
+            self.state
+                .entry()
+                .map(|entry| entry.dot.timestamp)
+                .unwrap_or(default_value)
+        }
+
+        pub fn writer_replica_or(
+            &self,
+            #[pyo3(from_py_with = "numeric")] default_value: u64,
+        ) -> u64 {
+            self.state
+                .entry()
+                .map(|entry| entry.dot.replica)
+                .unwrap_or(default_value)
+        }
     }
 }
 
@@ -923,53 +1026,61 @@ fn safemesh_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 /// Observed-remove set of u64 elements and u64 tokens; tokens are global to the set.
 #[pyclass(name = "OrSet")]
+#[derive(Default)]
 pub struct PyOrSet {
     inner: OrSet<u64, u64>,
 }
 
-#[pymethods]
-impl PyOrSet {
-    #[new]
-    pub fn new() -> Self {
-        Self {
-            inner: OrSet::new(),
-        }
-    }
+// PyO3 0.22 generates redundant PyErr conversions outside the annotated item.
+// Scope this lint allowance to this entry point and its generated wrappers.
+#[allow(clippy::useless_conversion)]
+mod py_or_set_python {
+    use super::*;
 
-    /// Add an element with a caller-supplied token, exactly as in the Rust core.
-    pub fn add(
-        &mut self,
-        #[pyo3(from_py_with = "numeric")] element: u64,
-        #[pyo3(from_py_with = "numeric")] token: u64,
-    ) {
-        self.inner.add(element, token);
-    }
-    /// Tombstone tokens globally, including tokens whose adds have not arrived yet.
-    pub fn apply_remove(&mut self, #[pyo3(from_py_with = "numeric_tokens")] tokens: Vec<u64>) {
-        self.inner.apply_remove(tokens);
-    }
-
-    pub fn observed_tokens(&self, #[pyo3(from_py_with = "numeric")] element: u64) -> Vec<u64> {
-        self.inner.observed_tokens(&element).into_iter().collect()
-    }
-    pub fn elements(&self) -> Vec<u64> {
-        self.inner.elements().into_iter().collect()
-    }
-    pub fn contains(&self, #[pyo3(from_py_with = "numeric")] element: u64) -> bool {
-        self.inner.contains(&element)
-    }
-    pub fn tombstones(&self) -> Vec<u64> {
-        self.inner.tombstones().iter().copied().collect()
-    }
-    /// Check Python identity before extracting either Rust borrow.
-    #[pyo3(name = "merge")]
-    pub fn merge_py(slf: &Bound<'_, Self>, other: &Bound<'_, Self>) -> PyResult<()> {
-        if slf.is(other) {
-            return Ok(());
+    #[pymethods]
+    impl PyOrSet {
+        #[new]
+        pub fn new() -> Self {
+            Self {
+                inner: OrSet::new(),
+            }
         }
-        let other = other.try_borrow()?;
-        slf.try_borrow_mut()?.merge(&other);
-        Ok(())
+
+        /// Add an element with a caller-supplied token, exactly as in the Rust core.
+        pub fn add(
+            &mut self,
+            #[pyo3(from_py_with = "numeric")] element: u64,
+            #[pyo3(from_py_with = "numeric")] token: u64,
+        ) {
+            self.inner.add(element, token);
+        }
+        /// Tombstone tokens globally, including tokens whose adds have not arrived yet.
+        pub fn apply_remove(&mut self, #[pyo3(from_py_with = "numeric_tokens")] tokens: Vec<u64>) {
+            self.inner.apply_remove(tokens);
+        }
+
+        pub fn observed_tokens(&self, #[pyo3(from_py_with = "numeric")] element: u64) -> Vec<u64> {
+            self.inner.observed_tokens(&element).into_iter().collect()
+        }
+        pub fn elements(&self) -> Vec<u64> {
+            self.inner.elements().into_iter().collect()
+        }
+        pub fn contains(&self, #[pyo3(from_py_with = "numeric")] element: u64) -> bool {
+            self.inner.contains(&element)
+        }
+        pub fn tombstones(&self) -> Vec<u64> {
+            self.inner.tombstones().iter().copied().collect()
+        }
+        /// Check Python identity before extracting either Rust borrow.
+        #[pyo3(name = "merge")]
+        pub fn merge_py(slf: &Bound<'_, Self>, other: &Bound<'_, Self>) -> PyResult<()> {
+            if slf.is(other) {
+                return Ok(());
+            }
+            let other = other.try_borrow()?;
+            slf.try_borrow_mut()?.merge(&other);
+            Ok(())
+        }
     }
 }
 
