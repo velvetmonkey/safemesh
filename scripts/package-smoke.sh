@@ -82,6 +82,11 @@ if ! command -v wasm-pack >/dev/null 2>&1; then
   cargo install wasm-pack --version 0.15.0 --locked
 fi
 
+# wasm-pack runs unlocked cargo metadata before forwarding --locked to its build.
+# Reject a stale workspace lock before that metadata call can regenerate it.
+cargo metadata --locked --format-version 1 \
+  --manifest-path "$repo_root/rust/crates/safemesh-wasm/Cargo.toml" >/dev/null
+
 wasm-pack build "$repo_root/rust/crates/safemesh-wasm" \
   --target bundler \
   --out-dir "$tmp_dir/wasm-pkg" \
@@ -155,6 +160,11 @@ right.free();
 console.log("NPM_TARBALL_INSTALL_SMOKE=true");
 JS
 )
+
+# wasm-pack runs unlocked cargo metadata before forwarding --locked to its build.
+# Reject a stale workspace lock before that metadata call can regenerate it.
+cargo metadata --locked --format-version 1 \
+  --manifest-path "$repo_root/rust/crates/safemesh-wasm/Cargo.toml" >/dev/null
 
 wasm-pack build "$repo_root/rust/crates/safemesh-wasm" \
   --target nodejs \

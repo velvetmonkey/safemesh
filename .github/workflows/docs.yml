@@ -27,8 +27,9 @@ jobs:
           PAGES_BASE_URL: ${{ steps.pages.outputs.base_url }}
         run: echo "SITE_URL=${PAGES_BASE_URL}/" >> "$GITHUB_ENV"
       - name: Set up Rust for the generated reference and the Lab
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master; toolchain selected below
         with:
+          toolchain: stable
           targets: wasm32-unknown-unknown
       - name: Cache Rust artifacts
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
