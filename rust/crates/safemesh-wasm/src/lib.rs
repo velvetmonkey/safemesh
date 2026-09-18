@@ -1459,6 +1459,7 @@ impl SafeMeshStringOrSetReplica {
     }
 
     /// Append an add record for `(element, token)` and return its wire bytes.
+    /// Allocated instances reject caller tokens; use appendAllocatedAdd instead.
     #[wasm_bindgen(js_name = appendAdd)]
     pub fn append_add_js(
         &mut self,
@@ -1931,6 +1932,12 @@ impl SafeMeshStringOrSetReplica {
     }
 
     pub fn append_add(&mut self, element: String, token: u64) -> Result<Vec<u8>, JsValue> {
+        if self.allocated_writers.is_some() {
+            return Err(safe_mesh_error(
+                1,
+                "allocated replica rejects caller-supplied tokens; use appendAllocatedAdd",
+            ));
+        }
         self.append(OrSetDelta::Add { element, token })
             .map_err(JsValue::from)
     }
