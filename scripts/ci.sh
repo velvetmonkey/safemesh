@@ -12,6 +12,10 @@ require_tool() {
 
 require_tool cbindgen
 require_tool maturin
+require_tool python3
+
+python3 "$repo_root/scripts/check-readme-quickstart.py" \
+  --work-dir "$repo_root/rust/target/readme-quickstart"
 
 rustup target add thumbv7em-none-eabihf wasm32-unknown-unknown
 
