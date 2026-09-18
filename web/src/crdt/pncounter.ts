@@ -28,9 +28,9 @@ export function applyPNCounterDelta(
   delta: PNCounterDelta,
 ): PNCounterState {
   if (delta.kind === 'pncounter.inc') {
-    return { p: applyGCounterDelta(state.p, bumpDelta(delta.replica, delta.tally)), n: state.n }
+    return { p: applyGCounterDelta(state.p, bumpDelta(delta.replica, delta.tally)), n: [...state.n] }
   }
-  return { p: state.p, n: applyGCounterDelta(state.n, bumpDelta(delta.replica, delta.tally)) }
+  return { p: [...state.p], n: applyGCounterDelta(state.n, bumpDelta(delta.replica, delta.tally)) }
 }
 
 export function mergePNCounter(left: PNCounterState, right: PNCounterState): PNCounterState {
