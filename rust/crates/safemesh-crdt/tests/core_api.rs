@@ -58,7 +58,7 @@ fn gcounter_read_is_exact_past_the_u64_boundary() {
     left.apply_bump(0, u64::MAX);
     let mut right = GCounter::new(2);
     right.apply_bump(1, u64::MAX);
-    left.merge(&right);
+    left.merge(&right).unwrap();
     assert_eq!(left.state(), &[u64::MAX, u64::MAX]);
     assert_eq!(left.value(), 2 * u128::from(u64::MAX));
 
@@ -131,12 +131,12 @@ fn gcounter_try_merge_matches_merge_on_equal_width() {
     b.apply_bump(0, 2);
 
     let mut checked = a.clone();
-    let mut infallible = a.clone();
+    let mut merged = a.clone();
     checked.try_merge(&b).expect("equal width merges cleanly");
-    infallible.merge(&b);
+    merged.merge(&b).unwrap();
 
     assert_eq!(checked.state(), &[5, 7, 0]);
-    assert_eq!(checked.state(), infallible.state());
+    assert_eq!(checked.state(), merged.state());
 }
 
 #[test]
@@ -182,16 +182,27 @@ fn checked_coordinate_and_checked_merge_coexist() {
 }
 
 #[test]
-fn gcounter_merge_panics_on_mismatch_instead_of_losing_state() {
-    let result = std::panic::catch_unwind(|| {
-        let mut narrow = GCounter::new(2);
-        let wide = GCounter::new(3);
-        narrow.merge(&wide);
-    });
-    assert!(
-        result.is_err(),
-        "infallible merge must not silently truncate"
-    );
+fn generic_counter_merge_rejects_mismatch_without_mutation() {
+    fn check<T: safemesh_crdt::Mergeable + Clone + PartialEq + std::fmt::Debug>(
+        mut own: T,
+        other: T,
+        own_count: usize,
+        other_count: usize,
+    ) {
+        let before = own.clone();
+        assert_eq!(
+            own.merge(&other),
+            Err(MergeError::ReplicaCountMismatch {
+                own: own_count,
+                other: other_count,
+            })
+        );
+        assert_eq!(own, before);
+    }
+    for (own, other) in [(2, 3), (3, 2), (0, 1), (1, 0)] {
+        check(GCounter::new(own), GCounter::new(other), own, other);
+        check(PnCounter::new(own), PnCounter::new(other), own, other);
+    }
 }
 
 #[test]
@@ -587,4 +598,65 @@ fn rga_position_read_preserves_every_live_entry() {
     forward.delete(10);
     assert_eq!(forward.live_entries(), vec![(20, 'c')]);
     assert_eq!(forward.read_positions(), vec![20]);
+}
+
+#[test]
+fn gcounter_merge_mismatch_returns_error() {
+    let mut own = GCounter::new(2);
+    own.apply_bump(0, 4);
+    let mut other = GCounter::new(3);
+    other.apply_bump(0, 9);
+    let before = own.clone();
+    assert_eq!(
+        own.merge(&other),
+        Err(MergeError::ReplicaCountMismatch { own: 2, other: 3 })
+    );
+    assert_eq!(own, before);
+}
+
+#[test]
+fn pncounter_merge_mismatch_returns_error() {
+    let mut own = PnCounter::new(2);
+    own.apply_inc(0, 4);
+    own.apply_dec(1, 2);
+    let mut other = PnCounter::new(3);
+    other.apply_inc(0, 9);
+    other.apply_dec(1, 8);
+    let before = own.clone();
+    assert_eq!(
+        own.merge(&other),
+        Err(MergeError::ReplicaCountMismatch { own: 2, other: 3 })
+    );
+    assert_eq!(own, before);
+}
+
+#[test]
+fn counter_merge_equal_width_preserves_values() {
+    let mut g = GCounter::new(2);
+    g.apply_bump(0, 5);
+    let mut peer = GCounter::new(2);
+    peer.apply_bump(0, 2);
+    peer.apply_bump(1, 7);
+    let mut generic = g.clone();
+    assert_eq!(safemesh_crdt::Mergeable::merge(&mut generic, &peer), Ok(()));
+    assert_eq!(g.merge(&peer), Ok(()));
+    assert_eq!(g.state(), &[5, 7]);
+    assert_eq!(g.value(), 12);
+    assert_eq!(generic, g);
+
+    let mut pn = PnCounter::new(2);
+    pn.apply_inc(0, 5);
+    pn.apply_dec(1, 3);
+    let mut peer = PnCounter::new(2);
+    peer.apply_inc(0, 2);
+    peer.apply_inc(1, 7);
+    peer.apply_dec(0, 4);
+    peer.apply_dec(1, 1);
+    let mut generic = pn.clone();
+    assert_eq!(safemesh_crdt::Mergeable::merge(&mut generic, &peer), Ok(()));
+    assert_eq!(pn.merge(&peer), Ok(()));
+    assert_eq!(pn.p_state(), &[5, 7]);
+    assert_eq!(pn.n_state(), &[4, 3]);
+    assert_eq!(pn.value(), 5);
+    assert_eq!(generic, pn);
 }
