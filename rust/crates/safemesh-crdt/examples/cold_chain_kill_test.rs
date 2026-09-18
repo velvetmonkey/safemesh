@@ -418,12 +418,13 @@ mod tests {
 }
 
 impl safemesh_crdt::Mergeable for ColdChainState {
-    fn merge(&mut self, other: &Self) {
+    fn merge(&mut self, other: &Self) -> Result<(), safemesh_crdt::MergeError> {
+        self.event_count.merge(&other.event_count)?;
         self.samples.merge(&other.samples);
         self.custody.merge(&other.custody);
         self.alerts.merge(&other.alerts);
         self.audit.merge(&other.audit);
-        self.event_count.merge(&other.event_count);
+        Ok(())
     }
 }
 impl safemesh_crdt::Crdt for ColdChainState {

@@ -72,7 +72,7 @@ let delta = GCounterDelta {
 };
 left.apply_delta(delta.clone());
 right.apply_delta(delta);
-left.merge(&right);
+left.merge(&right).expect("counters have equal replica counts");
 
 assert_eq!(left.value(), right.value());
 ```
