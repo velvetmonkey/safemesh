@@ -81,6 +81,56 @@ There is no compose/map combinator or public `WireCursor` write helper. Callers 
 
 There is no public EventLog snapshot/compaction API. Saving `EventLog` retains every record and payload; `since` selects missing records for exchange but does not shrink stored history. Callers must budget for growth and retain or archive complete history with a recovery plan. Some carriers can encode whole state, but that does not preserve record admission history, writer allocation or a protocol for peers that missed edits. Do not discard old records or tombstones as an optimization. If bounded history is required, design and validate an application checkpoint/epoch and peer-retirement protocol, or choose storage with that facility. Evidence: [`EventLog::records`](/safemesh/reference/rust/safemesh_crdt/struct.EventLog.html#method.records), [`EventLog::since`](/safemesh/reference/rust/safemesh_crdt/struct.EventLog.html#method.since), and its [`WireEncode` implementation](/safemesh/reference/rust/safemesh_crdt/struct.EventLog.html#trait-implementations).
 
+### Illustrative capacity estimate (not a throughput benchmark)
+
+For one retained log, let **R** be the number of new, unique records per day,
+**S** the average encoded record size in bytes/record (including its length
+prefix inside the log), and **D** the retention duration in days. Then:
+
+- Retained records: **N = R × D**.
+- Encoded-log size: **B = N × S + H bytes**, where **H** is the log frame's fixed overhead.
+
+A concrete size basis is the current G-Counter wire layout: a delta occupies
+17 bytes (1-byte tag + 8-byte replica + 8-byte tally). Its record adds
+21 bytes (1-byte tag + 8-byte replica + 8-byte sequence + 4-byte delta length),
+giving **38 bytes/record**. EventLog adds a 4-byte length prefix per record,
+so **S = 42 bytes/record**. Its G-Counter frame adds **H = 60 bytes** for the
+tag, lengths, shape marker, schema, arity, record count and checksum.
+These sizes are derived from the current encoder, not an assumed average for
+other payloads. See the [wire implementation](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/lib.rs)
+and [canonical-byte tests](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/tests/wire.rs).
+The [two-application journey's recorded measurement](https://github.com/velvetmonkey/safemesh/blob/main/demos/two-app-inventory/EVIDENCE.md)
+also reports 228,038 bytes of record payloads for 6,001 G-Counter records:
+228,038 bytes / 6,001 records = 38 bytes/record, excluding EventLog framing and
+SQLite overhead. That journey is not a throughput benchmark.
+
+**Illustrative workload, not measured:** choose R = 10,000 records/day and
+D = 365 days. Starting from an empty log:
+
+- N = 10,000 records/day × 365 days = **3,650,000 records**.
+- B = 3,650,000 records × 42 bytes/record + 60 bytes = **153,300,060 bytes**,
+  or about **153.3 MB** (1 MB = 1,000,000 bytes), for one encoded log copy.
+
+Substitute your own workload and retention duration, and measure encoded sizes
+from representative payloads with `to_wire_bytes`. Variable-length strings and
+remove-token sets can change the average substantially. Add existing history
+to N, and budget separately for replicas, backups, database/filesystem overhead
+and temporary copies during saving. This calculation covers encoded-log bytes;
+it is not a RAM estimate. Measure in-memory records, carrier state, tombstones,
+admission/version indexes and peak encode/decode allocations separately.
+
+Replay is another capacity measurement: this example requires reading and
+admitting 3,650,000 records to reconstruct from complete history. Measure
+end-to-end recovery time and peak memory on your target hardware, storage and
+payload mix at the planned history size; no replay records/second or recovery
+time is established by this arithmetic or by the journey's total elapsed time.
+
+The 365-day duration is a sizing horizon, **not permission to expire records**.
+Archival does not authorize deleting active history or restoring from incomplete
+history. Without a validated checkpoint/epoch and peer-retirement protocol,
+continue budgeting for all retained history beyond that horizon and preserve
+complete recovery history.
+
 ## You need physical or legal truth
 
 Cold-chain examples model software state. They do not prove sensor truth, legal custody, hardware puck behavior, or storage durability. A converged temperature alert does not prove that the sensor reading was true. [Evidence: evaluation limits](https://github.com/velvetmonkey/safemesh/blob/main/CLAIMS.md) and [Python example scope](/safemesh/examples/).
