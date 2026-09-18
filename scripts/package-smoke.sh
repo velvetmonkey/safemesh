@@ -7,7 +7,7 @@ trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$tmp_dir"' EX
 
 (
   cd "$repo_root/rust"
-  cargo publish --dry-run -p safemesh-crdt --allow-dirty
+  cargo publish --dry-run -p safemesh-crdt --allow-dirty --locked
 )
 
 if ! command -v maturin >/dev/null 2>&1; then
@@ -21,7 +21,7 @@ fi
 
 (
   cd "$repo_root/rust/crates/safemesh-python"
-  maturin build --release --features extension-module --out "$tmp_dir/wheels"
+  maturin build --release --locked --features extension-module --out "$tmp_dir/wheels"
 )
 
 python3 -m venv "$tmp_dir/venv"
@@ -85,7 +85,7 @@ fi
 wasm-pack build "$repo_root/rust/crates/safemesh-wasm" \
   --target bundler \
   --out-dir "$tmp_dir/wasm-pkg" \
-  --release
+  --release -- --locked
 
 # wasm-pack 0.15 omits inline-JS snippets from its npm files allowlist.
 # Include them in the artifact before packing; never repair the consumer install.
@@ -159,7 +159,7 @@ JS
 wasm-pack build "$repo_root/rust/crates/safemesh-wasm" \
   --target nodejs \
   --out-dir "$tmp_dir/wasm-node-pkg" \
-  --release
+  --release -- --locked
 
 node "$repo_root/rust/crates/safemesh-wasm/examples/node-convergence.mjs" \
   "$tmp_dir/wasm-node-pkg"

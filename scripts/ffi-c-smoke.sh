@@ -24,7 +24,7 @@ fi
 
 (
   cd "$repo_root/rust"
-  cargo build -p safemesh-ffi --release
+  cargo build -p safemesh-ffi --release --locked
 )
 
 tmp_dir="$(mktemp -d)"
