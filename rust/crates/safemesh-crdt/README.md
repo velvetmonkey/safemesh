@@ -467,7 +467,10 @@ schema. Individual record and delta bytes are unchanged.
 Construct persisted logs with `EventLog::for_crdt(&state)` (or
 `with_replica_count(n)` for an explicitly fixed domain). `EventLog::new()` remains
 available for in-memory logs and unbounded CRDTs; encoding an unshaped G-Counter
-or PN-Counter log returns `WireError::MissingShape`. Decode at a destination with
+or PN-Counter log returns `WireError::MissingShape`. A log created with `new()`
+binds its shape on the first accepted record. Declared or already-bound logs
+refuse fresh records admitted with a different carrier width or arity kind,
+before changing the log or applying the delta. Decode at a destination with
 `EventLog::from_wire_bytes_for(bytes, &state)` before applying any records.
 A different delta schema returns `DeltaTypeMismatch`; a different fixed arity
 returns `ReplicaCountMismatch { expected, actual }`; fixed/unbounded disagreement

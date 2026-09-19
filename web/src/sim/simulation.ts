@@ -61,8 +61,12 @@ export type Simulation = {
   log: LogEntry[]
 }
 
+// The Lab offers 3–6 peers and renders every peer and pairwise link. Allow
+// moderate experiments while bounding quadratic counter state and link growth.
+export const MAX_SIMULATION_PEERS = 100
+
 export function createSimulation(peerCount = 4): Simulation {
-  checkedInteger(peerCount, 'peerCount', 0xffffffff)
+  checkedInteger(peerCount, 'peerCount', MAX_SIMULATION_PEERS)
   return {
     peers: Array.from({ length: peerCount }, (_, id) => ({
       id,
