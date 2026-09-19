@@ -3,14 +3,12 @@
 // componentwise maximum. This is NOT the Rust/WASM runtime; the real behavior is
 // in the Lab (see the link below `sm-mesh-foot`, which the caller supplies).
 //
-// Ported from the reviewed reference bundle's `mesh()`/`assets/mesh.js` component
-// (DESIGN-AND-INTEGRATION.md, section 2). Native <button> elements make it
-// keyboard-operable; aria-pressed marks the active phase; the caption is an
-// aria-live region. Without JavaScript the controls stay hidden and the diagram
-// remains a static, meaningful "offline" snapshot with real numbers and labels.
+// Native phase controls and a pause button keep the automatic example operable.
+// Without JavaScript, the labeled offline snapshot remains meaningful.
 const { labUrl } = Astro.props as { labUrl: string };
 ---
 
+<div class="sm-mesh-wrap">
 <figure class="sm-mesh sm-point-grid" data-mesh data-phase="offline" aria-label="Illustration of three G-Counter replicas">
   <div class="sm-mesh-top">
     <span>G-COUNTER / THREE REPLICAS</span>
@@ -48,7 +46,8 @@ const { labUrl } = Astro.props as { labUrl: string };
     <button type="button" data-phase-button="sync" aria-pressed="false">2. Exchange</button>
     <button type="button" data-phase-button="replay" aria-pressed="false">3. Replay</button>
   </div>
-  <figcaption class="sm-mesh-caption" data-mesh-caption aria-live="polite">
+  <button type="button" class="sm-mesh-playback" data-mesh-playback hidden>Pause animation</button>
+  <figcaption class="sm-mesh-caption" data-mesh-caption>
     Each replica has its own updates. A reads 3, B reads 2, and C reads 1. They do not agree yet.
   </figcaption>
 </figure>
@@ -57,6 +56,7 @@ const { labUrl } = Astro.props as { labUrl: string };
   G-Counter joined by componentwise maximum), not the product's transport,
   storage or wire format. For the real Rust/WASM behavior, <a href={labUrl}>open SafeMesh Lab ↗</a>.
 </p>
+</div>
 
 <script>
   // A small pedagogical G-Counter model, NOT the SafeMesh Rust/WASM runtime.
@@ -72,26 +72,57 @@ const { labUrl } = Astro.props as { labUrl: string };
     const buttons = mesh.querySelectorAll<HTMLButtonElement>('[data-phase-button]');
     const controls = mesh.querySelector('[data-mesh-controls]');
     if (controls) controls.removeAttribute('hidden');
+    const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const playback = mesh.querySelector<HTMLButtonElement>('[data-mesh-playback]')!;
+    const phases = ['offline', 'sync', 'replay'] as const;
+    type Phase = typeof phases[number];
+    let phase: Phase = 'offline';
+    let paused = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    function render(next: Phase) {
+      phase = next;
+      const states = phase === 'offline' ? seeds : seeds.map(() => (phase === 'sync' ? union : join(union, seeds[0])));
+      mesh.dataset.phase = phase;
+      mesh.querySelectorAll('.sm-replica').forEach((replica, i) => {
+        replica.querySelector('[data-replica-total]')!.textContent = String(states[i].reduce((a, b) => a + b, 0));
+        replica.querySelector('[data-replica-vector]')!.textContent = `[${states[i].join(', ')}]`;
+      });
+      mesh.querySelector('[data-mesh-status]')!.textContent = phase === 'offline' ? 'PARTITIONED' : phase === 'sync' ? 'SAME STATE' : 'UNCHANGED';
+      mesh.querySelector('[data-mesh-center]')!.textContent = phase === 'offline' ? 'no delivery' : phase === 'sync' ? 'max per coordinate' : 'duplicate absorbed';
+      mesh.querySelector('[data-mesh-caption]')!.textContent = captions[phase];
+      for (const choice of buttons) choice.setAttribute('aria-pressed', String(choice.dataset.phaseButton === phase));
+    }
+
+    function schedule() {
+      window.clearTimeout(timer);
+      const running = !paused && !motion.matches && !document.hidden;
+      mesh.dataset.running = String(running);
+      playback.hidden = motion.matches;
+      playback.textContent = paused ? 'Play animation' : 'Pause animation';
+      if (running) timer = window.setTimeout(() => {
+        render(phases[(phases.indexOf(phase) + 1) % phases.length]);
+        schedule();
+      }, 4000);
+    }
+
     for (const button of buttons) {
       button.addEventListener('click', () => {
-        const phase = button.dataset.phaseButton as 'offline' | 'sync' | 'replay';
-        const states = phase === 'offline' ? seeds : seeds.map(() => (phase === 'sync' ? union : join(union, seeds[0])));
-        mesh.dataset.phase = phase;
-        const replicas = mesh.querySelectorAll('.sm-replica');
-        replicas.forEach((replica, i) => {
-          const total = replica.querySelector('[data-replica-total]');
-          const vector = replica.querySelector('[data-replica-vector]');
-          if (total) total.textContent = String(states[i].reduce((a, b) => a + b, 0));
-          if (vector) vector.textContent = `[${states[i].join(', ')}]`;
-        });
-        const status = mesh.querySelector('[data-mesh-status]');
-        const center = mesh.querySelector('[data-mesh-center]');
-        const caption = mesh.querySelector('[data-mesh-caption]');
-        if (status) status.textContent = phase === 'offline' ? 'PARTITIONED' : phase === 'sync' ? 'SAME STATE' : 'UNCHANGED';
-        if (center) center.textContent = phase === 'offline' ? 'no delivery' : phase === 'sync' ? 'max per coordinate' : 'duplicate absorbed';
-        if (caption) caption.textContent = captions[phase];
-        for (const choice of buttons) choice.setAttribute('aria-pressed', String(choice === button));
+        paused = true;
+        render(button.dataset.phaseButton as Phase);
+        schedule();
       });
     }
+    playback.addEventListener('click', () => {
+      paused = !paused;
+      schedule();
+    });
+    document.addEventListener('visibilitychange', schedule);
+    motion.addEventListener('change', () => {
+      if (motion.matches) render('replay');
+      schedule();
+    });
+    if (motion.matches) render('replay');
+    schedule();
   }
 </script>
