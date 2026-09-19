@@ -1,10 +1,11 @@
 import { SafeMeshGCounterReplica } from '../../../rust/crates/safemesh-wasm/pkg/safemesh_wasm'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   addElement,
   bumpCounter,
   convergence,
   createSimulation,
+  MAX_SIMULATION_PEERS,
   dropCounterPacketToPeer,
   dropNextPacket,
   duplicateNextPacket,
@@ -373,6 +374,40 @@ describe('wide counter reads', () => {
 })
 
 describe('Lab numeric boundary regressions', () => {
+  it('enforces the peer quota before allocation for construction and reset', () => {
+    const sim = createSimulation()
+    const before = structuredClone(sim)
+    for (const count of [MAX_SIMULATION_PEERS + 1, 1000, 4000000000]) {
+      const allocate = vi.spyOn(Array, 'from')
+      try {
+        const error = new RangeError(`peerCount must be a nonnegative safe integer at most ${MAX_SIMULATION_PEERS}`)
+        expect(() => createSimulation(count)).toThrow(error)
+        expect(() => setPeerCount(sim, count)).toThrow(error)
+        expect(allocate).not.toHaveBeenCalled()
+      } finally {
+        allocate.mockRestore()
+      }
+    }
+    expect(sim).toEqual(before)
+  })
+
+  it('preserves empty, default, moderate, and maximum supported simulations', () => {
+    expect(createSimulation().peers).toHaveLength(4)
+    for (const count of [0, 4, 50, MAX_SIMULATION_PEERS]) {
+      const sim = createSimulation(count)
+      expect(sim.peers).toHaveLength(count)
+      expect(sim.peers.every((peer, id) => peer.id === id && peer.gcounter.length === count)).toBe(true)
+      expect(convergence(sim).converged).toBe(true)
+      expect(setPeerCount(createSimulation(), count).peers).toHaveLength(count)
+      if (count > 0) {
+        const sent = bumpCounter(setDropRate(sim, 0), 0)
+        const updated = tick(sent, Math.max(0, ...sent.queue.map((packet) => packet.deliverAt)))
+        expect(convergence(updated).gcounterValues).toEqual(Array(count).fill(1))
+        expect(convergence(updated).converged).toBe(true)
+      }
+    }
+  })
+
   const badNumbers = [NaN, Infinity, -Infinity, -1, Number.MAX_SAFE_INTEGER + 1, '2', null, true] as number[]
   it.each(badNumbers)('refuses invalid peer counts %s before constructing carriers', (bad) => {
     expect(() => createSimulation(bad)).toThrow(RangeError)
