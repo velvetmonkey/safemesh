@@ -72,7 +72,7 @@ let delta = GCounterDelta {
 };
 left.apply_delta(delta.clone());
 right.apply_delta(delta);
-left.merge(&right).expect("counters have equal replica counts");
+left.try_merge(&right).expect("counters have equal replica counts");
 
 assert_eq!(left.value(), right.value());
 ```
@@ -420,6 +420,16 @@ Before a failure: keep verified backups with matching ownership metadata and rep
 
 ## Verify locally
 
+From the repository root, compile and run the Install/Quickstart blocks above
+against their exact Git dependency (requires Python 3.11+, Cargo and GitHub access):
+
+```sh
+python3 scripts/check-readme-quickstart.py --work-dir rust/target/readme-quickstart
+```
+
+The full gate runs this check too. It reads the README blocks directly, keeping
+the historical recipe independent of the current checkout's API.
+
 ```sh
 cd rust
 cargo publish --dry-run -p safemesh-crdt --allow-dirty
@@ -457,7 +467,10 @@ schema. Individual record and delta bytes are unchanged.
 Construct persisted logs with `EventLog::for_crdt(&state)` (or
 `with_replica_count(n)` for an explicitly fixed domain). `EventLog::new()` remains
 available for in-memory logs and unbounded CRDTs; encoding an unshaped G-Counter
-or PN-Counter log returns `WireError::MissingShape`. Decode at a destination with
+or PN-Counter log returns `WireError::MissingShape`. A log created with `new()`
+binds its shape on the first accepted record. Declared or already-bound logs
+refuse fresh records admitted with a different carrier width or arity kind,
+before changing the log or applying the delta. Decode at a destination with
 `EventLog::from_wire_bytes_for(bytes, &state)` before applying any records.
 A different delta schema returns `DeltaTypeMismatch`; a different fixed arity
 returns `ReplicaCountMismatch { expected, actual }`; fixed/unbounded disagreement

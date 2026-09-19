@@ -1460,3 +1460,188 @@ fn direct_raw_pn_admission_refuses_invalid_coordinates() {
         assert_eq!(state, before);
     }
 }
+
+#[test]
+fn admission_refuses_log_carrier_width_mismatch_before_mutation() {
+    use safemesh_crdt::WireError;
+    for count in [0, 1, 3] {
+        let mut log = EventLog::with_replica_count(count);
+        let before = log.clone();
+        let mut state = GCounter::new(2);
+        let expected = WireError::ReplicaCountMismatch {
+            expected: 2,
+            actual: count,
+        };
+        let admission = log.admit_with(&mut state, record(1, 5), |_, _| {
+            panic!("mismatched record applied")
+        });
+        assert_eq!(admission, Admission::Invalid(expected));
+        assert_eq!(log.insert_record(&state, record(1, 5)), admission);
+        assert_eq!(log.merge_records(&state, [record(1, 5)]), vec![admission]);
+        assert_eq!(
+            log.append_with(&mut state, 1, record(1, 5).delta, |_, _| panic!(
+                "mismatched append applied"
+            )),
+            Err(AppendError::InvalidRecord(expected))
+        );
+        assert_eq!(log, before);
+        assert_eq!(state, GCounter::new(2));
+        println!("SM-001: log width {count}, carrier width 2, author 1: {admission:?}; log and state unchanged");
+    }
+    let mut state = GCounter::new(2);
+    let mut log = EventLog::for_crdt(&state);
+    assert_eq!(log.insert_record(&state, record(1, 5)), Admission::Accepted);
+    let before = log.clone();
+    assert_eq!(
+        log.insert_record(&GCounter::new(3), record(2, 7)),
+        Admission::Invalid(WireError::ReplicaCountMismatch {
+            expected: 3,
+            actual: 2
+        })
+    );
+    assert_eq!(
+        log.insert_record(&GCounter::new(3), record(1, 5)),
+        Admission::Duplicate
+    );
+    assert_eq!(
+        log.insert_record(&GCounter::new(3), record(1, 6)),
+        Admission::Collision
+    );
+    assert_eq!(log, before);
+    assert_eq!(
+        log.append_with(&mut state, 1, record(2, 7).delta, |s, d| s
+            .apply_delta(d.clone()))
+            .unwrap()
+            .sequence,
+        2
+    );
+    assert_eq!(state.value(), 7);
+    let bytes = log.to_wire_bytes().unwrap();
+    assert_eq!(
+        EventLog::<GCounterDelta>::from_wire_bytes_for(&bytes, &state),
+        Ok(log)
+    );
+}
+
+#[test]
+fn unbound_log_binds_only_after_successful_admission() {
+    use safemesh_crdt::WireError;
+    for via_append in [false, true] {
+        let mut log = EventLog::new();
+        let before = log.clone();
+        assert_eq!(
+            log.insert_record(&GCounter::new(1), record(1, 5)),
+            Admission::Invalid(WireError::OwnershipViolation)
+        );
+        assert_eq!(log, before);
+        let mut state = GCounter::new(2);
+        if via_append {
+            log.append_with(&mut state, 1, record(1, 5).delta, |s, d| {
+                s.apply_delta(d.clone())
+            })
+            .unwrap();
+        } else {
+            assert_eq!(log.insert_record(&state, record(1, 5)), Admission::Accepted);
+        }
+        assert_eq!(log.replica_count(), Some(2));
+        let bytes = log.to_wire_bytes().unwrap();
+        assert_eq!(
+            EventLog::<GCounterDelta>::from_wire_bytes_for(&bytes, &state),
+            Ok(log.clone())
+        );
+        assert_eq!(
+            log.insert_record(&GCounter::new(3), record(2, 7)),
+            Admission::Invalid(WireError::ReplicaCountMismatch {
+                expected: 3,
+                actual: 2
+            })
+        );
+    }
+}
+
+#[test]
+fn admission_distinguishes_bound_unbounded_and_fixed_zero_domains() {
+    use safemesh_crdt::{EnableWinsFlag, EnableWinsFlagDelta, MergeError, Mergeable, WireError};
+    struct ShapedFlag(Option<usize>);
+    impl Mergeable for ShapedFlag {
+        fn merge(&mut self, _: &Self) -> Result<(), MergeError> {
+            Ok(())
+        }
+    }
+    impl Crdt for ShapedFlag {
+        type Delta = EnableWinsFlagDelta<u64>;
+        fn replica_count(&self) -> Option<usize> {
+            self.0
+        }
+        fn validate_record(&self, _: RecordId, _: &Self::Delta) -> Result<(), WireError> {
+            Ok(())
+        }
+        fn apply_delta(&mut self, _: Self::Delta) {}
+    }
+    let record = Record {
+        id: RecordId {
+            replica: 0,
+            sequence: 1,
+        },
+        delta: EnableWinsFlagDelta::Enable { token: 5 },
+    };
+    for shape in [None, Some(0), Some(2)] {
+        let state = ShapedFlag(shape);
+        let declared = EventLog::for_crdt(&state);
+        let decoded = EventLog::from_wire_bytes(&declared.to_wire_bytes().unwrap()).unwrap();
+        let mut bound_on_admission = EventLog::new();
+        assert_eq!(
+            bound_on_admission.insert_record(&state, record.clone()),
+            Admission::Accepted
+        );
+        for mut log in [declared, decoded, bound_on_admission] {
+            let opposite = ShapedFlag(if shape.is_none() { Some(0) } else { None });
+            let fresh = Record {
+                id: RecordId {
+                    sequence: 2,
+                    ..record.id
+                },
+                ..record.clone()
+            };
+            let before = log.clone();
+            assert_eq!(
+                log.admit_with(&mut ShapedFlag(opposite.0), fresh, |_, _| panic!(
+                    "kind mismatch applied"
+                )),
+                Admission::Invalid(WireError::ArityKindMismatch)
+            );
+            assert_eq!(log, before);
+        }
+    }
+    let mut fixed_zero = EventLog::with_replica_count(0);
+    assert_eq!(
+        fixed_zero.insert_record(&EnableWinsFlag::new(), record),
+        Admission::Invalid(WireError::ArityKindMismatch)
+    );
+}
+
+#[test]
+fn checked_restore_still_refuses_preexisting_sm001_data() {
+    use safemesh_crdt::WireError;
+    // Generate historical malformed data through the product encoder, not live admission.
+    let mut bytes = Vec::new();
+    EventLog::encode_records(Some(1), &[record(1, 5)], &mut bytes).unwrap();
+    assert_eq!(
+        EventLog::<GCounterDelta>::from_wire_bytes(&bytes)
+            .unwrap()
+            .records()
+            .len(),
+        1
+    );
+    assert_eq!(
+        EventLog::<GCounterDelta>::from_wire_bytes_for(&bytes, &GCounter::new(2)),
+        Err(WireError::ReplicaCountMismatch {
+            expected: 2,
+            actual: 1
+        })
+    );
+    assert_eq!(
+        EventLog::<GCounterDelta>::from_wire_bytes_for(&bytes, &GCounter::new(1)),
+        Err(WireError::OwnershipViolation)
+    );
+}

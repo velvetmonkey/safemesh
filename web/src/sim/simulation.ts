@@ -61,8 +61,12 @@ export type Simulation = {
   log: LogEntry[]
 }
 
+// The Lab offers 3–6 peers and renders every peer and pairwise link. Allow
+// moderate experiments while bounding quadratic counter state and link growth.
+export const MAX_SIMULATION_PEERS = 100
+
 export function createSimulation(peerCount = 4): Simulation {
-  checkedInteger(peerCount, 'peerCount', 0xffffffff)
+  checkedInteger(peerCount, 'peerCount', MAX_SIMULATION_PEERS)
   return {
     peers: Array.from({ length: peerCount }, (_, id) => ({
       id,
@@ -489,87 +493,22 @@ function runAntiEntropy(sim: Simulation): Simulation {
   // Scheduling is guarded by maybeRunAntiEntropy; manual repair also works when it is off.
   if (sim.partitioned) return sim
 
-  let peers = sim.peers
-  let next: Simulation = {
-    ...sim,
-    nextAntiEntropyAt: sim.antiEntropyMs > 0 ? clockAfter(sim.now, sim.antiEntropyMs) : Number.POSITIVE_INFINITY,
-  }
-  let mergedAny = false
-  // Equal displayed/carrier states can still have different record histories.
-  // Matching core version vectors (cached by convergence), or identical logs,
-  // prove there is no backfill work without reconstructing native handles.
+  // Equal carrier states can still have different record histories. Only matching
+  // version vectors (cached by convergence), or identical logs, prove no work remains.
+  const peers = sim.peers
   const [first] = peers
   if (repairComplete.has(peers) || !first || peers.every((peer) =>
     sameBytes(peer.gcounterLog, first.gcounterLog) && sameBytes(peer.orset, first.orset),
-  )) return next
-
-  for (let i = 0; i < peers.length; i += 1) {
-    for (let j = i + 1; j < peers.length; j += 1) {
-      const left = peers[i]
-      const right = peers[j]
-      const rightToLeft = backfillDescriptions(left, right)
-      const leftToRight = backfillDescriptions(right, left)
-
-      if (rightToLeft.length === 0 && leftToRight.length === 0) continue
-      mergedAny = true
-
-      const leftCounter = replicaFor(left, peers.length)
-      try {
-        const rightCounter = replicaFor(right, peers.length)
-        try {
-          mergeLogBytes(leftCounter, rightCounter.logBytes())
-          mergeLogBytes(rightCounter, leftCounter.logBytes())
-          const leftSet = orsetReplicaFor(left)
-          let rightSet: SafeMeshStringOrSetReplica | undefined
-          let leftLog: Uint8Array
-          let rightLog: Uint8Array
-          try {
-            rightSet = orsetReplicaFor(right)
-            mergeLogBytes(leftSet, rightSet.logBytes())
-            mergeLogBytes(rightSet, leftSet.logBytes())
-            leftLog = leftSet.logBytes()
-            rightLog = rightSet.logBytes()
-          } finally {
-            leftSet.free()
-            rightSet?.free()
-          }
-          peers = peers.map((peer) => {
-            if (peer.id === left.id) return normalizePeer({ ...snapshotGCounterPeer(left, leftCounter), orset: leftLog })
-            if (peer.id === right.id) return normalizePeer({ ...snapshotGCounterPeer(right, rightCounter), orset: rightLog })
-            return peer
-          })
-        } finally {
-          rightCounter.free()
-        }
-      } finally {
-        leftCounter.free()
-      }
-
-      for (const item of rightToLeft) {
-        next = appendLog(
-          { ...next, peers },
-          `Camp ${left.id} recovered ${item.plain} from Camp ${right.id}`,
-          'anti-entropy',
-          `anti-entropy: peer ${left.id} backfilled ${item.technical} from peer ${right.id}`,
-        )
-      }
-      for (const item of leftToRight) {
-        next = appendLog(
-          { ...next, peers },
-          `Camp ${right.id} recovered ${item.plain} from Camp ${left.id}`,
-          'anti-entropy',
-          `anti-entropy: peer ${right.id} backfilled ${item.technical} from peer ${left.id}`,
-        )
-      }
+  )) {
+    return {
+      ...sim,
+      nextAntiEntropyAt: sim.antiEntropyMs > 0 ? clockAfter(sim.now, sim.antiEntropyMs) : Number.POSITIVE_INFINITY,
     }
   }
 
-  if (!mergedAny) repairComplete.add(peers)
-  return {
-    ...next,
-    peers,
-    lastAntiEntropyAt: mergedAny ? sim.now : sim.lastAntiEntropyAt,
-  }
+  // Periodic and manual repair use the same delivery, loss and partition checks
+  // as ordinary gossip. Scheduling repair must never merge another peer's state.
+  return queueAntiEntropyPackets(sim)
 }
 
 function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
@@ -652,35 +591,6 @@ function buildAntiEntropyPackets(sim: Simulation): { packets: Packet[]; nextId: 
   return { packets, nextId }
 }
 
-function backfillDescriptions(
-  target: Peer,
-  source: Peer,
-): Array<{ plain: string; technical: string }> {
-  const items: Array<{ plain: string; technical: string }> = []
-
-  const sourceCounter = replicaFor(source, source.gcounter.length)
-  try {
-    const targetCounter = replicaFor(target, target.gcounter.length)
-    try {
-      for (let replica = 0; replica < source.gcounter.length; replica += 1) {
-        if (sourceCounter.versionFor(BigInt(replica)) > targetCounter.versionFor(BigInt(replica))) {
-          items.push({ plain: `headcount from Camp ${replica}`, technical: `G(log ${replica})` })
-        }
-      }
-    } finally {
-      targetCounter.free()
-    }
-  } finally {
-    sourceCounter.free()
-  }
-
-  if (missingOrSetRecords(target, source, source.gcounter.length)) {
-    items.push({ plain: 'supply records', technical: 'OR(log)' })
-  }
-
-  return items
-}
-
 function orsetReplicaFor(peer: Pick<Peer, 'id' | 'orset'>): SafeMeshStringOrSetReplica {
   const replica = new SafeMeshStringOrSetReplica(BigInt(peer.id))
   try {
@@ -740,10 +650,6 @@ function missingOrSetRecords(target: Peer, source: Peer, peerCount: number): boo
     sourceSet.free()
     targetSet?.free()
   }
-}
-
-function normalizePeer(peer: Peer): Peer {
-  return { ...peer, localTally: Math.max(peer.localTally, peer.gcounter[peer.id] ?? 0) }
 }
 
 function emptyGCounterPeer(id: number, replicas: number): Pick<Peer, 'gcounter' | 'gcounterLog'> {
