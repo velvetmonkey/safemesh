@@ -786,6 +786,17 @@ fn event_log_shape_checks_full_domain_including_empty_and_zero() {
 
 #[test]
 fn event_log_shape_distinguishes_unbounded_from_fixed_zero() {
+    // Decoding binds the wire's declared unbounded domain. The in-memory
+    // binding flag must not alter equality, including when a log is a payload.
+    let empty = EventLog::<EnableWinsFlagDelta<u64>>::new();
+    roundtrip(empty.clone());
+    roundtrip(Record {
+        id: RecordId {
+            replica: 0,
+            sequence: 1,
+        },
+        delta: empty,
+    });
     let state = EnableWinsFlag::<u64>::new();
     let bytes = EventLog::<EnableWinsFlagDelta<u64>>::with_replica_count(0)
         .to_wire_bytes()
