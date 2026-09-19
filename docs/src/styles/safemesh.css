@@ -110,25 +110,27 @@
   /* Hero (index.mdx): what SafeMesh does, plus the primary task routes. */
   .sm-hero {
     display: grid;
-    grid-template-columns: 1.05fr 1fr;
-    gap: 3rem;
-    align-items: center;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    gap: 2.5rem;
+    align-items: start;
     margin: 1.5rem 0 3rem;
   }
-  .sm-hero-eyebrow {
-    font: 0.7rem/1.5 var(--sm-mono);
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: var(--sm-accent);
-    margin: 0 0 0.6rem;
+  .sm-hero > * { min-width: 0; margin-block: 0; }
+  .sm-hero-intro {
+    font-size: 1.1rem;
+    line-height: 1.6;
+    color: var(--sm-text);
+    margin: 0 0 1.25rem;
   }
   .sm-hero-tagline {
-    font-size: clamp(1.5rem, 2.6vw, 2.1rem);
-    line-height: 1.2;
-    letter-spacing: -0.03em;
-    font-weight: 600;
-    margin: 0 0 1rem;
+    font-size: clamp(2.25rem, 4vw, 3.5rem);
+    line-height: 1.08;
+    letter-spacing: -0.045em;
+    font-weight: 650;
+    color: var(--sm-text);
+    margin: 0 0 1.25rem;
   }
+  .sm-hero-tagline span { color: var(--sm-accent); }
   .sm-hero-lead {
     max-width: 32rem;
     font-size: 1.05rem;
@@ -186,6 +188,8 @@
     min-width: 0;
     margin: 0;
   }
+  .sm-hero .sm-mesh * { margin-block-start: 0; }
+  .sm-hero .sm-mesh .sm-replica-vector { margin-top: .7rem; }
   .sm-mesh-top {
     padding: 1rem 1.3rem;
     display: flex;
@@ -199,7 +203,7 @@
   .sm-mesh-field {
     position: relative;
     isolation: isolate;
-    height: 19rem;
+    height: 15rem;
   }
   .sm-mesh-wires {
     position: absolute;
@@ -284,8 +288,7 @@
     background: transparent;
     color: var(--sm-muted);
     border-radius: 0.3rem;
-    font-size: 0.72rem;
-    font: inherit;
+    font: 0.72rem/1.5 var(--sm-font);
     cursor: pointer;
   }
   .sm-mesh-controls button[aria-pressed='true'] {
@@ -298,6 +301,19 @@
     outline: 3px solid var(--sm-blue);
     outline-offset: -3px;
   }
+  .sm-mesh [hidden] { display: none; }
+  .sm-mesh-playback {
+    display: block;
+    margin: 0 .6rem .6rem auto;
+    padding: .3rem .6rem;
+    border: 1px solid var(--sm-line);
+    border-radius: .3rem;
+    background: var(--sm-panel);
+    color: var(--sm-accent);
+    font: .72rem/1.5 var(--sm-font);
+    cursor: pointer;
+  }
+  .sm-mesh-playback:focus-visible { outline: 3px solid var(--sm-blue); }
   .sm-mesh-caption {
     padding: 0 1.3rem 1rem;
     font-size: 0.78rem;
@@ -369,6 +385,14 @@
   }
 
   @media (prefers-reduced-motion: no-preference) {
+    .sm-mesh[data-phase='sync'] .sm-mesh-wires path,
+    .sm-mesh[data-phase='replay'] .sm-mesh-wires path {
+      stroke-dasharray: 5 5;
+      animation: sm-mesh-delivery 1.2s linear infinite;
+      animation-play-state: paused;
+    }
+    .sm-mesh[data-running='true'] .sm-mesh-wires path { animation-play-state: running; }
+    @keyframes sm-mesh-delivery { to { stroke-dashoffset: -20; } }
     .sm-button, .sm-path-card, .sm-replica-core { transition: background-color .18s, border-color .18s; }
   }
 }
