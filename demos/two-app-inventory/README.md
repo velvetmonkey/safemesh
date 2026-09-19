@@ -106,7 +106,9 @@ receipt. `POST /sync` with `{"reverse":true,"duplicate":true}` makes that
 application deliver its retained records directly to its configured peer.
 `POST /link` with `{"online":false}` blocks incoming and outgoing replication;
 `true` reconnects. Use JSON bodies and `Content-Type: application/json`.
-Only one process may own a given store, and only one sync should run at a time.
+Only one process may own a given store. Both applications may sync simultaneously;
+each sync sends a snapshot and waits for its peer without holding the local
+state lock.
 
 ## Public API friction and application workarounds
 
@@ -119,9 +121,10 @@ Only one process may own a given store, and only one sync should run at a time.
   and dimension 2 are fixed here. Store metadata prevents opening a clinic store
   as the warehouse. The binding does not provision globally unique replica IDs.
 - **Increment is read/modify/append.** `append_bump` takes an absolute tally, not
-  an increment amount. The app reads its coordinate and adds one; a single-thread
-  HTTP server serializes mutations. Replay uses `merge_record_bytes` to rebuild
-  state and the log before accepting new local operations.
+  an increment amount. The app reads its coordinate and adds one; a shared lock
+  serializes local state access and complete SQLite transactions. Replay uses
+  `merge_record_bytes` to rebuild state and the log before accepting new local
+  operations.
 - **Transport and coordination are hand-written.** The binding supplies bytes,
   not HTTP, peer discovery, partition management, acknowledgements, retry queues,
   or an anti-entropy scheduler. The driver triggers application-to-application
@@ -145,7 +148,6 @@ Only one process may own a given store, and only one sync should run at a time.
   replica; full sync, replay and normalized digest computation scan it. Sync
   allocates a whole JSON batch; the receiver's cap is not a bounded sender API.
   There is no garbage collection, checkpoint, incremental cursor or pagination.
-  The single-thread servers require serialized sync to avoid mutual blocking.
 - **Errors are not a recovery protocol.** Exceptions become HTTP errors, and the
   app replays on mutation failure. There is no binding-level transaction coupling
   to SQLite. Corrupt stores fail startup; this demo does not repair them.
@@ -160,6 +162,14 @@ power loss, disk failure, arbitrary corruption, process death at every write
 instruction, or package upgrades. SQLite/filesystem durability is an application
 assumption, not part of the CRDT proof. HTTP is unauthenticated, loopback-only,
 with fault-injection controls: do not expose it as a production service.
-Cross-host transport, other Python/platform versions, hostile peers, concurrent
-syncs, many replicas, and larger histories remain unverified. Nothing here adds
-a new proof or extends the supported CRDT surface.
+Cross-host transport, other Python/platform versions, hostile peers, many
+replicas, and larger histories remain unverified. Nothing here adds a new proof
+or extends the supported CRDT surface.
+
+## Simultaneous-sync regression
+
+With the wheel installed, run `python demos/two-app-inventory/test_sync.py`.
+Two forwarding peers rendezvous before delivering records, forcing both apps
+into outgoing sync together. Both `/records` probes and syncs must finish within
+two seconds. The test also checks convergence and serialized concurrent local
+edits. The existing package smoke stage runs this regression automatically.

@@ -9,8 +9,8 @@ export type GCounterDelta = {
 export type GCounterState = number[]
 
 function checkNatural(value: number, name: string): void {
-  if (!Number.isInteger(value) || value < 0) {
-    throw new RangeError(`${name} must be a finite nonnegative integer`)
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(`${name} must be a safe nonnegative integer`)
   }
 }
 
@@ -43,9 +43,14 @@ export function applyGCounterDelta(
 }
 
 // Mirrors the full-state G-Counter join used by Crdt.merge.
+// Refuse invalid coordinates on either side, even when max would hide them.
 export function mergeGCounter(left: GCounterState, right: GCounterState): GCounterState {
   if (left.length !== right.length) {
     throw new RangeError('G-Counter merge requires equal replica counts')
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    checkNatural(left[index], 'left tally')
+    checkNatural(right[index], 'right tally')
   }
   return left.map((value, index) => Math.max(value, right[index]))
 }

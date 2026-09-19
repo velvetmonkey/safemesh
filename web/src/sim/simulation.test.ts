@@ -1,10 +1,11 @@
 import { SafeMeshGCounterReplica } from '../../../rust/crates/safemesh-wasm/pkg/safemesh_wasm'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   addElement,
   bumpCounter,
   convergence,
   createSimulation,
+  MAX_SIMULATION_PEERS,
   dropCounterPacketToPeer,
   dropNextPacket,
   duplicateNextPacket,
@@ -23,7 +24,68 @@ import {
 } from './simulation'
 
 describe('mesh simulation', () => {
-  it.each([0, 5000])('Heal reconnects and repairs immediately with interval %i', (interval) => {
+  it.each(['manual', 'periodic'])('%s repair cannot bypass total packet loss', (mode) => {
+    let sim = setDropRate(createSimulation(2), 1)
+    sim = addElement(bumpCounter(sim, 0), 0, 'water')
+    sim = tick(sim, 2000, () => 0.5)
+    expect(sim.queue).toHaveLength(0)
+    expect(convergence(sim).sameRawState).toBe(false)
+
+    for (let round = 0; round < 5; round += 1) {
+      sim = mode === 'manual' ? runAntiEntropyNow(sim) : tick(sim, 5000, () => 0.5)
+      expect(convergence(sim).gcounterValues).toEqual([1, 0])
+      expect(readORSet(sim.peers[1].orset)).toEqual([])
+      expect(sim.queue.some((packet) => packet.phase === 'repair')).toBe(true)
+      sim = tick(sim, 2000, () => 0.5)
+      expect(convergence(sim).sameRawState).toBe(false)
+      expect(sim.queue).toHaveLength(0)
+    }
+  })
+
+  it.each([0.08, 0.5])('periodic repair eventually converges under partial loss %s', (dropRate) => {
+    let sim = setDropRate(createSimulation(4), 1)
+    sim = addElement(bumpCounter(sim, 0), 1, 'water')
+    sim = tick(sim, 2000, () => 0.5)
+    expect(sim.queue).toHaveLength(0)
+    expect(convergence(sim).sameRawState).toBe(false)
+    sim = setDropRate(sim, dropRate)
+    let seed = 37
+    let drops = 0
+    let deliveries = 0
+    const random = () => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+      const value = seed / 2 ** 32
+      if (value < dropRate) drops += 1
+      else deliveries += 1
+      return value
+    }
+    for (let elapsed = 0; elapsed < 120000 && !convergence(sim).converged; elapsed += 100) {
+      sim = tick(sim, 100, random)
+    }
+    expect(drops).toBeGreaterThan(0)
+    expect(deliveries).toBeGreaterThan(0)
+    expect(convergence(sim).converged).toBe(true)
+    expect(convergence(sim).gcounterValues).toEqual([1, 1, 1, 1])
+    for (const peer of sim.peers) expect(readORSet(peer.orset)).toEqual(['water'])
+    console.info(`partial loss=${dropRate}: converged at ${sim.now}ms; repair drops=${drops}, deliveries=${deliveries}`)
+  })
+
+  it('holds queued manual repair during a new partition and observes latency on retry', () => {
+    let sim = setLatency(setAntiEntropyMs(setDropRate(createSimulation(2), 0), 0), 1200)
+    sim = dropNextPacket(bumpCounter(sim, 0))
+    sim = runAntiEntropyNow(sim)
+    expect(sim.queue[0].deliverAt).toBeGreaterThanOrEqual(sim.now + sim.latencyMs)
+    sim = tick(setPartitioned(sim, true), 2000)
+    expect(convergence(sim).gcounterValues).toEqual([1, 0])
+    expect(sim.queue).toHaveLength(1)
+    sim = tick(setPartitioned(sim, false), 1199)
+    expect(convergence(sim).gcounterValues).toEqual([1, 0])
+    sim = tick(sim, 1)
+    expect(convergence(sim).gcounterValues).toEqual([1, 1])
+    expect(convergence(sim).converged).toBe(true)
+  })
+
+  it.each([0, 5000])('Heal reconnects and schedules repair with interval %i', (interval) => {
     let sim = setPartitioned(setAntiEntropyMs(setDropRate(createSimulation(2), 0), interval), true)
     sim = dropNextPacket(bumpCounter(sim, 0))
     expect(convergence(sim).gcounterValues).toEqual([1, 0])
@@ -31,10 +93,15 @@ describe('mesh simulation', () => {
     sim = runAntiEntropyNow(setPartitioned(sim, false))
 
     expect(sim.partitioned).toBe(false)
-    expect(convergence(sim).gcounterValues).toEqual([1, 1])
+    expect(convergence(sim).gcounterValues).toEqual([1, 0])
+    expect(sim.queue).toHaveLength(1)
     expect(sim.antiEntropyMs).toBe(interval)
     expect(sim.now).toBe(0)
     expect(sim.nextAntiEntropyAt).toBe(interval || Number.POSITIVE_INFINITY)
+    sim = tick(sim, sim.queue[0].deliverAt - 1)
+    expect(convergence(sim).gcounterValues).toEqual([1, 0])
+    sim = tick(sim, 1)
+    expect(convergence(sim).gcounterValues).toEqual([1, 1])
   })
 
   it.each([0, 5000])('manual repair respects a partition with interval %i', (interval) => {
@@ -51,14 +118,18 @@ describe('mesh simulation', () => {
     sim = tick(sim, 4999)
     expect(convergence(sim).gcounterValues).toEqual([1, 0])
     sim = tick(sim, 1)
-    expect(convergence(sim).gcounterValues).toEqual([1, 1])
+    expect(convergence(sim).gcounterValues).toEqual([1, 0])
     expect(sim.nextAntiEntropyAt).toBe(10000)
+    sim = tick(sim, sim.queue[0].deliverAt - sim.now)
+    expect(convergence(sim).gcounterValues).toEqual([1, 1])
     sim = dropNextPacket(bumpCounter(sim, 0))
-    sim = tick(sim, 4999)
+    sim = tick(sim, 9999 - sim.now)
     expect(convergence(sim).gcounterValues).toEqual([2, 1])
     sim = tick(sim, 1)
-    expect(convergence(sim).gcounterValues).toEqual([2, 2])
+    expect(convergence(sim).gcounterValues).toEqual([2, 1])
     expect(sim.nextAntiEntropyAt).toBe(15000)
+    sim = tick(sim, sim.queue[0].deliverAt - sim.now)
+    expect(convergence(sim).gcounterValues).toEqual([2, 2])
   })
 
   it('keeps scheduled repair disabled before and after Heal', () => {
@@ -67,6 +138,8 @@ describe('mesh simulation', () => {
     sim = tick(sim, 60000)
     expect(convergence(sim).gcounterValues).toEqual([1, 0])
     sim = runAntiEntropyNow(setPartitioned(sim, false))
+    expect(convergence(sim).gcounterValues).toEqual([1, 0])
+    sim = tick(sim, sim.queue[0].deliverAt - sim.now)
     expect(convergence(sim).gcounterValues).toEqual([1, 1])
     sim = dropNextPacket(bumpCounter(sim, 0))
     sim = tick(sim, 60000)
@@ -81,8 +154,10 @@ describe('mesh simulation', () => {
     sim = tick(sim, 5000)
     expect(convergence(sim).gcounterValues).toEqual([1, 0])
     sim = tick(setPartitioned(sim, false), 0)
-    expect(convergence(sim).gcounterValues).toEqual([1, 1])
+    expect(convergence(sim).gcounterValues).toEqual([1, 0])
     expect(sim.nextAntiEntropyAt).toBe(10000)
+    sim = tick(sim, sim.queue[0].deliverAt - sim.now, () => 0.5)
+    expect(convergence(sim).gcounterValues).toEqual([1, 1])
   })
 
   it('diverges under partition and converges after reconnect', () => {
@@ -120,7 +195,7 @@ describe('mesh simulation', () => {
     expect(convergence(sim).orsetElements).toEqual(['relay'])
   })
 
-  it('recovers a dropped delta with anti-entropy state merge', () => {
+  it('recovers a dropped delta through anti-entropy delivery after loss subsides', () => {
     let sim = setAntiEntropyMs(setDropRate(createSimulation(4), 1), 0)
     sim = addElement(sim, 0, 'medkit')
     sim = tick(sim, 2000, () => 0)
@@ -128,8 +203,10 @@ describe('mesh simulation', () => {
     expect(sim.queue).toHaveLength(0)
     expect(convergence(sim).sameRawState).toBe(false)
 
-    sim = setAntiEntropyMs(sim, 5000)
+    sim = setAntiEntropyMs(setDropRate(sim, 0), 5000)
     sim = runAntiEntropyNow(sim)
+    expect(convergence(sim).sameRawState).toBe(false)
+    sim = tick(sim, 2000)
 
     const status = convergence(sim)
     expect(status.sameRawState).toBe(true)
@@ -267,6 +344,8 @@ describe('mesh simulation', () => {
 
     sim = setPartitioned(sim, false)
     sim = runAntiEntropyNow(sim)
+    expect(convergence(sim).sameRawState).toBe(false)
+    sim = tick(sim, 2000, () => 0.5)
 
     expect(convergence(sim).sameRawState).toBe(true)
   })
@@ -295,6 +374,40 @@ describe('wide counter reads', () => {
 })
 
 describe('Lab numeric boundary regressions', () => {
+  it('enforces the peer quota before allocation for construction and reset', () => {
+    const sim = createSimulation()
+    const before = structuredClone(sim)
+    for (const count of [MAX_SIMULATION_PEERS + 1, 1000, 4000000000]) {
+      const allocate = vi.spyOn(Array, 'from')
+      try {
+        const error = new RangeError(`peerCount must be a nonnegative safe integer at most ${MAX_SIMULATION_PEERS}`)
+        expect(() => createSimulation(count)).toThrow(error)
+        expect(() => setPeerCount(sim, count)).toThrow(error)
+        expect(allocate).not.toHaveBeenCalled()
+      } finally {
+        allocate.mockRestore()
+      }
+    }
+    expect(sim).toEqual(before)
+  })
+
+  it('preserves empty, default, moderate, and maximum supported simulations', () => {
+    expect(createSimulation().peers).toHaveLength(4)
+    for (const count of [0, 4, 50, MAX_SIMULATION_PEERS]) {
+      const sim = createSimulation(count)
+      expect(sim.peers).toHaveLength(count)
+      expect(sim.peers.every((peer, id) => peer.id === id && peer.gcounter.length === count)).toBe(true)
+      expect(convergence(sim).converged).toBe(true)
+      expect(setPeerCount(createSimulation(), count).peers).toHaveLength(count)
+      if (count > 0) {
+        const sent = bumpCounter(setDropRate(sim, 0), 0)
+        const updated = tick(sent, Math.max(0, ...sent.queue.map((packet) => packet.deliverAt)))
+        expect(convergence(updated).gcounterValues).toEqual(Array(count).fill(1))
+        expect(convergence(updated).converged).toBe(true)
+      }
+    }
+  })
+
   const badNumbers = [NaN, Infinity, -Infinity, -1, Number.MAX_SAFE_INTEGER + 1, '2', null, true] as number[]
   it.each(badNumbers)('refuses invalid peer counts %s before constructing carriers', (bad) => {
     expect(() => createSimulation(bad)).toThrow(RangeError)
