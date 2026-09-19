@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
 import {
   SafeMeshGCounterReplica,
+  SafeMeshPnCounterReplica, SafeMeshRgaReplica, SafeMeshGSetReplica,
+  SafeMeshEnableWinsFlagReplica, SafeMeshLwwRegisterReplica, SafeMeshLwwMapReplica,
   SafeMeshStringOrSetReplica,
 } from '../../../rust/crates/safemesh-wasm/pkg/safemesh_wasm'
 
@@ -33,7 +35,12 @@ const setHistory = fc.record({
 
 type Generated<A> = A extends fc.Arbitrary<infer T> ? T : never
 
-type Replica = SafeMeshGCounterReplica | SafeMeshStringOrSetReplica
+type Replica = {
+  free(): void
+  logBytes(): Uint8Array
+  mergeLogBytes(bytes: Uint8Array): unknown
+  mergeRecordBytes(bytes: Uint8Array): unknown
+}
 type Scenario<R extends Replica> = { peers: R[]; records: Uint8Array[] }
 
 // WASM handles (including addEntries' child handles) must be freed even on a
@@ -167,3 +174,82 @@ function checkLaws<T, R extends Replica>(
 
 checkLaws('GCounter', counterHistory, id => new SafeMeshGCounterReplica(BigInt(id), 3), counterScenario, counterState)
 checkLaws('StringOrSet', setHistory, id => new SafeMeshStringOrSetReplica(BigInt(id)), setScenario, setState)
+
+// Coverage: GCounter, GSet, PnCounter, OrSet (StringOrSet), Rga,
+// EnableWinsFlag, LwwRegister, LwwMap. All state transitions run in compiled WASM.
+const small = fc.bigInt({ min: 0n, max: 7n })
+const dotTime = fc.oneof(small, tally)
+const pnHistory = fc.array(fc.record({ peer, increment: fc.boolean(), tally, source: peer }), { minLength: 3, maxLength: 36 })
+function pnScenario(input: Generated<typeof pnHistory>, make: (id: number) => SafeMeshPnCounterReplica) {
+  const peers = [0, 1, 2].map(make)
+  const records = input.map(op => {
+    peers[op.peer].mergeLogBytes(peers[op.source].logBytes())
+    return op.increment ? peers[op.peer].appendInc(op.peer, op.tally) : peers[op.peer].appendDec(op.peer, op.tally)
+  })
+  return { peers, records }
+}
+checkLaws('PnCounter', pnHistory, id => new SafeMeshPnCounterReplica(BigInt(id), 3), pnScenario,
+  r => ({ value: r.value(), state: Array.from(r.state()) }))
+
+const flagHistory = fc.array(fc.record({ peer, source: peer, enable: fc.boolean(), token: small }), { minLength: 3, maxLength: 36 })
+function flagScenario(input: Generated<typeof flagHistory>, make: (id: number) => SafeMeshEnableWinsFlagReplica) {
+  const peers = [0, 1, 2].map(make)
+  const records = input.map(op => {
+    peers[op.peer].mergeLogBytes(peers[op.source].logBytes())
+    return op.enable ? peers[op.peer].appendEnable(op.token) : peers[op.peer].appendDisableObserved()
+  })
+  return { peers, records }
+}
+checkLaws('EnableWinsFlag', flagHistory, id => new SafeMeshEnableWinsFlagReplica(BigInt(id)), flagScenario,
+  r => ({ value: r.value(), enables: Array.from(r.enabledTokens()), tombstones: Array.from(r.tombstoneTokens()) }))
+
+const registerHistory = fc.array(fc.record({ peer, timestamp: dotTime, writer: small, value: tally }), { minLength: 3, maxLength: 36 })
+function registerScenario(input: Generated<typeof registerHistory>, make: (id: number) => SafeMeshLwwRegisterReplica) {
+  const peers = [0, 1, 2].map(make)
+  const records = input.map(op => peers[op.peer].appendSet(op.timestamp, op.writer, op.value))
+  return { peers, records }
+}
+checkLaws('LwwRegister', registerHistory, id => new SafeMeshLwwRegisterReplica(BigInt(id)), registerScenario,
+  r => ({ has: r.hasValue(), value: r.valueOr(0n), timestamp: r.timestampOr(0n), writer: r.writerReplicaOr(0n) }))
+
+const mapHistory = fc.array(fc.record({ peer, key: small, timestamp: dotTime, writer: small, value: tally, remove: fc.boolean() }), { minLength: 3, maxLength: 36 })
+function mapScenario(input: Generated<typeof mapHistory>, make: (id: number) => SafeMeshLwwMapReplica) {
+  const peers = [0, 1, 2].map(make)
+  const records = input.map(op => op.remove
+    ? peers[op.peer].appendRemove(op.key, op.timestamp, op.writer)
+    : peers[op.peer].appendSet(op.key, op.timestamp, op.writer, op.value))
+  return { peers, records }
+}
+checkLaws('LwwMap', mapHistory, id => new SafeMeshLwwMapReplica(BigInt(id)), mapScenario,
+  r => Array.from(r.stateBytes()))
+
+// These carriers expose canonical state snapshots, not EventLog records. Adapt
+// only the transport names: checkLaws still performs the same joins and delivery
+// permutations, with the complete native carrier bytes as its state oracle.
+function snapshotReplica<R extends { free(): void; stateBytes(): Uint8Array; mergeStateBytes(bytes: Uint8Array): void }>(native: R) {
+  return {
+    native,
+    free: () => native.free(),
+    logBytes: () => native.stateBytes(),
+    mergeLogBytes: (bytes: Uint8Array) => native.mergeStateBytes(bytes),
+    mergeRecordBytes: (bytes: Uint8Array) => native.mergeStateBytes(bytes),
+  }
+}
+const rgaHistory = fc.array(fc.record({ peer, position: small, value: tally, remove: fc.boolean() }), { minLength: 3, maxLength: 36 })
+const makeRga = () => snapshotReplica(new SafeMeshRgaReplica())
+function rgaScenario(input: Generated<typeof rgaHistory>, make: (id: number) => ReturnType<typeof makeRga>) {
+  const peers = [0, 1, 2].map(make)
+  const records = input.map(op => op.remove
+    ? peers[op.peer].native.delete(op.position)
+    : peers[op.peer].native.insert(op.position, op.value))
+  return { peers, records }
+}
+checkLaws('Rga', rgaHistory, makeRga, rgaScenario, r => Array.from(r.logBytes()))
+const gsetHistory = fc.array(fc.record({ peer, value: fc.oneof(small, tally) }), { minLength: 3, maxLength: 36 })
+const makeGSet = () => snapshotReplica(new SafeMeshGSetReplica())
+function gsetScenario(input: Generated<typeof gsetHistory>, make: (id: number) => ReturnType<typeof makeGSet>) {
+  const peers = [0, 1, 2].map(make)
+  const records = input.map(op => peers[op.peer].native.insert(op.value))
+  return { peers, records }
+}
+checkLaws('GSet', gsetHistory, makeGSet, gsetScenario, r => Array.from(r.logBytes()))
