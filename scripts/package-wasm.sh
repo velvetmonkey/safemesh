@@ -24,6 +24,10 @@ wasm-pack build "$repo_root/rust/crates/safemesh-wasm" \
   --out-dir "$out_dir" \
   --release -- --locked >&2
 
+# A checkout with core.symlinks=false leaves the crate LICENSE as link-target text.
+# Always ship the canonical license bytes, independent of checkout symlink support.
+cp "$repo_root/LICENSE" "$out_dir/LICENSE"
+
 # wasm-pack 0.15 omits inline-JS snippets from its npm files allowlist.
 # Include them in the artifact before packing; never repair the consumer install.
 node --input-type=module - "$out_dir/package.json" <<'JS'
