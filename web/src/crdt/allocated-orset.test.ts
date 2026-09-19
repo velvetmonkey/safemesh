@@ -93,19 +93,75 @@ describe('allocated OR-Set boundaries', () => {
     restored.free()
   })
 
-  it('preserves caller tokens and refuses to allocate from incompatible legacy history', () => {
+  it('preserves caller tokens on legacy instances without an allocated identity', () => {
     const legacy = new Replica(0n)
-    legacy.appendAdd('water', 77n)
-    expect(() => legacy.appendAllocatedAdd('radio')).toThrow(/no allocated identity/)
-    expect(() => legacy.exportIdentity()).toThrow(/no allocated identity/)
-    const allocated = Replica.createAllocated(2n, 0n)
-    allocated.appendAdd('water', 77n)
-    expect(allocated.observedTokens('water')).toEqual(new BigUint64Array([77n]))
-    expect(() => allocated.appendAllocatedAdd('radio')).toThrow(/token mismatch/)
-    expect(() => allocated.exportIdentity()).toThrow(/token mismatch/)
-    allocated.free()
-    legacy.free()
+    try {
+      legacy.appendAdd('water', 77n)
+      expect(legacy.observedTokens('water')).toEqual(new BigUint64Array([77n]))
+      expect(() => legacy.appendAllocatedAdd('radio')).toThrow(/no allocated identity/)
+      expect(() => legacy.exportIdentity()).toThrow(/no allocated identity/)
+    } finally {
+      legacy.free()
+    }
   })
+
+  it.each(['fresh', 'populated', 'restored'])(
+    'refuses caller tokens before changing an allocated %s instance', (lifecycle) => {
+      let allocated = Replica.createAllocated(2n, 0n)
+      try {
+        if (lifecycle !== 'fresh') {
+          allocated.appendAllocatedAdd('water')
+          allocated.appendRemoveObserved('water')
+          allocated.appendAllocatedAdd('radio')
+        }
+        if (lifecycle === 'restored') {
+          const saved = allocated.exportIdentity()
+          allocated.free()
+          allocated = Replica.importIdentity(saved)
+        }
+        const snapshot = () => ({
+          elements: allocated.elements(),
+          entries: allocated.addEntries().map(entry => {
+            try { return [entry.element(), entry.token()] }
+            finally { entry.free() }
+          }),
+          waterTokens: allocated.observedTokens('water'),
+          xTokens: allocated.observedTokens('x'),
+          tombstones: allocated.tombstones(),
+          version: allocated.versionFor(0n),
+          log: allocated.logBytes(),
+          identity: allocated.exportIdentity(),
+        })
+        const before = snapshot()
+        // Even a token that would match the next allocated record is refused.
+        for (const token of [999n, 2n * (before.version + 1n)]) {
+          expect(() => allocated.appendAdd('x', token)).toThrow(/caller-supplied tokens/)
+          expect(snapshot()).toEqual(before)
+        }
+        const record = Replica.inspectRecordBytes(allocated.appendAllocatedAdd('x'))
+        try {
+          expect(record.sequence()).toBe(before.version + 1n)
+          expect(record.token()).toBe(2n * (before.version + 1n))
+        } finally {
+          record.free()
+        }
+        expect(allocated.elements()).toContain('x')
+        allocated.appendRemoveObserved('x')
+        expect(allocated.elements()).not.toContain('x')
+        expect(allocated.versionFor(0n)).toBe(before.version + 2n)
+        const saved = allocated.exportIdentity()
+        allocated.free()
+        allocated = Replica.importIdentity(saved)
+        expect(allocated.exportIdentity()).toEqual(saved)
+        allocated.appendAllocatedAdd('after restart')
+        expect(allocated.elements()).toContain('after restart')
+        expect(allocated.versionFor(0n)).toBe(before.version + 3n)
+        expect(allocated.exportIdentity().length).toBeGreaterThan(saved.length)
+      } finally {
+        allocated.free()
+      }
+    },
+  )
 
   it('preflights peer ownership before admission and rejects another writer claiming its author', () => {
     const left = Replica.createAllocated(2n, 0n)

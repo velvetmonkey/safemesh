@@ -402,9 +402,10 @@ on allocated replicas must follow the same writer configuration and token rule;
 new records claiming the local author refuse. Invalid ownership in a whole log
 is rejected before any of that batch is applied.
 
-`appendAdd(element, token)` remains the caller-token API. Mixing incompatible
-caller tokens into an allocated writer makes subsequent allocated writes and
-identity export refuse the consistency check. Python and C numeric OR-Set paths
+Legacy instances keep the caller-token behavior of `appendAdd(element, token)`.
+Allocated instances reject caller tokens immediately; use
+`appendAllocatedAdd(element)` for allocated adds, including after
+`exportIdentity()` and `importIdentity(bytes)`. Python and C numeric OR-Set paths
 continue to use caller-owned tokens.
 
 The legacy constructor and `appendAdd(element, token)` are an alternative for
