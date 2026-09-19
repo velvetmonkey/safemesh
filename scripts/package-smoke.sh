@@ -93,10 +93,17 @@ tarball="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], 
   npm init -y >/dev/null
   npm install "$tmp_dir/wasm-pkg/$tarball"
 
-  node --input-type=module - <<'JS'
+  node --input-type=module - "$repo_root/LICENSE" <<'JS'
 import assert from "node:assert/strict";
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+
+assert.deepEqual(
+  readFileSync("node_modules/safemesh-wasm/LICENSE"),
+  readFileSync(process.argv[2]),
+  "installed LICENSE must match the repository root LICENSE byte-for-byte",
+);
+console.log("NPM_INSTALLED_LICENSE=true");
 
 const snippets = "node_modules/safemesh-wasm/snippets";
 assert(lstatSync(snippets).isDirectory(), "installed snippets/ must be a directory");
