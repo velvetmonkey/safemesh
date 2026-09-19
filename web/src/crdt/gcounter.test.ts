@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyGCounterDelta, bottomGCounter, bumpDelta, mergeGCounter, readGCounter } from './gcounter'
-import { readPNCounter } from './pncounter'
+import { applyPNCounterDelta, bottomPNCounter, mergePNCounter, readPNCounter } from './pncounter'
 
 describe('G-Counter mirror', () => {
   it('is order-insensitive and redelivery-idempotent', () => {
@@ -29,18 +29,18 @@ it('rejects unequal replica counts in both merge orders', () => {
   expect(() => mergeGCounter([1, 8], [1])).toThrow(RangeError)
 })
 
-it.each([0.5, NaN, Infinity, -1])('rejects invalid replica count %s', (bad) => {
+it.each([0.5, NaN, Infinity, -Infinity, -1, Number.MAX_SAFE_INTEGER + 1])('rejects invalid replica count %s', (bad) => {
   expect(() => bottomGCounter(bad)).toThrow(RangeError)
 })
 
-it.each([0.5, NaN, Infinity, -1])('rejects invalid coordinate %s without poisoning state', (bad) => {
+it.each([0.5, NaN, Infinity, -Infinity, -1, Number.MAX_SAFE_INTEGER + 1])('rejects invalid coordinate %s without poisoning state', (bad) => {
   const state = [1, 2]
   expect(() => bumpDelta(bad, 3)).toThrow(RangeError)
   expect(() => applyGCounterDelta(state, { kind: 'gcounter.bump', replica: bad, tally: 3 })).toThrow(RangeError)
   expect(state).toEqual([1, 2])
 })
 
-it.each([0.5, NaN, Infinity, -1])('rejects invalid tally %s without poisoning state', (bad) => {
+it.each([0.5, NaN, Infinity, -Infinity, -1, Number.MAX_SAFE_INTEGER + 1])('rejects invalid tally %s without poisoning state', (bad) => {
   const state = [1, 2]
   expect(() => bumpDelta(0, bad)).toThrow(RangeError)
   expect(() => applyGCounterDelta(state, { kind: 'gcounter.bump', replica: 0, tally: bad })).toThrow(RangeError)
@@ -94,4 +94,45 @@ it('preserves exact safe PN differences across overflowing component sums', () =
   expect(readPNCounter({ p: [1], n: [Number.MAX_SAFE_INTEGER, 1] })).toBe(-Number.MAX_SAFE_INTEGER)
   expect(readPNCounter({ p: [7, 2], n: [3, 1] })).toBe(5)
   expect(readPNCounter({ p: [], n: [] })).toBe(0)
+})
+
+it.each([NaN, -1, 0.5, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1])(
+  'refuses poisoned G and PN merge coordinates %s in either input', (bad) => {
+    const clean = [4, 3]
+    for (const poisoned of [[bad, 2], [1, bad]]) {
+      for (const [left, right, side] of [
+        [poisoned, clean, 'left'], [clean, poisoned, 'right'],
+      ] as const) {
+        const error = new RangeError(`${side} tally must be a safe nonnegative integer`)
+        expect(() => mergeGCounter(left, right)).toThrow(error)
+        expect(() => mergePNCounter({ p: left, n: clean }, { p: right, n: clean })).toThrow(error)
+        expect(() => mergePNCounter({ p: clean, n: left }, { p: clean, n: right })).toThrow(error)
+      }
+    }
+    expect(clean).toEqual([4, 3])
+  },
+)
+
+it('refuses sparse vectors in either merge input', () => {
+  expect(() => mergeGCounter(Array(2), [1, 2])).toThrow(RangeError)
+  expect(() => mergeGCounter([1, 2], Array(2))).toThrow(RangeError)
+})
+
+it('keeps valid stored and already-merged states mergeable at the safe boundary', () => {
+  const left = applyGCounterDelta(bottomGCounter(2), bumpDelta(0, Number.MAX_SAFE_INTEGER))
+  const right = applyGCounterDelta(bottomGCounter(2), bumpDelta(1, 3))
+  const stored = mergeGCounter(left, right)
+  expect(stored).toEqual([Number.MAX_SAFE_INTEGER, 3])
+  expect(mergeGCounter(stored, [1, 4])).toEqual([Number.MAX_SAFE_INTEGER, 4])
+  expect(mergeGCounter(stored, stored)).toEqual(stored)
+  expect(mergeGCounter([], [])).toEqual([])
+  const positive = applyPNCounterDelta(bottomPNCounter(2), {
+    kind: 'pncounter.inc', replica: 0, tally: Number.MAX_SAFE_INTEGER,
+  })
+  const negative = applyPNCounterDelta(bottomPNCounter(2), {
+    kind: 'pncounter.dec', replica: 1, tally: 3,
+  })
+  const pnStored = mergePNCounter(positive, negative)
+  expect(pnStored).toEqual({ p: [Number.MAX_SAFE_INTEGER, 0], n: [0, 3] })
+  expect(mergePNCounter(pnStored, pnStored)).toEqual(pnStored)
 })
