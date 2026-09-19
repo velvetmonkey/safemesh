@@ -12,7 +12,7 @@
 // Run phases sequentially: these files do not provide concurrent-process fencing.
 
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const [packageDir, logDir, step] = process.argv.slice(2);
@@ -46,7 +46,7 @@ function save(side, replica) {
   mkdirSync(logDir, { recursive: true });
   for (const kind of ["counter", "set"]) {
     const bytes = kind === "set" ? replica.set.exportIdentity() : replica.counter.logBytes();
-    writeFileSync(logPath(side, kind), bytes);
+    writeFileSync(logPath(side, kind), bytes, { flag: step === "persist" ? "wx" : "w" });
     console.log(`  wrote ${logPath(side, kind)} (${bytes.length} bytes)`);
   }
 }
@@ -104,6 +104,25 @@ function exchange(a, b) {
 
 switch (step) {
   case "persist": {
+    // Check every store before writing any: even a partial history must survive.
+    // lstat also detects dangling symlinks at a store path.
+    const paths = Object.keys(SIDES).flatMap(side =>
+      ["counter", "set"].map(kind => logPath(side, kind)),
+    );
+    const existing = paths.filter(path => lstatSync(path, { throwIfNoEntry: false }));
+    const missing = paths.filter(path => !existing.includes(path));
+    if (existing.length) {
+      console.error(
+        `PERSIST REFUSED: existing store files: ${existing.join(", ")}. ` +
+        (missing.length
+          ? `missing store files: ${missing.join(", ")}. ` +
+            "Partial store: this walkthrough cannot restore an incomplete history. " +
+            "Move the files aside or choose a different, empty directory for a new exercise."
+          : "All four store paths exist; use restore to read a complete, valid history. " +
+            "Restore will still reject invalid files. Use a different, empty directory for a new exercise."),
+      );
+      process.exit(2);
+    }
     console.log("persist: two fresh replicas, one edit each, full exchange, then write stores");
     const left = fresh("left");
     const right = fresh("right");

@@ -1,14 +1,15 @@
 // Run against a wasm-pack --target nodejs package:
 // node safemesh-wasm-boundary-repros.mjs /absolute/path/to/pkg-node
-// Returns exit 1 if the reviewed numeric/reporting issues are present.
-// Source: outside SafeMesh review, forwarded by Ben on 2026-09-11 at 21:29. Saved verbatim.
+// Returns exit 1 if a numeric/reporting or persistence regression is present.
+// Original numeric/reporting probes: outside SafeMesh review, forwarded by Ben on 2026-09-11 at 21:29.
+// Extended with the SM-024 persist regression.
 import assert from 'node:assert/strict';
-import {createRequire} from 'node:module';
-import {join,resolve} from 'node:path';
-import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
+import {mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {fileURLToPath} from 'node:url';
-import {spawnSync} from 'node:child_process';
+import {createRequire} from 'node:module';
+import {join,resolve} from 'node:path';
 if (!process.argv[2]) throw Error('Provide the generated Node package directory');
 const require=createRequire(import.meta.url);
 const {SafeMeshGCounter:Counter,SafeMeshGCounterReplica:Replica,SafeMeshStringOrSetReplica:OrSetReplica}=require(join(resolve(process.argv[2]),'safemesh_wasm.js'));
@@ -45,6 +46,53 @@ for(const [name,make,append] of [
 ]) check(`${name}: frame A,A,B has one outcome per input record`,()=>{
   const sender=make(),receiver=make();
   try{append(sender);append(sender);const result=receiver.mergeLogBytes(repeatFirst(sender.logBytes()));assert.deepEqual(result,['accepted','duplicate','accepted']);}finally{sender.free();receiver.free();}
+});
+check('persist refuses existing histories and partial stores without mutation', () => {
+  const root = mkdtempSync(join(tmpdir(), 'safemesh-persist-'));
+  const example = fileURLToPath(new URL('../examples/node-persist.mjs', import.meta.url));
+  const files = ['left-counter.log', 'left-set.identity', 'right-counter.log', 'right-set.identity'];
+  function run(dir, step, status = 0) {
+    const result = spawnSync(process.execPath, [example, resolve(process.argv[2]), dir, step], {encoding: 'utf8'});
+    assert.equal(result.status, status, result.stdout + result.stderr);
+    return result;
+  }
+  function snapshot(dir) {
+    return Object.fromEntries(readdirSync(dir).sort().map(name => [name, readFileSync(join(dir, name))]));
+  }
+  try {
+    const history = join(root, 'history');
+    assert.match(run(history, 'persist').stdout, /counter=12/);
+    const initial = snapshot(history);
+    run(history, 'partition');
+    assert.match(run(history, 'reconcile').stdout, /counter=19/);
+    const before = snapshot(history);
+    const refused = run(history, 'persist', 2);
+    assert.match(refused.stderr, /PERSIST REFUSED/);
+    assert.match(refused.stderr, /different, empty directory/);
+    for (const name of files) assert.ok(refused.stderr.includes(join(history, name)));
+    assert.deepEqual(snapshot(history), before);
+    assert.match(run(history, 'restore').stdout, /counter=19/);
+
+    const empty = join(root, 'empty');
+    mkdirSync(empty);
+    run(empty, 'persist');
+    assert.deepEqual(snapshot(empty), initial, 'fresh empty directory keeps the original bytes');
+    for (const name of files) {
+      const partial = join(root, name);
+      mkdirSync(partial);
+      writeFileSync(join(partial, name), 'existing history');
+      const before = snapshot(partial);
+      assert.ok(run(partial, 'persist', 2).stderr.includes(join(partial, name)));
+      assert.deepEqual(snapshot(partial), before, 'no new or overwritten files in a partial store');
+    }
+    const dangling = join(root, 'dangling');
+    mkdirSync(dangling);
+    symlinkSync(join(root, 'missing-target'), join(dangling, files[0]));
+    assert.ok(run(dangling, 'persist', 2).stderr.includes(files[0]));
+    assert.deepEqual(readdirSync(dangling), [files[0]]);
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
 });
 check('persisted partition repeats allocate fresh adds and retain vaccine after repair',()=>{
   const directory=mkdtempSync(join(tmpdir(),'safemesh-partition-'));
@@ -93,6 +141,46 @@ check('persisted partition repeats allocate fresh adds and retain vaccine after 
       } finally { left.free(); right?.free(); }
     }
   } finally { rmSync(directory,{recursive:true,force:true}); }
+});
+check('persist advice distinguishes complete history from every partial store', () => {
+  const root = mkdtempSync(join(tmpdir(), 'safemesh-partial-advice-'));
+  const example = fileURLToPath(new URL('../examples/node-persist.mjs', import.meta.url));
+  const files = ['left-counter.log', 'left-set.identity', 'right-counter.log', 'right-set.identity'];
+  const run = (dir, step, status) => {
+    const result = spawnSync(process.execPath, [example, resolve(process.argv[2]), dir, step], {encoding: 'utf8'});
+    assert.equal(result.status, status, result.stdout + result.stderr);
+    return result;
+  };
+  const snapshot = dir => Object.fromEntries(readdirSync(dir).sort().map(name => [name, readFileSync(join(dir, name))]));
+  try {
+    const complete = join(root, 'complete');
+    run(complete, 'persist', 0);
+    const original = snapshot(complete);
+    // Copy real persisted bytes, including the crash-realistic left-counter-only case.
+    for (let mask = 1; mask < 15; mask++) {
+      const partial = join(root, `partial-${mask}`);
+      mkdirSync(partial);
+      const existing = files.filter((_, index) => mask & (1 << index));
+      const missing = files.filter(name => !existing.includes(name));
+      for (const name of existing) writeFileSync(join(partial, name), original[name]);
+      const before = snapshot(partial);
+      const refused = run(partial, 'persist', 2);
+      assert.match(refused.stderr, /Partial store: this walkthrough cannot restore an incomplete history/);
+      assert.match(refused.stderr, /Move the files aside or choose a different, empty directory/);
+      assert.ok(refused.stderr.includes(`existing store files: ${existing.map(name => join(partial, name)).join(', ')}`));
+      assert.ok(refused.stderr.includes(`missing store files: ${missing.map(name => join(partial, name)).join(', ')}`));
+      assert.doesNotMatch(refused.stderr, /use restore/i);
+      assert.deepEqual(snapshot(partial), before, 'refusal changed the partial store');
+      assert.match(run(partial, 'restore', 2).stderr, /error=missing/);
+      assert.deepEqual(snapshot(partial), before, 'restore changed the partial store');
+    }
+    const refused = run(complete, 'persist', 2);
+    assert.match(refused.stderr, /All four store paths exist; use restore to read a complete, valid history/);
+    assert.deepEqual(snapshot(complete), original);
+    assert.match(run(complete, 'restore', 0).stdout, /RESTORED=true/);
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
 });
 console.log(`Completed: ${failures} failing boundary cases`);
 process.exitCode=failures?1:0;
