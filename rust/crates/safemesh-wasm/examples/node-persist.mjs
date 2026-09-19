@@ -106,18 +106,24 @@ switch (step) {
   case "persist": {
     // Check every store before writing any: even a partial history must survive.
     // lstat also detects dangling symlinks at a store path.
-    const existing = Object.keys(SIDES).flatMap(side =>
+    const paths = Object.keys(SIDES).flatMap(side =>
       ["counter", "set"].map(kind => logPath(side, kind)),
-    ).filter(path => lstatSync(path, { throwIfNoEntry: false }));
+    );
+    const existing = paths.filter(path => lstatSync(path, { throwIfNoEntry: false }));
+    const missing = paths.filter(path => !existing.includes(path));
     if (existing.length) {
       console.error(
         `PERSIST REFUSED: existing store files: ${existing.join(", ")}. ` +
-        "Use a different, empty directory for a new exercise; use restore to read this history.",
+        (missing.length
+          ? `missing store files: ${missing.join(", ")}. ` +
+            "Partial store: this walkthrough cannot restore an incomplete history. " +
+            "Move the files aside or choose a different, empty directory for a new exercise."
+          : "All four store paths exist; use restore to read a complete, valid history. " +
+            "Restore will still reject invalid files. Use a different, empty directory for a new exercise."),
       );
       process.exit(2);
     }
     console.log("persist: two fresh replicas, one edit each, full exchange, then write stores");
-
     const left = fresh("left");
     const right = fresh("right");
     // appendBump(slot, tally): tally is the slot's new running total, not an increment.

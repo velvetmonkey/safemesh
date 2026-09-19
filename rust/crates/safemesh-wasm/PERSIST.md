@@ -1,8 +1,7 @@
 # Persist, restore, partition and reconcile (TypeScript / Node)
 
-This caller-token example is an alternative for applications that intentionally
-own token allocation. For the recommended allocated-writer save/new-process
-restore path, follow the [TypeScript gold path](https://velvetmonkey.github.io/safemesh/getting-started/#typescript-gold-path-node).
+This example persists allocated OR-Set identities across processes. For a shorter
+allocated-writer save/new-process restore path, follow the [TypeScript gold path](https://velvetmonkey.github.io/safemesh/getting-started/#typescript-gold-path-node).
 
 **v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](https://velvetmonkey.github.io/safemesh/#v0-support).
 
@@ -33,13 +32,13 @@ cargo install wasm-pack --version 0.15.0 --locked
 This page walks the same four steps as the [Rust walkthrough](../safemesh-crdt/README.md#persist-restore-partition-and-reconcile),
 in Node, against the `safemesh-wasm` package that `wasm-pack` builds for the
 `nodejs` target. Two replicas each hold a G-Counter and a UTF-8 OR-Set. You write
-their event logs to real files, rebuild the replicas from those files in a fresh
+counter logs and complete set identities to real files, rebuild the replicas from those files in a fresh
 process, let the two sides edit offline until they disagree, then merge each
-side's log file into the other and watch them agree again.
+side's restored log into the other and watch them agree again.
 
 The original persist/restore/partition/reconcile walk was run on Node v22.22.3
-and again on Node v24.20.0, with identical output. The peer-recovery additions
-in section 7 were measured on Node v22.22.3. The root README does not name a Node
+and again on Node v24.20.0, with identical output. The allocated-identity
+transcripts below were refreshed after the example switched identity formats. The root README does not name a Node
 version; the Lab in `web/` asks for Node 24.x and the repository CI uses Node 24.
 The package was built with `wasm-pack 0.15.0` (the version `scripts/package-smoke.sh`
 installs when none is present) over `rustc 1.96.1`.
@@ -60,8 +59,9 @@ For new applications, use the [allocated identity lifecycle](README.md#string-or
 export, and refuse a failed import instead of creating a fresh writer. The caller
 must run one live writer per author across WASM instances; there is no cross-tab
 or cross-process fencing, and a self-consistent stale snapshot is not detected.
-The walkthrough below retains the legacy caller-token API and its original
-complete-log, single-writer assumptions.
+The walkthrough below uses allocated writes and persists each set’s complete
+identity, including its allocation cursor. Older caller-token set logs are not
+identity exports; use a fresh directory for this version.
 
 ## What you need
 
@@ -111,10 +111,13 @@ Change into `walk`. Everything below runs from there, and `walk` needs nothing b
 //
 // Usage: node node-persist.mjs <package-dir> <log-dir> <step>
 //   <package-dir> is a `wasm-pack build --target nodejs` output directory.
-//   <log-dir>     is where the four log files live.
+//   <log-dir>     is where the two counter logs and two set identities live.
 //   <step>        is one of: persist, restore, partition, reconcile.
 //
-// Each step is a separate process. State survives only through the log files.
+// Each step is a separate process. State survives only through the stored files.
+// Set identities include the complete log and allocation cursor. Older manual-token
+// set logs cannot be imported as identities; start this version in a fresh directory.
+// Run phases sequentially: these files do not provide concurrent-process fencing.
 
 import { createRequire } from "node:module";
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -137,19 +140,20 @@ const { SafeMeshGCounterReplica, SafeMeshStringOrSetReplica } = require(
 const WIDTH = 3;
 const SIDES = { left: 1n, right: 2n };
 
-const logPath = (side, kind) => join(logDir, `${side}-${kind}.log`);
+const logPath = (side, kind) =>
+  join(logDir, `${side}-${kind}.${kind === "set" ? "identity" : "log"}`);
 
 function fresh(side) {
   return {
     counter: new SafeMeshGCounterReplica(SIDES[side], WIDTH),
-    set: new SafeMeshStringOrSetReplica(SIDES[side]),
+    set: SafeMeshStringOrSetReplica.createAllocated(BigInt(WIDTH), SIDES[side]),
   };
 }
 
 function save(side, replica) {
   mkdirSync(logDir, { recursive: true });
   for (const kind of ["counter", "set"]) {
-    const bytes = replica[kind].logBytes();
+    const bytes = kind === "set" ? replica.set.exportIdentity() : replica.counter.logBytes();
     writeFileSync(logPath(side, kind), bytes, { flag: step === "persist" ? "wx" : "w" });
     console.log(`  wrote ${logPath(side, kind)} (${bytes.length} bytes)`);
   }
@@ -164,7 +168,7 @@ function mergeLog(replica, bytes) {
 }
 
 function load(side) {
-  const replica = fresh(side);
+  const replica = { counter: new SafeMeshGCounterReplica(SIDES[side], WIDTH) };
   for (const kind of ["counter", "set"]) {
     const path = logPath(side, kind);
     if (!existsSync(path)) {
@@ -172,7 +176,11 @@ function load(side) {
       process.exit(2);
     }
     try {
-      mergeLog(replica[kind], readFileSync(path));
+      if (kind === "set") {
+        replica.set = SafeMeshStringOrSetReplica.importIdentity(readFileSync(path));
+      } else {
+        mergeLog(replica.counter, readFileSync(path));
+      }
     } catch (error) {
       console.error(`RESTORE FAILED file=${path} error=${error.name}: ${error.message}`);
       process.exit(2);
@@ -206,24 +214,31 @@ switch (step) {
   case "persist": {
     // Check every store before writing any: even a partial history must survive.
     // lstat also detects dangling symlinks at a store path.
-    const existing = Object.keys(SIDES).flatMap(side =>
+    const paths = Object.keys(SIDES).flatMap(side =>
       ["counter", "set"].map(kind => logPath(side, kind)),
-    ).filter(path => lstatSync(path, { throwIfNoEntry: false }));
+    );
+    const existing = paths.filter(path => lstatSync(path, { throwIfNoEntry: false }));
+    const missing = paths.filter(path => !existing.includes(path));
     if (existing.length) {
       console.error(
         `PERSIST REFUSED: existing store files: ${existing.join(", ")}. ` +
-        "Use a different, empty directory for a new exercise; use restore to read this history.",
+        (missing.length
+          ? `missing store files: ${missing.join(", ")}. ` +
+            "Partial store: this walkthrough cannot restore an incomplete history. " +
+            "Move the files aside or choose a different, empty directory for a new exercise."
+          : "All four store paths exist; use restore to read a complete, valid history. " +
+            "Restore will still reject invalid files. Use a different, empty directory for a new exercise."),
       );
       process.exit(2);
     }
-    console.log("persist: two fresh replicas, one edit each, full exchange, then write logs");
+    console.log("persist: two fresh replicas, one edit each, full exchange, then write stores");
     const left = fresh("left");
     const right = fresh("right");
     // appendBump(slot, tally): tally is the slot's new running total, not an increment.
     left.counter.appendBump(1, 5n);
-    left.set.appendAdd("vaccine", 11n);
+    left.set.appendAllocatedAdd("vaccine");
     right.counter.appendBump(2, 7n);
-    right.set.appendAdd("insulin", 21n);
+    right.set.appendAllocatedAdd("insulin");
     exchange(left, right);
     show("left ", left);
     show("right", right);
@@ -232,7 +247,7 @@ switch (step) {
     process.exit(same(left, right) ? 0 : 1);
   }
   case "restore": {
-    console.log("restore: fresh process, replicas rebuilt from the log files alone");
+    console.log("restore: fresh process, replicas rebuilt from the stored files alone");
     const left = load("left");
     const right = load("right");
     show("left ", left);
@@ -246,10 +261,10 @@ switch (step) {
     const left = load("left");
     const right = load("right");
     left.counter.appendBump(1, 8n); // slot 1 total 5 -> 8
-    left.set.appendRemoveObserved("vaccine"); // removes the token left has seen (11)
+    left.set.appendRemoveObserved("vaccine"); // removes every vaccine token left has seen
     right.counter.appendBump(2, 11n); // slot 2 total 7 -> 11
-    right.set.appendAdd("vaccine", 22n); // concurrent re-add with a fresh token
-    right.set.appendAdd("gauze", 23n);
+    right.set.appendAllocatedAdd("vaccine"); // restored cursor allocates a fresh token
+    right.set.appendAllocatedAdd("gauze");
     show("left ", left);
     show("right", right);
     save("left", left);
@@ -259,13 +274,10 @@ switch (step) {
     process.exit(diverged ? 0 : 1);
   }
   case "reconcile": {
-    console.log("reconcile: each side merges the other's log file, then both are written back");
+    console.log("reconcile: each side merges the other's restored log, then both are written back");
     const left = load("left");
     const right = load("right");
-    for (const kind of ["counter", "set"]) {
-      mergeLog(left[kind], readFileSync(logPath("right", kind)));
-      mergeLog(right[kind], readFileSync(logPath("left", kind)));
-    }
+    exchange(left, right);
     show("left ", left);
     show("right", right);
     save("left", left);
@@ -281,7 +293,7 @@ switch (step) {
 ```
 
 Each step is its own process. The only thing that carries from one step to the
-next is the four files under `logs/`: one counter log and one set log per side.
+next is the four files under `logs/`: one counter log and one set identity per side.
 
 Three facts about the calls the program makes:
 
@@ -289,10 +301,11 @@ Three facts about the calls the program makes:
   index equals its own replica id, and `tally` is that slot's new running total,
   not an increment. Bumping slot 1 to 5 and later to 8 reads 8, not 13. A wrong
   slot throws `counter coordinate out of range or not owned by record author`.
-- `appendAdd(element, token)` and `appendRemoveObserved(element)`: tokens are
-  caller-supplied `bigint`s and must be unique per add across all replicas. A
-  remove tombstones only the tokens this replica has already seen, so a
-  concurrent add with a fresh token survives it. That is the add-wins rule.
+- `appendAllocatedAdd(element)` allocates a fresh token from the restored
+  identity cursor. `appendRemoveObserved(element)` tombstones only the tokens
+  this replica has already seen, so a concurrent add with a fresh token survives.
+  That is the add-wins rule. Persist `exportIdentity()` and reopen it with
+  `importIdentity(bytes)` to retain the cursor across processes.
 - `logBytes()` is the whole log; `mergeLogBytes(bytes)` admits every record in it
   that the replica does not already hold. Records already held are duplicates and
   do not move state, so merging the same file twice is harmless.
@@ -300,9 +313,13 @@ Three facts about the calls the program makes:
   verdict for every input record, including any accepted prefix before a collision.
 
 `persist` initializes a new exercise and refuses if any of the four store paths
-already exists, including a partial history. The error names those paths. Use
-`restore` to read the existing history, or choose a different, empty log directory
-to start another exercise. There is no reset command.
+already exists, including a partial history. For all four existing paths, the
+refusal suggests `restore` to read a complete, valid history; restore still
+rejects invalid files. For a partial store (one to three paths), the refusal
+lists both existing and missing paths and explains that this walkthrough cannot
+restore an incomplete history. Keep the files by moving them aside, or choose a
+different, empty directory for a new exercise. This does not recover missing
+history. There is no reset command.
 
 ## 3. Persist
 
@@ -311,13 +328,13 @@ node node-persist.mjs ./pkg ./logs persist
 ```
 
 ```text
-persist: two fresh replicas, one edit each, full exchange, then write logs
+persist: two fresh replicas, one edit each, full exchange, then write stores
   left : counter=12 set=["insulin","vaccine"] (v1=1 v2=1)
   right: counter=12 set=["insulin","vaccine"] (v1=1 v2=1)
   wrote logs/left-counter.log (144 bytes)
-  wrote logs/left-set.log (148 bytes)
+  wrote logs/left-set.identity (177 bytes)
   wrote logs/right-counter.log (144 bytes)
-  wrote logs/right-set.log (148 bytes)
+  wrote logs/right-set.identity (177 bytes)
 ```
 
 Both sides made one edit each and exchanged logs in memory, so the four files
@@ -332,7 +349,7 @@ node node-persist.mjs ./pkg ./logs restore
 ```
 
 ```text
-restore: fresh process, replicas rebuilt from the log files alone
+restore: fresh process, replicas rebuilt from the stored files alone
   left : counter=12 set=["insulin","vaccine"] (v1=1 v2=1)
   right: counter=12 set=["insulin","vaccine"] (v1=1 v2=1)
 RESTORED=true
@@ -357,9 +374,9 @@ partition: both sides edit offline; nothing is exchanged
   left : counter=15 set=["insulin"] (v1=2 v2=1)
   right: counter=16 set=["gauze","insulin","vaccine"] (v1=1 v2=3)
   wrote logs/left-counter.log (186 bytes)
-  wrote logs/left-set.log (186 bytes)
+  wrote logs/left-set.identity (215 bytes)
   wrote logs/right-counter.log (186 bytes)
-  wrote logs/right-set.log (236 bytes)
+  wrote logs/right-set.identity (265 bytes)
 DIVERGED=true
 ```
 
@@ -367,7 +384,7 @@ Exit code 0. The two sides now disagree on both the counter and the set.
 
 ## 6. Reconcile
 
-Each side merges the other side's log files. No step is repeated and no record
+Each side merges the other side's restored logs. No step is repeated and no record
 is applied twice.
 
 ```sh
@@ -375,163 +392,61 @@ node node-persist.mjs ./pkg ./logs reconcile
 ```
 
 ```text
-reconcile: each side merges the other's log file, then both are written back
+reconcile: each side merges the other's restored log, then both are written back
   left : counter=19 set=["gauze","insulin","vaccine"] (v1=2 v2=3)
   right: counter=19 set=["gauze","insulin","vaccine"] (v1=2 v2=3)
   wrote logs/left-counter.log (228 bytes)
-  wrote logs/left-set.log (274 bytes)
+  wrote logs/left-set.identity (303 bytes)
   wrote logs/right-counter.log (228 bytes)
-  wrote logs/right-set.log (274 bytes)
+  wrote logs/right-set.identity (303 bytes)
 CONVERGED=true
 ```
 
 Exit code 0. The counter reads 8 + 11 = 19 on both sides. `vaccine` survives
-because the right side's add carried token 22, which the left side had never
-observed when it removed the element.
+because the right side allocated a fresh add token, which the left side had
+never observed when it removed the element.
 
 ## 7. When a file is bad
 
-Corrupt exactly one byte of one persisted log and try to restore. This keeps a
-good copy first, then overwrites byte 40 of the left set log:
+Corrupt exactly one byte of one persisted identity and try to restore. This keeps a
+good copy first, then overwrites byte 40 of the left set identity:
 
 ```sh
-cp logs/left-set.log left-set.log.good
-printf '\231' | dd of=logs/left-set.log bs=1 seek=40 count=1 conv=notrunc status=none
+cp logs/left-set.identity left-set.identity.good
+printf '\231' | dd of=logs/left-set.identity bs=1 seek=40 count=1 conv=notrunc status=none
 node node-persist.mjs ./pkg ./logs restore
 ```
 
 Stdout:
 
 ```text
-restore: fresh process, replicas rebuilt from the log files alone
+restore: fresh process, replicas rebuilt from the stored files alone
 ```
 
 Stderr (`console.error`):
 
 ```text
-RESTORE FAILED file=logs/left-set.log error=SafeMeshError: failed to decode event log: IntegrityMismatch
+RESTORE FAILED file=logs/left-set.identity error=SafeMeshError: failed to decode event log: IntegrityMismatch
 ```
 
-The program exits 2. The core refused this integrity-invalid file before applying
-any record from it. In this run, all four on-disk logs were byte-for-byte unchanged
-after refusal; merging the bad file into both an empty and a populated set also
-left their serialized logs unchanged. The counter loaded earlier in the process
+The program exits 2. The identity import refuses the integrity-invalid file.
+Restore does not write the store files. The counter loaded earlier in the process
 is separate; this is not a transaction across all four files.
 
-### Recover from a healthy peer, without the staged backup
+### Missing or damaged identities
 
-Keep `logs/` intact and stop local writers while taking a consistent copy of the
-healthy peer's logs. For this walk, that peer is `logs/right-counter.log` and
-`logs/right-set.log`, with replica ID 2 and counter width 3. Step 6 already sent
-all left-side records to it. No command below reads `left-set.log.good` or the
-corrupt left set log.
+This walkthrough has no repair command. `restore` requires all four valid store
+files; a partial store is not a restorable history. Keep the remaining bytes and
+any verified backups. Move the files aside or choose a different, empty directory
+only to start a new exercise, not to recover the old one.
 
-From `walk`, with `pkg/` and `node-persist.mjs` from steps 1–2, run the following.
-It loads the healthy peer alone, merges its complete logs into fresh replica ID 1,
-compares counter slots, set adds, tombstones, both version vectors and log bytes,
-and writes a separate `recovered-logs/` directory. That directory must not already
-exist. Keep the originals, including any intact logs containing unsent edits.
-
-```sh
-node --input-type=commonjs <<'JS'
-const { readFileSync, writeFileSync, mkdirSync } = require('node:fs');
-const assert = require('node:assert/strict');
-const { SafeMeshGCounterReplica: Counter, SafeMeshStringOrSetReplica: SetReplica } = require('./pkg/safemesh_wasm.js');
-const peer = { counter: new Counter(2n, 3), set: new SetReplica(2n) };
-const recovered = { counter: new Counter(1n, 3), set: new SetReplica(1n) };
-function mergeLog(replica, bytes) {
-  const admissions = replica.mergeLogBytes(bytes);
-  assert(!admissions.includes('collision'), `batch collision after admissions=${JSON.stringify(admissions)}`);
-  return admissions;
-}
-function state(r) {
-  return {
-    counter: Array.from(r.counter.state(), String),
-    elements: r.set.elements(),
-    adds: r.set.addEntries().map(e => [e.element(), String(e.token())]),
-    tombstones: Array.from(r.set.tombstones(), String),
-    counterVersions: [String(r.counter.versionFor(1n)), String(r.counter.versionFor(2n))],
-    setVersions: [String(r.set.versionFor(1n)), String(r.set.versionFor(2n))],
-  };
-}
-try {
-  for (const kind of ['counter', 'set']) {
-    mergeLog(peer[kind], readFileSync(`logs/right-${kind}.log`));
-    mergeLog(recovered[kind], peer[kind].logBytes());
-  }
-  console.log('peer=' + JSON.stringify(state(peer)));
-  console.log('recovered=' + JSON.stringify(state(recovered)));
-  assert.deepStrictEqual(state(recovered), state(peer));
-  for (const kind of ['counter', 'set']) {
-    assert.deepStrictEqual(recovered[kind].logBytes(), peer[kind].logBytes());
-  }
-  mkdirSync('recovered-logs'); // Refuse to overwrite an earlier recovery.
-  for (const kind of ['counter', 'set']) {
-    writeFileSync(`recovered-logs/left-${kind}.log`, recovered[kind].logBytes());
-    writeFileSync(`recovered-logs/right-${kind}.log`, peer[kind].logBytes());
-  }
-  console.log('RECOVERED=true');
-} catch (error) {
-  console.error('RECOVERY FAILED: ' + error.message);
-  process.exitCode = 1;
-}
-JS
-```
-
-Stdout (exit 0):
-
-```text
-peer={"counter":["0","8","11"],"elements":["gauze","insulin","vaccine"],"adds":[["gauze","23"],["insulin","21"],["vaccine","11"],["vaccine","22"]],"tombstones":["11"],"counterVersions":["2","2"],"setVersions":["2","3"]}
-recovered={"counter":["0","8","11"],"elements":["gauze","insulin","vaccine"],"adds":[["gauze","23"],["insulin","21"],["vaccine","11"],["vaccine","22"]],"tombstones":["11"],"counterVersions":["2","2"],"setVersions":["2","3"]}
-RECOVERED=true
-```
-
-`RECOVERED=true` means equality with the supplied peer, not proof that the peer
-has every edit the damaged replica ever acknowledged. In an additional run, a
-left-only add of `unreplicated` with token 100 was absent after this recovery:
-left's set version was `(3,3)`, but the available peer and recovery had `(2,3)`.
-Do not resume writes under the old identity if lost record sequences or tokens
-could be reused; that requires the application's original allocation information.
-This recipe demonstrates recovery and reconciliation of the already-synced walk.
-
-Bring the rebuilt replica back together with its peer, then reopen the result:
-
-```sh
-node node-persist.mjs ./pkg ./recovered-logs reconcile
-node node-persist.mjs ./pkg ./recovered-logs restore
-```
-
-Stdout (each command exits 0):
-
-```text
-reconcile: each side merges the other's log file, then both are written back
-  left : counter=19 set=["gauze","insulin","vaccine"] (v1=2 v2=3)
-  right: counter=19 set=["gauze","insulin","vaccine"] (v1=2 v2=3)
-  wrote recovered-logs/left-counter.log (228 bytes)
-  wrote recovered-logs/left-set.log (274 bytes)
-  wrote recovered-logs/right-counter.log (228 bytes)
-  wrote recovered-logs/right-set.log (274 bytes)
-CONVERGED=true
-restore: fresh process, replicas rebuilt from the log files alone
-  left : counter=19 set=["gauze","insulin","vaccine"] (v1=2 v2=3)
-  right: counter=19 set=["gauze","insulin","vaccine"] (v1=2 v2=3)
-RESTORED=true
-```
-
-### If there is no healthy peer
-
-There is no public core or binding call that salvages the prefix of an
-integrity-invalid whole log. Without a healthy peer, a backup, or independently
-retained valid records, the data in a lone corrupt log cannot be recovered through
-these APIs. Keep the damaged bytes for investigation; do not delete the store.
-A peer can restore only records it received. The staged `left-set.log.good` copy
-in this exercise is not something a real failure automatically provides.
-
-Deleting the left set log made this program exit 2 with `error=missing`, not
-restart successfully. A fresh empty replacement had no adds, no tombstones and
-versions `(0,0)`: it lacked the two initial adds, left's remove of token 11, and
-right's adds of tokens 22 and 23. In this already-reconciled walk all five records
-were available from the peer; unsent edits would not be.
+The earlier caller-token version of this guide demonstrated rebuilding logs from
+a healthy peer. That recipe does not restore a lost allocated identity: the peer's
+log does not supply the original writer's allocation cursor. Importing records
+under a fresh identity can reject records claiming its local author, and starting
+a fresh writer is not a safe substitute for recovering its identity. A peer also
+cannot supply edits it never received. Do not resume writes under the old identity
+without its original allocation information.
 
 Before a failure: keep verified backups and replicate acknowledged records to another failure domain.
 
@@ -615,5 +530,5 @@ node rust/crates/safemesh-wasm/examples/node-persist.mjs "$tmp/pkg" ./walk-logs 
 node rust/crates/safemesh-wasm/examples/node-persist.mjs "$tmp/pkg" ./walk-logs reconcile
 ```
 
-It prints the same transcript as steps 3 to 6 and leaves the four log files in
+It prints the same transcript as steps 3 to 6 and leaves the four store files in
 `./walk-logs`.
