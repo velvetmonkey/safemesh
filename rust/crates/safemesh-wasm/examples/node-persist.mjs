@@ -3,10 +3,13 @@
 //
 // Usage: node node-persist.mjs <package-dir> <log-dir> <step>
 //   <package-dir> is a `wasm-pack build --target nodejs` output directory.
-//   <log-dir>     is where the four log files live.
+//   <log-dir>     is where the two counter logs and two set identities live.
 //   <step>        is one of: persist, restore, partition, reconcile.
 //
-// Each step is a separate process. State survives only through the log files.
+// Each step is a separate process. State survives only through the stored files.
+// Set identities include the complete log and allocation cursor. Older manual-token
+// set logs cannot be imported as identities; start this version in a fresh directory.
+// Run phases sequentially: these files do not provide concurrent-process fencing.
 
 import { createRequire } from "node:module";
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -29,19 +32,20 @@ const { SafeMeshGCounterReplica, SafeMeshStringOrSetReplica } = require(
 const WIDTH = 3;
 const SIDES = { left: 1n, right: 2n };
 
-const logPath = (side, kind) => join(logDir, `${side}-${kind}.log`);
+const logPath = (side, kind) =>
+  join(logDir, `${side}-${kind}.${kind === "set" ? "identity" : "log"}`);
 
 function fresh(side) {
   return {
     counter: new SafeMeshGCounterReplica(SIDES[side], WIDTH),
-    set: new SafeMeshStringOrSetReplica(SIDES[side]),
+    set: SafeMeshStringOrSetReplica.createAllocated(BigInt(WIDTH), SIDES[side]),
   };
 }
 
 function save(side, replica) {
   mkdirSync(logDir, { recursive: true });
   for (const kind of ["counter", "set"]) {
-    const bytes = replica[kind].logBytes();
+    const bytes = kind === "set" ? replica.set.exportIdentity() : replica.counter.logBytes();
     writeFileSync(logPath(side, kind), bytes, { flag: step === "persist" ? "wx" : "w" });
     console.log(`  wrote ${logPath(side, kind)} (${bytes.length} bytes)`);
   }
@@ -56,7 +60,7 @@ function mergeLog(replica, bytes) {
 }
 
 function load(side) {
-  const replica = fresh(side);
+  const replica = { counter: new SafeMeshGCounterReplica(SIDES[side], WIDTH) };
   for (const kind of ["counter", "set"]) {
     const path = logPath(side, kind);
     if (!existsSync(path)) {
@@ -64,7 +68,11 @@ function load(side) {
       process.exit(2);
     }
     try {
-      mergeLog(replica[kind], readFileSync(path));
+      if (kind === "set") {
+        replica.set = SafeMeshStringOrSetReplica.importIdentity(readFileSync(path));
+      } else {
+        mergeLog(replica.counter, readFileSync(path));
+      }
     } catch (error) {
       console.error(`RESTORE FAILED file=${path} error=${error.name}: ${error.message}`);
       process.exit(2);
@@ -108,14 +116,15 @@ switch (step) {
       );
       process.exit(2);
     }
-    console.log("persist: two fresh replicas, one edit each, full exchange, then write logs");
+    console.log("persist: two fresh replicas, one edit each, full exchange, then write stores");
+
     const left = fresh("left");
     const right = fresh("right");
     // appendBump(slot, tally): tally is the slot's new running total, not an increment.
     left.counter.appendBump(1, 5n);
-    left.set.appendAdd("vaccine", 11n);
+    left.set.appendAllocatedAdd("vaccine");
     right.counter.appendBump(2, 7n);
-    right.set.appendAdd("insulin", 21n);
+    right.set.appendAllocatedAdd("insulin");
     exchange(left, right);
     show("left ", left);
     show("right", right);
@@ -124,7 +133,7 @@ switch (step) {
     process.exit(same(left, right) ? 0 : 1);
   }
   case "restore": {
-    console.log("restore: fresh process, replicas rebuilt from the log files alone");
+    console.log("restore: fresh process, replicas rebuilt from the stored files alone");
     const left = load("left");
     const right = load("right");
     show("left ", left);
@@ -138,10 +147,10 @@ switch (step) {
     const left = load("left");
     const right = load("right");
     left.counter.appendBump(1, 8n); // slot 1 total 5 -> 8
-    left.set.appendRemoveObserved("vaccine"); // removes the token left has seen (11)
+    left.set.appendRemoveObserved("vaccine"); // removes every vaccine token left has seen
     right.counter.appendBump(2, 11n); // slot 2 total 7 -> 11
-    right.set.appendAdd("vaccine", 22n); // concurrent re-add with a fresh token
-    right.set.appendAdd("gauze", 23n);
+    right.set.appendAllocatedAdd("vaccine"); // restored cursor allocates a fresh token
+    right.set.appendAllocatedAdd("gauze");
     show("left ", left);
     show("right", right);
     save("left", left);
@@ -151,13 +160,10 @@ switch (step) {
     process.exit(diverged ? 0 : 1);
   }
   case "reconcile": {
-    console.log("reconcile: each side merges the other's log file, then both are written back");
+    console.log("reconcile: each side merges the other's restored log, then both are written back");
     const left = load("left");
     const right = load("right");
-    for (const kind of ["counter", "set"]) {
-      mergeLog(left[kind], readFileSync(logPath("right", kind)));
-      mergeLog(right[kind], readFileSync(logPath("left", kind)));
-    }
+    exchange(left, right);
     show("left ", left);
     show("right", right);
     save("left", left);

@@ -50,7 +50,7 @@ for(const [name,make,append] of [
 check('persist refuses existing histories and partial stores without mutation', () => {
   const root = mkdtempSync(join(tmpdir(), 'safemesh-persist-'));
   const example = fileURLToPath(new URL('../examples/node-persist.mjs', import.meta.url));
-  const files = ['left-counter.log', 'left-set.log', 'right-counter.log', 'right-set.log'];
+  const files = ['left-counter.log', 'left-set.identity', 'right-counter.log', 'right-set.identity'];
   function run(dir, step, status = 0) {
     const result = spawnSync(process.execPath, [example, resolve(process.argv[2]), dir, step], {encoding: 'utf8'});
     assert.equal(result.status, status, result.stdout + result.stderr);
@@ -93,6 +93,54 @@ check('persist refuses existing histories and partial stores without mutation', 
   } finally {
     rmSync(root, {recursive: true, force: true});
   }
+});
+check('persisted partition repeats allocate fresh adds and retain vaccine after repair',()=>{
+  const directory=mkdtempSync(join(tmpdir(),'safemesh-partition-'));
+  const example=fileURLToPath(new URL('../examples/node-persist.mjs',import.meta.url));
+  const phase=step=>{
+    const result=spawnSync(process.execPath,[example,resolve(process.argv[2]),directory,step],{encoding:'utf8'});
+    assert.equal(result.status,0,`${step}: ${result.stdout}\n${result.stderr}`);
+  };
+  const carrier=replica=>{
+    const entries=replica.addEntries();
+    try {
+      return {
+        adds:entries.map(entry=>[entry.element(),String(entry.token())]).sort(),
+        tombstones:Array.from(replica.tombstones(),String).sort(),
+      };
+    } finally { entries.forEach(entry=>entry.free()); }
+  };
+  try {
+    phase('persist');
+    let previousTokens=new Set();
+    for(let round=0;round<3;round++) {
+      phase('partition');
+      phase('reconcile');
+      phase('restore'); // another process must recover the latest state
+      const left=OrSetReplica.importIdentity(readFileSync(join(directory,'left-set.identity')));
+      let right;
+      try {
+        right=OrSetReplica.importIdentity(readFileSync(join(directory,'right-set.identity')));
+        assert.deepEqual(left.elements(),['gauze','insulin','vaccine']);
+        assert.deepEqual(right.elements(),left.elements());
+        const state=carrier(left);
+        assert.deepEqual(state,carrier(right),'full add/tombstone carrier differs');
+        assert.equal(state.adds.length,2+2*(round+1),'both partition adds must be fresh');
+        assert.equal(new Set(state.adds.map(([,token])=>token)).size,state.adds.length);
+        const tokens=Array.from(left.observedTokens('vaccine'));
+        const removed=new Set(left.tombstones());
+        const live=tokens.filter(token=>!removed.has(token));
+        assert.equal(live.length,1,'exactly one vaccine add must survive');
+        assert(!previousTokens.has(live[0]),'repeat reused a previous vaccine token');
+        assert.equal(tokens.length,round+2,'each phase must retain a new vaccine add');
+        previousTokens=new Set(tokens);
+        for(const replica of [left,right]) {
+          const peer=replica===left?right:left;
+          assert(replica.mergeLogBytes(peer.logBytes()).every(result=>result==='duplicate'));
+        }
+      } finally { left.free(); right?.free(); }
+    }
+  } finally { rmSync(directory,{recursive:true,force:true}); }
 });
 console.log(`Completed: ${failures} failing boundary cases`);
 process.exitCode=failures?1:0;

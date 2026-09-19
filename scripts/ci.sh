@@ -12,6 +12,10 @@ require_tool() {
 
 require_tool cbindgen
 require_tool maturin
+require_tool python3
+
+python3 "$repo_root/scripts/check-readme-quickstart.py" \
+  --work-dir "$repo_root/rust/target/readme-quickstart"
 
 rustup target add thumbv7em-none-eabihf wasm32-unknown-unknown
 
@@ -38,6 +42,10 @@ rustup target add thumbv7em-none-eabihf wasm32-unknown-unknown
   diff -u crates/safemesh-ffi/include/safemesh.h "$header"
   rm -f "$header"
 )
+
+# Build/lint the pipe-only reference app alongside the existing product gate.
+cargo fmt --manifest-path "$repo_root/examples/fieldcheck/Cargo.toml" --check
+cargo clippy --manifest-path "$repo_root/examples/fieldcheck/Cargo.toml" --locked --all-targets -- -D warnings
 
 "$repo_root/scripts/ffi-c-smoke.sh"
 

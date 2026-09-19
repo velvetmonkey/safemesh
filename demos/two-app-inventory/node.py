@@ -7,7 +7,8 @@ import json
 import os
 from pathlib import Path
 import sqlite3
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, urlopen
 
 import safemesh_python as sm
@@ -19,7 +20,9 @@ class Inventory:
         self.coordinate = coordinate
         self.name = name
         self.online = True
-        self.db = sqlite3.connect(directory / 'inventory.sqlite')
+        # Request handlers share this connection only while holding the state lock.
+        self.lock = threading.Lock()
+        self.db = sqlite3.connect(directory / 'inventory.sqlite', check_same_thread=False)
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.execute('PRAGMA synchronous=FULL')
         self.db.execute('CREATE TABLE IF NOT EXISTS identity (name TEXT, coordinate INTEGER)')
@@ -110,7 +113,9 @@ def serve(name, coordinate):
 
         def do_GET(self):
             if self.path == '/status':
-                self.reply(200, inventory.status())
+                with inventory.lock:
+                    result = inventory.status()
+                self.reply(200, result)
             else:
                 self.reply(404, {'error': 'unknown endpoint'})
 
@@ -120,44 +125,49 @@ def serve(name, coordinate):
                 if not 0 < size <= 4 * 1024 * 1024:
                     raise ValueError('request must be between 1 byte and 4 MiB')
                 body = json.loads(self.rfile.read(size))
-                if self.path == '/link':
-                    if type(body.get('online')) is not bool:
-                        raise ValueError('online must be boolean')
-                    inventory.online = body['online']
-                    result = {'online': inventory.online}
-                elif self.path == '/add':
-                    result = inventory.add()
-                elif self.path in ('/records', '/sync'):
-                    if not inventory.online:
-                        self.reply(503, {'error': 'replication link disconnected'})
-                        return
-                    if self.path == '/records':
-                        result = inventory.receive(body['records'])
+                with inventory.lock:
+                    if self.path == '/link':
+                        if type(body.get('online')) is not bool:
+                            raise ValueError('online must be boolean')
+                        inventory.online = body['online']
+                        result = {'online': inventory.online}
+                    elif self.path == '/add':
+                        result = inventory.add()
+                    elif self.path in ('/records', '/sync'):
+                        if not inventory.online:
+                            self.reply(503, {'error': 'replication link disconnected'})
+                            return
+                        if self.path == '/records':
+                            result = inventory.receive(body['records'])
+                        else:
+                            records = inventory.records()
+                            # Deliberate fault injection, exposed only in this local demo.
+                            dropped = int(bool(body.get('drop_newest')))
+                            if dropped:
+                                records = records[:-1]
+                            if body.get('reverse'):
+                                records.reverse()
+                            if body.get('duplicate'):
+                                records = records + records
+                            payload = {'records': [base64.b64encode(w).decode() for w in records]}
+                            request = Request(args.peer + '/records', json.dumps(payload).encode(),
+                                              {'Content-Type': 'application/json'})
                     else:
-                        records = inventory.records()
-                        # Deliberate fault injection, exposed only in this local demo.
-                        dropped = int(bool(body.get('drop_newest')))
-                        if dropped:
-                            records = records[:-1]
-                        if body.get('reverse'):
-                            records.reverse()
-                        if body.get('duplicate'):
-                            records = records + records
-                        payload = {'records': [base64.b64encode(w).decode() for w in records]}
-                        request = Request(args.peer + '/records', json.dumps(payload).encode(),
-                                          {'Content-Type': 'application/json'})
-                        with urlopen(request, timeout=30) as response:
-                            result = json.load(response)
-                        result.update(sent=len(records), dropped=dropped,
-                                      reversed=bool(body.get('reverse')))
-                else:
-                    self.reply(404, {'error': 'unknown endpoint'})
-                    return
+                        self.reply(404, {'error': 'unknown endpoint'})
+                        return
+                # Snapshot under the lock, but never hold it across peer I/O:
+                # the peer may be synchronizing back to us at the same time.
+                if self.path == '/sync':
+                    with urlopen(request, timeout=30) as response:
+                        result = json.load(response)
+                    result.update(sent=len(records), dropped=dropped,
+                                  reversed=bool(body.get('reverse')))
                 self.reply(200, result)
             except Exception as error:
                 self.reply(400, {'error': str(error)})
 
-    # One request at a time protects the replica/transaction boundary.
-    server = HTTPServer(('127.0.0.1', args.port), Handler)
+    # Threads keep incoming requests moving while a sync waits for its peer.
+    # The state lock protects every replica/SQLite access after startup.
+    server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     print(json.dumps({'listening': server.server_address, **inventory.status()}), flush=True)
     server.serve_forever()
