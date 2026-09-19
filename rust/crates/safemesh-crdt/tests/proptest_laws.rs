@@ -8,10 +8,11 @@ use proptest::prelude::*;
 use proptest::test_runner::{FileFailurePersistence, TestCaseResult};
 use safemesh_crdt::laws::{check_crdt_convergence, check_merge_laws};
 use safemesh_crdt::{
-    Crdt, EnableWinsFlag, EnableWinsFlagDelta, GCounter, GCounterDelta, GSet, PnCounter,
-    PnCounterDelta,
+    Crdt, EnableWinsFlag, EnableWinsFlagDelta, GCounter, GCounterDelta, GSet, LwwMap, LwwMapDelta,
+    LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta, PnCounter, PnCounterDelta, Rga, RgaDelta,
 };
 
+// Coverage: GCounter, GSet, PnCounter, EnableWinsFlag, OrSet, Rga, LwwRegister, LwwMap.
 // Three independent histories give the merge harness every operand of associativity.
 // Bounded history lengths keep its cubic state comparisons cheap enough for 256 cases.
 fn histories<D: Strategy>(delta: D) -> impl Strategy<Value = [Vec<D::Value>; 3]> {
@@ -88,6 +89,49 @@ fn flag_delta() -> impl Strategy<Value = EnableWinsFlagDelta<u8>> {
     ]
 }
 
+// Small domains deliberately collide tokens, positions, keys and LWW dots.
+fn orset_delta() -> impl Strategy<Value = OrSetDelta<u8, u8>> {
+    prop_oneof![
+        (0u8..8, 0u8..16).prop_map(|(element, token)| OrSetDelta::Add { element, token }),
+        proptest::collection::vec(0u8..16, 0..9).prop_map(|tokens| OrSetDelta::Remove { tokens }),
+    ]
+}
+
+fn rga_delta() -> impl Strategy<Value = RgaDelta<u8, u8>> {
+    prop_oneof![
+        (0u8..16, any::<u8>()).prop_map(|(position, value)| RgaDelta::Insert { position, value }),
+        (0u8..16).prop_map(|position| RgaDelta::Delete { position }),
+    ]
+}
+
+fn timestamp() -> impl Strategy<Value = u64> {
+    prop_oneof![0u64..8, any::<u64>()]
+}
+
+fn register_delta() -> impl Strategy<Value = LwwRegisterDelta<u8>> {
+    (timestamp(), 0u64..3, any::<u8>()).prop_map(|(timestamp, replica, value)| LwwRegisterDelta {
+        timestamp,
+        replica,
+        value,
+    })
+}
+
+fn map_delta() -> impl Strategy<Value = LwwMapDelta<u8, u8>> {
+    prop_oneof![
+        (0u8..8, register_delta()).prop_map(|(key, d)| LwwMapDelta::Set {
+            key,
+            timestamp: d.timestamp,
+            replica: d.replica,
+            value: d.value,
+        }),
+        (0u8..8, timestamp(), 0u64..3).prop_map(|(key, timestamp, replica)| LwwMapDelta::Remove {
+            key,
+            timestamp,
+            replica
+        }),
+    ]
+}
+
 proptest! {
     // Explicitly retain at least 256 random cases even if PROPTEST_CASES is lower.
     #![proptest_config(ProptestConfig {
@@ -114,5 +158,25 @@ proptest! {
     #[test]
     fn enable_wins_flag_laws(histories in histories(flag_delta())) {
         check_histories(EnableWinsFlag::new(), histories)?;
+    }
+
+    #[test]
+    fn orset_laws(histories in histories(orset_delta())) {
+        check_histories(OrSet::new(), histories)?;
+    }
+
+    #[test]
+    fn rga_laws(histories in histories(rga_delta())) {
+        check_histories(Rga::new(), histories)?;
+    }
+
+    #[test]
+    fn lww_register_laws(histories in histories(register_delta())) {
+        check_histories(LwwRegister::new(), histories)?;
+    }
+
+    #[test]
+    fn lww_map_laws(histories in histories(map_delta())) {
+        check_histories(LwwMap::new(), histories)?;
     }
 }

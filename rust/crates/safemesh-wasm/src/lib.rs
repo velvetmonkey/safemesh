@@ -4,8 +4,9 @@
 
 use safemesh_crdt::ownership::{allocate_token, WriterConfig};
 use safemesh_crdt::{
-    Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta, LwwMap,
-    LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta, Record, WireDecode, WireEncode,
+    Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta, GSet, LwwMap,
+    LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta, PnCounter, PnCounterDelta,
+    Record, Rga, WireDecode, WireEncode,
 };
 use std::{cell::RefCell, collections::BTreeSet};
 use wasm_bindgen::prelude::*;
@@ -708,6 +709,14 @@ pub struct SafeMeshLwwMapReplica {
 
 #[wasm_bindgen]
 impl SafeMeshLwwMapReplica {
+    /// Canonical complete carrier, including hidden entries and remove dots.
+    #[wasm_bindgen(js_name = stateBytes)]
+    pub fn state_bytes(&self) -> Result<Vec<u8>, JsValue> {
+        self.state
+            .to_wire_bytes()
+            .map_err(|_| safe_mesh_error(1, "failed to encode state"))
+    }
+
     #[wasm_bindgen(constructor)]
     pub fn new_js(
         #[wasm_bindgen(unchecked_param_type = "bigint")] replica_id: JsValue,
@@ -2839,5 +2848,346 @@ mod tests {
                 .message,
             "failed to decode record: InvalidTag"
         );
+    }
+}
+
+#[wasm_bindgen]
+pub struct SafeMeshPnCounterReplica {
+    replica_id: u64,
+    state: PnCounter,
+    log: EventLog<PnCounterDelta>,
+}
+
+#[wasm_bindgen]
+impl SafeMeshPnCounterReplica {
+    #[wasm_bindgen(constructor)]
+    pub fn new_js(
+        #[wasm_bindgen(unchecked_param_type = "bigint")] replica_id: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "number")] replicas: JsValue,
+    ) -> Result<Self, JsValue> {
+        let replica_id = checked_u64(replica_id, "replica_id")?;
+        let replicas = checked_replica_count(replicas)?;
+        Ok(Self::new(replica_id, replicas))
+    }
+
+    #[wasm_bindgen(js_name = appendInc)]
+    pub fn append_inc_js(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "number")] counter_replica: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] tally: JsValue,
+    ) -> Result<Vec<u8>, JsValue> {
+        let counter_replica = checked_index(counter_replica, "counter_replica")?;
+        let tally = checked_u64(tally, "tally")?;
+        self.append_inc(counter_replica, tally)
+    }
+
+    #[wasm_bindgen(js_name = appendDec)]
+    pub fn append_dec_js(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "number")] counter_replica: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] tally: JsValue,
+    ) -> Result<Vec<u8>, JsValue> {
+        let counter_replica = checked_index(counter_replica, "counter_replica")?;
+        let tally = checked_u64(tally, "tally")?;
+        self.append_dec(counter_replica, tally)
+    }
+
+    #[wasm_bindgen(js_name = mergeRecordBytes)]
+    pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
+        let record = Record::<PnCounterDelta>::from_wire_bytes(bytes)
+            .map_err(|_| safe_mesh_error(1, "failed to decode record"))?;
+        if safemesh_crdt::ownership::check_counter_record(
+            self.state.p_state().len(),
+            record.id,
+            &record.delta,
+        )
+        .is_err()
+        {
+            return Err(safe_mesh_error(
+                2,
+                "counter coordinate out of range or not owned by record author",
+            ));
+        }
+        if self
+            .log
+            .admit_with(&mut self.state, record, |state, delta| {
+                state.apply_delta(delta.clone());
+            })
+            == safemesh_crdt::Admission::Collision
+        {
+            return Err(safe_mesh_error(1, "record ID collision"));
+        }
+        Ok(())
+    }
+
+    /// Return one core admission verdict for every decoded input record.
+    #[wasm_bindgen(
+        js_name = mergeLogBytes,
+        unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
+    )]
+    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
+        let log = EventLog::<PnCounterDelta>::records_from_wire_bytes_for(bytes, &self.state)
+            .map_err(|error| {
+                safe_mesh_error(
+                    1,
+                    match error {
+                        safemesh_crdt::WireError::RecordCollision => "record ID collision",
+                        safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
+                            "replica count mismatch"
+                        }
+                        safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
+                        safemesh_crdt::WireError::MissingShape => "event log missing shape",
+                        _ => "failed to decode event log",
+                    },
+                )
+            })?;
+        if log.iter().any(|r| {
+            safemesh_crdt::ownership::check_counter_record(
+                self.state.p_state().len(),
+                r.id,
+                &r.delta,
+            )
+            .is_err()
+        }) {
+            return Err(safe_mesh_error(
+                2,
+                "counter coordinate out of range or not owned by record author",
+            ));
+        }
+        Ok(log
+            .iter()
+            .cloned()
+            .map(|record| {
+                self.log
+                    .admit_with(&mut self.state, record, |state, delta| {
+                        state.apply_delta(delta.clone());
+                    })
+            })
+            .map(admission_name)
+            .collect())
+    }
+
+    #[wasm_bindgen(js_name = logBytes)]
+    pub fn log_bytes(&self) -> Result<Vec<u8>, JsValue> {
+        self.log
+            .to_wire_bytes()
+            .map_err(|_| safe_mesh_error(1, "failed to encode event log"))
+    }
+
+    #[wasm_bindgen(js_name = versionFor)]
+    pub fn version_for_js(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] replica: JsValue,
+    ) -> Result<u64, JsValue> {
+        let replica = checked_u64(replica, "replica")?;
+        Ok(self.version_for(replica))
+    }
+
+    /// The counter total as an exact `bigint`, also past the 64-bit boundary.
+    #[wasm_bindgen(unchecked_return_type = "bigint")]
+    pub fn value(&self) -> JsValue {
+        JsValue::bigint_from_str(&self.total().to_string())
+    }
+
+    /// The Rust-core total behind [`Self::value`]; not exported, so host-side
+    /// tests can read it without constructing a JavaScript value.
+    fn total(&self) -> i128 {
+        self.state.value()
+    }
+
+    /// Compare the Rust-core carrier states without reproducing its equality in JavaScript.
+    #[wasm_bindgen(js_name = sameStateAs)]
+    pub fn same_state_as(&self, other: &SafeMeshPnCounterReplica) -> bool {
+        self.state == other.state
+    }
+
+    /// Complete carrier: increment coordinates followed by decrement coordinates.
+    #[wasm_bindgen(js_name = state)]
+    pub fn state(&self) -> Vec<u64> {
+        self.state
+            .p_state()
+            .iter()
+            .chain(self.state.n_state())
+            .copied()
+            .collect()
+    }
+}
+
+impl SafeMeshPnCounterReplica {
+    pub fn new(replica_id: u64, replicas: usize) -> Self {
+        SafeMeshPnCounterReplica {
+            replica_id,
+            state: PnCounter::new(replicas),
+            log: EventLog::with_replica_count(replicas),
+        }
+    }
+
+    pub fn append_inc(&mut self, counter_replica: usize, tally: u64) -> Result<Vec<u8>, JsValue> {
+        if safemesh_crdt::ownership::check_counter_record(
+            self.state.p_state().len(),
+            safemesh_crdt::RecordId {
+                replica: self.replica_id,
+                sequence: 1,
+            },
+            &PnCounterDelta::Inc {
+                replica: counter_replica,
+                tally,
+            },
+        )
+        .is_err()
+        {
+            return Err(safe_mesh_error(
+                2,
+                "counter coordinate out of range or not owned by record author",
+            ));
+        }
+        let delta = PnCounterDelta::Inc {
+            replica: counter_replica,
+            tally,
+        };
+        let id = self
+            .log
+            .append_with(
+                &mut self.state,
+                self.replica_id,
+                delta.clone(),
+                |state, delta| {
+                    state.apply_delta(delta.clone());
+                },
+            )
+            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+        Record { id, delta }
+            .to_wire_bytes()
+            .map_err(|_| safe_mesh_error(1, "failed to encode record"))
+    }
+
+    pub fn append_dec(&mut self, counter_replica: usize, tally: u64) -> Result<Vec<u8>, JsValue> {
+        if safemesh_crdt::ownership::check_counter_record(
+            self.state.p_state().len(),
+            safemesh_crdt::RecordId {
+                replica: self.replica_id,
+                sequence: 1,
+            },
+            &PnCounterDelta::Dec {
+                replica: counter_replica,
+                tally,
+            },
+        )
+        .is_err()
+        {
+            return Err(safe_mesh_error(
+                2,
+                "counter coordinate out of range or not owned by record author",
+            ));
+        }
+        let delta = PnCounterDelta::Dec {
+            replica: counter_replica,
+            tally,
+        };
+        let id = self
+            .log
+            .append_with(
+                &mut self.state,
+                self.replica_id,
+                delta.clone(),
+                |state, delta| {
+                    state.apply_delta(delta.clone());
+                },
+            )
+            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+        Record { id, delta }
+            .to_wire_bytes()
+            .map_err(|_| safe_mesh_error(1, "failed to encode record"))
+    }
+
+    pub fn version_for(&self, replica: u64) -> u64 {
+        self.log.version().get(replica)
+    }
+}
+
+/// State-based WASM replica using the core's canonical full-carrier wire codec.
+/// Operations return snapshots, not event-log records.
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct SafeMeshGSetReplica {
+    state: GSet<u64>,
+}
+
+#[wasm_bindgen]
+impl SafeMeshGSetReplica {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self { state: GSet::new() }
+    }
+    #[wasm_bindgen(js_name = insert)]
+    pub fn insert(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] value: JsValue,
+    ) -> Result<Vec<u8>, JsValue> {
+        self.state.insert(checked_u64(value, "value")?);
+        self.state_bytes()
+    }
+
+    #[wasm_bindgen(js_name = stateBytes)]
+    pub fn state_bytes(&self) -> Result<Vec<u8>, JsValue> {
+        self.state
+            .to_wire_bytes()
+            .map_err(|_| safe_mesh_error(1, "failed to encode state"))
+    }
+    #[wasm_bindgen(js_name = mergeStateBytes)]
+    pub fn merge_state_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
+        let other = <GSet<u64>>::from_wire_bytes(bytes)
+            .map_err(|_| safe_mesh_error(1, "failed to decode state"))?;
+        self.state.merge(&other);
+        Ok(())
+    }
+}
+
+/// State-based WASM replica using the core's canonical full-carrier wire codec.
+/// Operations return snapshots, not event-log records.
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct SafeMeshRgaReplica {
+    state: Rga<u64, u64>,
+}
+
+#[wasm_bindgen]
+impl SafeMeshRgaReplica {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self { state: Rga::new() }
+    }
+    #[wasm_bindgen(js_name = insert)]
+    pub fn insert(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] position: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] value: JsValue,
+    ) -> Result<Vec<u8>, JsValue> {
+        let position = checked_u64(position, "position")?;
+        let value = checked_u64(value, "value")?;
+        self.state.insert(position, value);
+        self.state_bytes()
+    }
+    #[wasm_bindgen(js_name = delete)]
+    pub fn delete(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] position: JsValue,
+    ) -> Result<Vec<u8>, JsValue> {
+        self.state.delete(checked_u64(position, "position")?);
+        self.state_bytes()
+    }
+
+    #[wasm_bindgen(js_name = stateBytes)]
+    pub fn state_bytes(&self) -> Result<Vec<u8>, JsValue> {
+        self.state
+            .to_wire_bytes()
+            .map_err(|_| safe_mesh_error(1, "failed to encode state"))
+    }
+    #[wasm_bindgen(js_name = mergeStateBytes)]
+    pub fn merge_state_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
+        let other = <Rga<u64, u64>>::from_wire_bytes(bytes)
+            .map_err(|_| safe_mesh_error(1, "failed to decode state"))?;
+        self.state.merge(&other);
+        Ok(())
     }
 }
