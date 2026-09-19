@@ -72,7 +72,7 @@ let delta = GCounterDelta {
 };
 left.apply_delta(delta.clone());
 right.apply_delta(delta);
-left.merge(&right).expect("counters have equal replica counts");
+left.try_merge(&right).expect("counters have equal replica counts");
 
 assert_eq!(left.value(), right.value());
 ```
@@ -419,6 +419,16 @@ API for a damaged whole-log frame. Preserve the damaged files for investigation.
 Before a failure: keep verified backups with matching ownership metadata and replicate acknowledged records to another failure domain.
 
 ## Verify locally
+
+From the repository root, compile and run the Install/Quickstart blocks above
+against their exact Git dependency (requires Python 3.11+, Cargo and GitHub access):
+
+```sh
+python3 scripts/check-readme-quickstart.py --work-dir rust/target/readme-quickstart
+```
+
+The full gate runs this check too. It reads the README blocks directly, keeping
+the historical recipe independent of the current checkout's API.
 
 ```sh
 cd rust
