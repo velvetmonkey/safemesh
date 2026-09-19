@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local pipe-only interface. The child process exclusively owns the SafeMesh store."""
+"""Pipe interface to the store-owning service and its optional loopback TCP peer."""
 import argparse
 import json
 import os
@@ -22,6 +22,10 @@ def main():
     parser.add_argument("store", type=Path)
     parser.add_argument("--service", type=Path, default=Path(__file__).parent / "target/debug/fieldcheck")
     parser.add_argument("--reply-barrier", type=Path, help="external journey control: pause AFTER commit, BEFORE reply")
+    parser.add_argument("--writer", type=int, choices=[0, 1], default=0)
+    network = parser.add_mutually_exclusive_group()
+    network.add_argument("--listen", help="loopback IP:port for the fixed peer")
+    network.add_argument("--connect", help="loopback IP:port; reconnect automatically")
     args = parser.parse_args()
     draft_path = args.store.with_name(args.store.name + ".draft.json")
     draft = json.loads(draft_path.read_text()) if draft_path.exists() else None
@@ -46,7 +50,12 @@ def main():
         records = []
         command = [str(args.service.resolve()), str(args.store.resolve())]
         if args.reply_barrier:
-            command.append(str(args.reply_barrier.resolve()))
+            command.extend(["--reply-barrier", str(args.reply_barrier.resolve())])
+        command.extend(["--writer", str(args.writer)])
+        if args.listen:
+            command.extend(["--listen", args.listen])
+        if args.connect:
+            command.extend(["--connect", args.connect])
         child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         threading.Thread(target=reader, args=(child,), daemon=True).start()
 
@@ -89,6 +98,12 @@ def main():
                                 say("Saved on this device")
                                 draft = None
                                 draft_path.unlink(missing_ok=True)
+                elif value.get("status"):
+                    records = value["records"]
+                    say(value["network"])
+                    say(value["delivery"])
+                    say(json.dumps({"records": records, "draft": draft,
+                                    "peer_confirmed": value["peer_confirmed"]}, ensure_ascii=False))
                 elif "saved" in value:
                     saving = False
                     saved = value["saved"]
@@ -158,7 +173,8 @@ def main():
                             records = []
                             say(STOPPED)
                     elif words == ["show"]:
-                        say(json.dumps({"records": records, "draft": draft}, ensure_ascii=False))
+                        child.stdin.write('{"command":"status"}\n')
+                        child.stdin.flush()
                     else:
                         say("Expected draft Pass|Fail \"inspector\" \"note\", save, show, reopen or quit")
                 except (ValueError, OSError) as error:

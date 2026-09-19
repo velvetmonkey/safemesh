@@ -1,5 +1,6 @@
 // Copyright (C) 2026 Ben Cassie
 // SPDX-License-Identifier: Apache-2.0
+mod exchange;
 use safemesh_crdt::{local::DurableReplica, ownership::WriterConfig, OrSet, OrSetDelta};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -8,6 +9,7 @@ use std::{
     fs,
     io::{self, BufRead, Write},
     path::Path,
+    sync::{Arc, Mutex},
 };
 
 type Replica = DurableReplica<OrSet<String, u64>>;
@@ -46,7 +48,7 @@ fn records(replica: &Replica) -> Result<BTreeMap<String, Value>, String> {
             return Err("Unexpected removal".into());
         };
         let (id, bytes) = canonical(element)?;
-        if bytes != *element || r.id.replica != 0 {
+        if bytes != *element || r.id.replica > 1 {
             return Err("Unexpected record encoding or writer".into());
         }
         let value = json!({"record": element, "writer": r.id.replica, "sequence": r.id.sequence});
@@ -63,13 +65,21 @@ fn emit(value: Value) {
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args().collect();
     let root = Path::new(args.get(1).ok_or("store path required")?);
-    let config = WriterConfig {
-        writers: 2,
-        writer: 0,
+    let option = |name: &str| {
+        args.iter()
+            .position(|s| s == name)
+            .and_then(|i| args.get(i + 1))
     };
+    let writer = option("--writer")
+        .map_or(Ok(0), |s| s.parse::<u64>())
+        .map_err(|e| e.to_string())?;
+    if writer > 1 || (option("--listen").is_some() && option("--connect").is_some()) {
+        return Err("expected writer 0 or 1 and at most one network role".into());
+    }
+    let config = WriterConfig { writers: 2, writer };
     // Existence means restart, even if the directory is empty or damaged.
     // Only create_dir success permits a fresh identity; never repair by resetting.
-    let mut replica = match fs::create_dir(root) {
+    let replica = match fs::create_dir(root) {
         Ok(()) => {
             fs::File::open(root.parent().unwrap_or(Path::new(".")))
                 .and_then(|f| f.sync_all())
@@ -82,13 +92,29 @@ fn run() -> Result<(), String> {
         Err(e) => return Err(e.to_string()),
     }
     .map_err(|e| format!("{e:?}"))?;
-    let mut known = records(&replica)?;
+    let service = Arc::new(Mutex::new(exchange::Service::open(replica, writer, root)?));
+    exchange::start(
+        service.clone(),
+        option("--listen").map(String::as_str),
+        option("--connect").map(String::as_str),
+    )?;
+    let known = records(&service.lock().map_err(|e| e.to_string())?.replica)?;
     emit(
         json!({"ready":true, "pid":std::process::id(), "records":known.values().collect::<Vec<_>>(),
         "checklist":serde_json::from_str::<Value>(include_str!("../checklist.json")).unwrap()}),
     );
     for line in io::stdin().lock().lines() {
         let line = line.map_err(|e| e.to_string())?;
+        let mut state = service.lock().map_err(|e| e.to_string())?;
+        if line == "{\"command\":\"status\"}" {
+            emit(state.status()?);
+            continue;
+        }
+        if !state.writable() {
+            emit(json!({"storage_error":"restart required"}));
+            continue;
+        }
+        let known = records(&state.replica)?;
         let (id, bytes) = match canonical(&line) {
             Ok(v) => v,
             Err(e) => {
@@ -104,13 +130,15 @@ fn run() -> Result<(), String> {
             }
             continue;
         }
-        match replica.add(replica.ticket(), bytes.clone()) {
+        let ticket = state.replica.ticket();
+        match state.replica.add(ticket, bytes.clone()) {
             Ok(record) => {
                 let value = json!({"record":bytes,"writer":record.id.replica,"sequence":record.id.sequence});
-                known.insert(id, value.clone());
                 // Explicit external journey control: commit is complete; no reply yet.
                 // Remove the barrier to continue, or SIGKILL this PID to lose the reply.
-                if let Some(barrier) = args.get(2) {
+                if let Some(barrier) = option("--reply-barrier")
+                    .or_else(|| args.get(2).filter(|s| !s.starts_with("--")))
+                {
                     fs::write(barrier, b"committed; reply pending\n").map_err(|e| e.to_string())?;
                     while Path::new(barrier).exists() {
                         std::thread::sleep(std::time::Duration::from_millis(20));
