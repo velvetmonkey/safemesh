@@ -218,6 +218,8 @@ count. Token arithmetic overflow and writes at next sequence `u64::MAX` refuse;
 a consistent exhausted identity remains exportable/restorable. Empty and
 Unicode strings work. Allocated receivers reject invalid token ownership and
 new records claiming their local author; invalid ownership in a log batch is
-checked before any admission. `appendAdd(element, token)` is unchanged; a caller
-token inconsistent with the allocated history makes subsequent allocated writes
-and export refuse. Python and C numeric paths retain caller-owned tokens.
+checked before any admission. Legacy instances keep the caller-token behavior of
+`appendAdd(element, token)`. Allocated instances reject caller tokens immediately;
+use `appendAllocatedAdd(element)` for allocated adds, including after
+`exportIdentity()` and `importIdentity(bytes)`. Python and C numeric paths retain
+caller-owned tokens.
