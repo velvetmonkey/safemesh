@@ -83,7 +83,7 @@ export function readORSet(state: ORSetState): ORSetElement[] {
       visible.add(element)
     }
   }
-  return [...visible].sort((a, b) => a.localeCompare(b))
+  return [...visible].sort()
 }
 
 export function observedTokens(state: ORSetState, element: ORSetElement): ORSetToken[] {

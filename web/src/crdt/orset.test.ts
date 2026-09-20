@@ -1,7 +1,26 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { addDelta, applyORSetDelta, bottomORSet, mergeORSet, observedTokens, readORSet, removeDelta } from './orset'
 
 describe('OR-Set mirror', () => {
+  it.each(['de', 'sv'])('reads visible elements in ordinal order under %s collation', (locale) => {
+    const state = [addDelta('ä', 'p0-1'), addDelta('z', 'p0-2')].reduce(
+      applyORSetDelta,
+      bottomORSet(),
+    )
+    const collator = new Intl.Collator(locale)
+    expect(collator.resolvedOptions().locale).toBe(locale)
+    // German puts ä before z; Swedish puts it after z. Emulate each default locale.
+    expect(Math.sign(collator.compare('ä', 'z'))).toBe(locale === 'de' ? -1 : 1)
+    const comparison = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(function (this: string, other) {
+      return collator.compare(String(this), other)
+    })
+    try {
+      expect(readORSet(state)).toEqual(['z', 'ä'])
+    } finally {
+      comparison.mockRestore()
+    }
+  })
+
   it('keeps a concurrent fresh add visible after an observed-token remove', () => {
     const first = addDelta('radio', 'p0-1')
     const concurrent = addDelta('radio', 'p1-2')
