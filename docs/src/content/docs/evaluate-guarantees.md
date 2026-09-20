@@ -13,6 +13,9 @@ is not registry availability or a maintainer support pledge.
 
 ## Proof boundary
 
+Convergence answers whether replicas agree. Your application still decides whether
+the agreed result makes sense for its users and business rules.
+
 Lean proves convergence over mathematical models: a join-semilattice with bottom
 and equal delivered delta sets gives equal state, independent of order and duplicates.
 The model does not deliver missing updates; eventual recovery is a delivery assumption.
