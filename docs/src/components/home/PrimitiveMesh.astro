@@ -1,0 +1,75 @@
+---
+const replicas = [{ name: 'A', x: 20, y: 15 }, { name: 'B', x: 400, y: 15 }, { name: 'C', x: 210, y: 295 }];
+---
+
+<figure class="primitive-mesh" data-primitive-mesh>
+  <figcaption>
+    <span class="eyebrow">Inside the sync · G-Counter</span>
+    <h2>Share counts. Don’t count them twice.</h2>
+    <p>A counted 2. B counted 3. C counted 0. Each replica keeps the largest count seen for each source, then adds those counts: <strong>2 + 3 + 0 = 5.</strong></p>
+  </figcaption>
+  <svg viewBox="0 0 600 400" role="img" aria-labelledby="counter-title counter-desc">
+    <title id="counter-title">Three replicas share G-Counter coordinates</title>
+    <desc id="counter-desc">After exchange, replicas A, B and C each store A:2, B:3, C:0, giving total 5. Messages carrying A:2 and B:3 travel through the mesh. Repeated delivery leaves the total unchanged.</desc>
+    <g class="wires" fill="none"><path d="M110 140 L490 140 L300 295 Z" /></g>
+    {replicas.map(({ name, x, y }) => <g transform={`translate(${x} ${y})`} data-counter-replica>
+      <rect width="180" height="90" rx="12" />
+      <text x="90" y="26" class="node-name">Replica {name}</text>
+      <text x="90" y="53">A:2 · B:3 · C:0</text>
+      <text x="90" y="78" class="total">Total 5</text>
+    </g>)}
+    <g class="packet packet-ab" data-counter-packet><rect x="-39" y="-19" width="78" height="38" rx="19" /><text y="7">A:2</text></g>
+    <g class="packet packet-bc" data-counter-packet><rect x="-39" y="-19" width="78" height="38" rx="19" /><text y="7">B:3</text></g>
+    <g class="packet packet-ca" data-counter-packet><rect x="-39" y="-19" width="78" height="38" rx="19" /><text y="7">A:2</text></g>
+    <text x="300" y="185" class="mesh-label">Total stays 5</text>
+  </svg>
+  <p class="explanation">Shown after all counts arrive. Messages can travel again; merging the same counts does not add them again. Illustration of the data rule; your app supplies delivery and storage.</p>
+  <button type="button" data-counter-playback hidden>Pause counter animation</button>
+</figure>
+
+<style>
+  .primitive-mesh { margin: 2rem 0; padding: clamp(1rem, 3vw, 2rem); border: 1px solid var(--sm-line); border-radius: .8rem; background: var(--sm-panel); }
+  .primitive-mesh .eyebrow { color: var(--sm-accent); font-size: .8rem; font-weight: 650; }
+  .primitive-mesh h2 { margin: .5rem 0; font-size: clamp(1.3rem, 3vw, 1.8rem); }
+  .primitive-mesh p { max-width: 65ch; line-height: 1.6; }
+  svg { display: block; width: 100%; max-width: 660px; margin: 1rem auto; overflow: visible; }
+  text { fill: var(--sm-text); font: 22px var(--sm-font); text-anchor: middle; }
+  rect { fill: var(--sm-bg); stroke: var(--sm-line); stroke-width: 2; }
+  .node-name, .total { font-weight: 650; }
+  .total { fill: var(--sm-accent); }
+  .wires { stroke: var(--sm-muted); stroke-width: 2; stroke-dasharray: 5 7; }
+  .packet rect { fill: var(--sm-bg); stroke: var(--sm-accent); }
+  .packet text { fill: var(--sm-accent); font-weight: 700; }
+  .packet-ab { transform: translate(300px, 140px); }
+  .packet-bc { transform: translate(424px, 194px); }
+  .packet-ca { transform: translate(176px, 194px); }
+  .mesh-label { font-size: 20px; }
+  .explanation { color: var(--sm-muted); font-size: .85rem; }
+  button { font: inherit; color: var(--sm-text); background: var(--sm-bg); border: 1px solid var(--sm-line); border-radius: .3rem; padding: .4rem .7rem; cursor: pointer; }
+  button:focus-visible { outline: 3px solid var(--sm-accent); outline-offset: 3px; }
+  [hidden] { display: none; }
+  @media (prefers-reduced-motion: no-preference) {
+    [data-running='true'] .packet { animation: exchange 4s linear infinite; }
+    .packet-ab { --from: translate(110px, 140px); --to: translate(490px, 140px); }
+    .packet-bc { --from: translate(466px, 160px); --to: translate(343px, 260px); }
+    .packet-ca { --from: translate(257px, 260px); --to: translate(134px, 160px); }
+    @keyframes exchange { from { transform: var(--from); } to { transform: var(--to); } }
+  }
+</style>
+
+<script>
+  for (const mesh of document.querySelectorAll<HTMLElement>('[data-primitive-mesh]')) {
+    const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const playback = mesh.querySelector<HTMLButtonElement>('[data-counter-playback]')!;
+    let paused = false;
+    function schedule() {
+      mesh.dataset.running = String(!paused && !motion.matches && !document.hidden);
+      playback.hidden = motion.matches;
+      playback.textContent = paused ? 'Play counter animation' : 'Pause counter animation';
+    }
+    playback.addEventListener('click', () => { paused = !paused; schedule(); });
+    motion.addEventListener('change', schedule);
+    document.addEventListener('visibilitychange', schedule);
+    schedule();
+  }
+</script>
