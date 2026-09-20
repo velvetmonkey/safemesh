@@ -58,6 +58,19 @@ fn bootstrap_generating_source_is_in_history() {
     );
     // Anchor at the code checkout, even when BOOTFIXTURE_DIR selects a scratch
     // corpus. An existing object alone is insufficient: it must be a HEAD ancestor.
+    let object = std::process::Command::new("git")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args(["cat-file", "-t", sha])
+        .output()
+        .expect("bootstrap provenance requires git and repository history");
+    assert!(
+        object.status.success() && object.stdout == b"commit\n",
+        "{}: generating source {sha} must name an existing commit object; \
+         found {:?}: {}. Use a full-history checkout (CI fetch-depth: 0)",
+        readme.display(),
+        String::from_utf8_lossy(&object.stdout).trim(),
+        String::from_utf8_lossy(&object.stderr).trim()
+    );
     let result = std::process::Command::new("git")
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .args(["merge-base", "--is-ancestor", sha, "HEAD"])
