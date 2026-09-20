@@ -31,6 +31,10 @@ for (const width of [1280, 390]) for (const reducedMotion of ['no-preference', '
       assert.match(await page.getByRole('status').innerText(), /Replayed.*5/);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       assert.equal(await page.locator('h1').count(), 1);
+      assert.equal(await page.locator('h1').getAttribute('id'), '_top');
+      const eyebrow = await page.locator('.sm-eyebrow').boundingBox();
+      const nav = await page.locator('.sm-header').boundingBox();
+      assert.ok(eyebrow.y >= nav.y + nav.height, 'header must not overlap hero');
       if (process.env.SCREENSHOT_DIR) {
         await mkdir(process.env.SCREENSHOT_DIR, { recursive: true });
         await page.evaluate(() => scrollTo(0, 0));
