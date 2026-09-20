@@ -91,3 +91,83 @@ test('without JavaScript the full illustration is readable', async () => {
     assert.match(await page.locator('[data-mesh]').innerText(), /Neither addition is lost/);
   } finally { await browser.close(); }
 });
+
+async function assertCounterData(page) {
+  const mesh = page.locator('[data-primitive-mesh]');
+  assert.equal(await mesh.isVisible(), true);
+  assert.match(await mesh.innerText(), /2 \+ 3 \+ 0 = 5/);
+  const replicas = mesh.locator('[data-counter-replica]');
+  assert.equal(await replicas.count(), 3);
+  for (const [i, replica] of (await replicas.all()).entries()) {
+    assert.equal(await replica.isVisible(), true);
+    assert.match(await replica.textContent(), new RegExp(`Replica ${'ABC'[i]}`));
+    assert.match(await replica.textContent(), /A:2 · B:3 · C:0/);
+    assert.match(await replica.textContent(), /Total 5/);
+  }
+  const packets = mesh.locator('[data-counter-packet]');
+  assert.deepEqual(await packets.locator('text').allTextContents(), ['A:2', 'B:3', 'A:2']);
+  for (const packet of await packets.all()) assert.equal(await packet.isVisible(), true);
+}
+
+for (const width of [1280, 390]) for (const reducedMotion of ['no-preference', 'reduce']) {
+  test(`counter data and motion: ${width}px ${reducedMotion}`, async () => {
+    const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, headless: true });
+    try {
+      const page = await browser.newPage({ viewport: { width, height: 900 }, reducedMotion });
+      await page.goto(url);
+      await assertCounterData(page);
+      const mesh = page.locator('[data-primitive-mesh]');
+      await mesh.scrollIntoViewIfNeeded();
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no horizontal overflow');
+      const intro = await page.locator('.sm-hero-intro').innerText();
+      for (const language of ['Rust', 'TypeScript/JavaScript', 'WASM', 'Python', 'C.']) assert.ok(intro.includes(language));
+      assert.match(await page.locator('.sm-hero-intro a').getAttribute('href'), /\/using-safemesh\/$/);
+      const transforms = [];
+      const frames = [];
+      for (let i = 0; i < 3; i++) {
+        if (i) await page.waitForTimeout(1000);
+        transforms.push(await mesh.locator('[data-counter-packet]').first().evaluate(el => getComputedStyle(el).transform));
+        if (process.env.SCREENSHOT_DIR) {
+          const { mkdir } = await import('node:fs/promises');
+          await mkdir(process.env.SCREENSHOT_DIR, { recursive: true });
+          frames.push(await mesh.screenshot({ path: `${process.env.SCREENSHOT_DIR}/${width}-${reducedMotion}-${i + 1}.png`, animations: 'allow' }));
+        }
+      }
+      if (reducedMotion === 'reduce') {
+        assert.equal(new Set(transforms).size, 1);
+        assert.equal(await page.locator('[data-story-step]:visible').count(), 3);
+        assert.equal(await mesh.locator('[data-counter-playback]').isVisible(), false);
+        assert.equal(await mesh.locator('[data-counter-packet]').first().evaluate(el => getComputedStyle(el).animationName), 'none');
+      } else {
+        assert.equal(new Set(transforms).size, 3, 'labelled data must actually move');
+        if (frames.length) assert.ok(!frames[0].equals(frames[1]) && !frames[1].equals(frames[2]), 'rendered frames differ');
+        await mesh.locator('[data-counter-playback]').click();
+        assert.equal(await mesh.getAttribute('data-running'), 'false');
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        await assertCounterData(page);
+        assert.equal(await page.locator('[data-story-step]:visible').count(), 3);
+        await page.emulateMedia({ reducedMotion: 'no-preference' });
+        await mesh.locator('[data-counter-playback]').click();
+        assert.equal(await mesh.getAttribute('data-running'), 'true');
+      }
+      if (process.env.SCREENSHOT_DIR) {
+        await page.emulateMedia({ reducedMotion });
+        await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/${width}-${reducedMotion}-page.png`, fullPage: true });
+      }
+      console.log(JSON.stringify({ width, reducedMotion, transforms }));
+      // Physical tamper: the same content assertion must reject a missing coordinate.
+      await mesh.locator('[data-counter-replica] text').nth(1).evaluate(el => el.textContent = 'missing data');
+      await assert.rejects(() => assertCounterData(page), /A:2/);
+    } finally { await browser.close(); }
+  });
+}
+
+test('counter illustration is complete without JavaScript', async () => {
+  const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, headless: true });
+  try {
+    const page = await browser.newPage({ javaScriptEnabled: false, viewport: { width: 390, height: 800 } });
+    await page.goto(url);
+    await assertCounterData(page);
+    assert.equal(await page.locator('[data-counter-playback]').isVisible(), false);
+  } finally { await browser.close(); }
+});
