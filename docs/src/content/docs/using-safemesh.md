@@ -53,7 +53,7 @@ For an application-owned record containing multiple deltas, see [Nesting deltas]
 
 ## Rust
 
-Run the [Rust gold path](/safemesh/getting-started/#rust-gold-path) first. Its
+Run the [Rust gold path](/safemesh/persist-and-restart/#rust-gold-path) first. Its
 standalone Cargo project consumes the crate by path. This is its complete source,
 including imports, assertions, malformed-input handling and exercise cleanup.
 The checkout’s `examples/gold-path/rust/src/main.rs` and displayed block are
@@ -370,7 +370,7 @@ The C ABI has carrier operations and a G-Counter delta-to-wire helper, **no repl
 
 For new UTF-8 OR-Set writers, use the allocated path. SafeMesh fixes the writer
 count and author at creation and allocates each add token through the Rust core.
-Follow the [TypeScript gold path](/safemesh/getting-started/#typescript-gold-path-node)
+Follow the [TypeScript gold path](/safemesh/persist-and-restart/#typescript-gold-path-node)
 to build the Node package and run the complete program below in two processes.
 It saves an identity file, imports it in the new process, allocates another add,
 and saves and checks the latest identity before releasing the handles.
@@ -415,7 +415,7 @@ demonstrates that alternative.
 
 The following gold path exercises the recommended allocated-writer API:
 
-Run the [TypeScript gold path](/safemesh/getting-started/#typescript-gold-path-node)
+Run the [TypeScript gold path](/safemesh/persist-and-restart/#typescript-gold-path-node)
 to build the local Node package, compile this program with `tsc` and execute it.
 It imports the real generated declarations and calls the Rust core through WASM.
 The checkout’s `examples/gold-path/typescript/` contains these exact files,
@@ -588,7 +588,7 @@ explores partition and recovery. For a browser/bundler entry point, see the
 [browser example](/safemesh/examples/#browser-interactive-convergence) and the
 [WASM wrapper guide](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-wasm/README.md).
 Node execution does not establish browser support; consult the
-[measured environments and exclusions](/safemesh/getting-started/#environments-run).
+[measured environments and exclusions](/safemesh/evaluate-guarantees/#environments-run).
 
 ## Python
 

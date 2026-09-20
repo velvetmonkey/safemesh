@@ -17,7 +17,12 @@ export default defineConfig({
     components: { Header: './src/components/Header.astro' },
     sidebar: [
       { label: 'Orientation', slug: '' },
-      { label: 'Getting started', slug: 'getting-started' },
+      { label: 'Getting started', items: [
+        { label: 'Try a merge', slug: 'getting-started' },
+        { label: 'Persist and restart', slug: 'persist-and-restart' },
+        { label: 'Connect replicas', slug: 'connect-replicas' },
+        { label: 'Evaluate guarantees', slug: 'evaluate-guarantees' },
+      ] },
       { label: 'Concepts', slug: 'concepts' },
       { label: 'Architecture', slug: 'architecture' },
       { label: 'The proof and its boundary', slug: 'proof' },
