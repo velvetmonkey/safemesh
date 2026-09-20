@@ -485,13 +485,19 @@ function applyDeltaToPeer(peer: Peer, delta: MeshDelta): Peer {
 
 function maybeRunAntiEntropy(sim: Simulation): Simulation {
   if (sim.antiEntropyMs <= 0 || sim.now < sim.nextAntiEntropyAt) return sim
-  if (sim.partitioned) return sim
   return runAntiEntropy(sim)
 }
 
 function runAntiEntropy(sim: Simulation): Simulation {
   // Scheduling is guarded by maybeRunAntiEntropy; manual repair also works when it is off.
-  if (sim.partitioned) return sim
+  if (sim.partitioned) {
+    return appendLog(
+      sim,
+      'Anti-entropy cannot cross the partition yet',
+      'partition',
+      'anti-entropy skipped: partition still enabled',
+    )
+  }
 
   // Equal carrier states can still have different record histories. Only matching
   // version vectors (cached by convergence), or identical logs, prove no work remains.

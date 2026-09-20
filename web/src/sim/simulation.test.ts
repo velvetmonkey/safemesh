@@ -107,9 +107,35 @@ describe('mesh simulation', () => {
   it.each([0, 5000])('manual repair respects a partition with interval %i', (interval) => {
     let sim = setPartitioned(setAntiEntropyMs(createSimulation(2), interval), true)
     sim = dropNextPacket(bumpCounter(sim, 0))
+    const before = sim
     sim = runAntiEntropyNow(sim)
+    expect(sim.log).toHaveLength(before.log.length + 1)
+    expect(sim.log.slice(1)).toEqual(before.log)
+    expect(sim.log[0]).toMatchObject({
+      plain: 'Anti-entropy cannot cross the partition yet',
+      tone: 'partition',
+      technical: 'anti-entropy skipped: partition still enabled',
+    })
+    expect(sim.queue).toEqual(before.queue)
     expect(convergence(sim).gcounterValues).toEqual([1, 0])
     expect(sim.antiEntropyMs).toBe(interval)
+  })
+
+  it('logs scheduled repair blocked by a partition when the deadline arrives', () => {
+    const before = setPartitioned(setAntiEntropyMs(createSimulation(2), 5000), true)
+    const early = tick(before, 4999)
+    expect(early.log).toEqual(before.log)
+    const due = tick(early, 1)
+    expect(due.log).toHaveLength(before.log.length + 1)
+    expect(due.log.slice(1)).toEqual(before.log)
+    expect(due.log[0]).toMatchObject({
+      at: 5000,
+      plain: 'Anti-entropy cannot cross the partition yet',
+      tone: 'partition',
+      technical: 'anti-entropy skipped: partition still enabled',
+    })
+    expect(due.peers).toEqual(before.peers)
+    expect(due.queue).toEqual(before.queue)
   })
 
   it('runs scheduled repair at each deadline, never before it', () => {
