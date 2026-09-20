@@ -15,6 +15,7 @@ pub(super) const TAG_PNCOUNTER_INC: u8 = 0x11;
 pub(super) const TAG_PNCOUNTER_DEC: u8 = 0x12;
 pub(super) const TAG_GSET_U64: u8 = 0x20;
 pub(super) const TAG_ORSET_U64: u8 = 0x30;
+pub(super) const TAG_ORSET_STRING: u8 = 0x35;
 pub(super) const TAG_ORSET_ADD_U64: u8 = 0x31;
 pub(super) const TAG_ORSET_REMOVE_U64: u8 = 0x32;
 pub(super) const TAG_ORSET_ADD_STRING: u8 = 0x33;
@@ -101,6 +102,7 @@ wire_schema!(GSet<u64>, "safemesh/gset-u64/v1", false);
 wire_schema!(OrSetDelta<u64, u64>, "safemesh/orset-delta-u64-u64/v1", false);
 wire_schema!(OrSetDelta<String, u64>, "safemesh/orset-delta-utf8-u64/v1", false);
 wire_schema!(OrSet<u64, u64>, "safemesh/orset-u64-u64/v1", false);
+wire_schema!(OrSet<String, u64>, "safemesh/orset-utf8-u64/v1", false);
 wire_schema!(Rga<u64, u64>, "safemesh/rga-u64-u64/v1", false);
 wire_schema!(
     LwwRegisterDelta<u64>,

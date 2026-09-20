@@ -950,3 +950,115 @@ fn decode_budget_boundaries_duplicates_and_default() {
         assert_eq!(BUDGET_PAYLOAD_READS.with(|reads| reads.get()), 0);
     }
 }
+
+#[test]
+fn orset_utf8_state_roundtrips_canonically_with_tombstones() {
+    roundtrip(OrSet::<String, u64>::new());
+    let entries = ["", "ASCII", "é", "東京", "🦀", "e\u{301}", "a\0b"];
+    let mut state = OrSet::new();
+    for (token, element) in entries.iter().enumerate() {
+        state.add(element.to_string(), token as u64);
+    }
+    state.add("ASCII".to_string(), u64::MAX);
+    state.apply_remove([1, 99]);
+    let mut reversed = OrSet::new();
+    reversed.apply_remove([99, 1]);
+    reversed.add("ASCII".to_string(), u64::MAX);
+    for (token, element) in entries.iter().enumerate().rev() {
+        reversed.add(element.to_string(), token as u64);
+    }
+    assert_eq!(state.to_wire_bytes(), reversed.to_wire_bytes());
+    roundtrip(state.clone());
+    roundtrip(Record {
+        id: RecordId {
+            replica: 1,
+            sequence: 1,
+        },
+        delta: state.clone(),
+    });
+    let log = wire_log(
+        None,
+        &[Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 1,
+            },
+            delta: state,
+        }],
+    );
+    roundtrip(log.clone());
+    assert_eq!(
+        EventLog::<OrSet<u64, u64>>::from_wire_bytes(&log.to_wire_bytes().unwrap()),
+        Err(WireError::DeltaTypeMismatch)
+    );
+}
+
+#[test]
+fn orset_utf8_state_rejects_corruption_and_other_tags() {
+    let mut state = OrSet::new();
+    state.add("é".to_string(), 1);
+    state.add("🦀".to_string(), 2);
+    let original = state.to_wire_bytes().unwrap();
+    // Tag + u32 add count precede the first string's u32 byte length.
+    let mut scratch = original.clone();
+    assert_eq!(scratch[5], 2);
+    scratch[5] = 1;
+    assert_eq!(
+        OrSet::<String, u64>::from_wire_bytes(&scratch),
+        Err(WireError::InvalidUtf8)
+    );
+    scratch[5] = original[5];
+    assert_eq!(OrSet::<String, u64>::from_wire_bytes(&scratch), Ok(state));
+    scratch[5] = 255;
+    assert_eq!(
+        OrSet::<String, u64>::from_wire_bytes(&scratch),
+        Err(WireError::UnexpectedEof)
+    );
+    for end in 0..original.len() {
+        assert!(OrSet::<String, u64>::from_wire_bytes(&original[..end]).is_err());
+    }
+    let mut trailing = original.clone();
+    trailing.push(0);
+    assert_eq!(
+        OrSet::<String, u64>::from_wire_bytes(&trailing),
+        Err(WireError::TrailingBytes)
+    );
+    for tag in 0..=u8::MAX {
+        if tag != original[0] {
+            let mut bad = original.clone();
+            bad[0] = tag;
+            assert_eq!(
+                OrSet::<String, u64>::from_wire_bytes(&bad),
+                Err(WireError::InvalidTag)
+            );
+        }
+    }
+    assert_eq!(
+        OrSet::<u64, u64>::from_wire_bytes(&original),
+        Err(WireError::InvalidTag)
+    );
+    assert_eq!(
+        safemesh_crdt::OrSetDelta::<String, u64>::from_wire_bytes(&original),
+        Err(WireError::InvalidTag)
+    );
+}
+
+proptest::proptest! {
+    #[test]
+    fn orset_utf8_state_preserves_arbitrary_strings(
+        entries in proptest::collection::vec((proptest::prelude::any::<String>(), proptest::prelude::any::<u64>()), 0..32),
+        tombstones in proptest::collection::vec(proptest::prelude::any::<u64>(), 0..32),
+        left in proptest::prelude::any::<String>(),
+        right in proptest::prelude::any::<String>(),
+    ) {
+        let mut state = OrSet::new();
+        for (element, token) in entries { state.add(element, token); }
+        state.apply_remove(tombstones);
+        roundtrip(state);
+        let mut a = OrSet::new();
+        a.add(left.clone(), 7);
+        let mut b = OrSet::new();
+        b.add(right.clone(), 7);
+        proptest::prop_assert_eq!(a.to_wire_bytes().unwrap() == b.to_wire_bytes().unwrap(), left == right);
+    }
+}
