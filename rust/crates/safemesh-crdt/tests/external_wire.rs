@@ -67,8 +67,8 @@ impl WireDecode for Custom {
     }
 }
 impl WireSchema for Custom {
-    fn wire_schema() -> Vec<u8> {
-        b"example.org/wirecursor-test/v1".to_vec()
+    fn wire_schema() -> std::borrow::Cow<'static, [u8]> {
+        std::borrow::Cow::Borrowed(b"example.org/wirecursor-test/v1")
     }
 }
 
