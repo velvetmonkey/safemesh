@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Build the Rust surface with rustdoc into the already-built documentation site."""
+import ctypes
 import os
 import re
 from pathlib import Path
@@ -106,6 +107,26 @@ class LocalReference(HTMLParser):
         self.parts.append(f'<!{decl}>')
 
 
+def publish_reference(staged, destination):
+    """Publish on Linux without ever unlinking an existing reference directory."""
+    if not destination.exists():
+        staged.replace(destination)
+        return
+    # rename/replace cannot overwrite a nonempty directory. Linux's
+    # renameat2(RENAME_EXCHANGE) exchanges both names atomically on the same
+    # filesystem, leaving the old tree at staged for cleanup after publication.
+    # Fail closed if libc, the kernel or the filesystem lacks this operation.
+    renameat2 = ctypes.CDLL(None, use_errno=True).renameat2
+    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p,
+                         ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    renameat2.restype = ctypes.c_int
+    at_fdcwd, rename_exchange = -100, 2
+    if renameat2(at_fdcwd, os.fsencode(staged), at_fdcwd,
+                 os.fsencode(destination), rename_exchange) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), str(destination))
+
+
 def main():
     if sys.platform != "linux":
         raise SystemExit("Build the Rust reference on Linux to include local-writer APIs.")
@@ -116,20 +137,31 @@ def main():
     # A fresh target prevents removed or renamed items surviving incremental docs.
     # Each future surface can generate into its own dist/reference/<surface> path.
     with tempfile.TemporaryDirectory(prefix='rustdoc-', dir=target) as build:
-        env = dict(os.environ, CARGO_TARGET_DIR=build)
+        env = dict(os.environ, CARGO_TARGET_DIR=build,
+                   RUSTDOCFLAGS=os.environ.get('RUSTDOCFLAGS', '') + ' -D warnings')
+        # Cargo gives encoded flags precedence over RUSTDOCFLAGS.
+        if 'CARGO_ENCODED_RUSTDOCFLAGS' in env:
+            flags = env['CARGO_ENCODED_RUSTDOCFLAGS']
+            env['CARGO_ENCODED_RUSTDOCFLAGS'] = (
+                flags + ('\x1f' if flags else '') + '-D\x1fwarnings')
         subprocess.run([
-            'cargo', 'doc', '--manifest-path', str(docs.parent / 'rust/Cargo.toml'),
+            'cargo', 'doc', '--locked', '--manifest-path', str(docs.parent / 'rust/Cargo.toml'),
             '-p', 'safemesh-crdt', '--all-features', '--no-deps',
         ], env=env, check=True)
-        if destination.exists():
-            shutil.rmtree(destination)
-        shutil.copytree(Path(build) / 'doc', destination)
-    for page in destination.rglob('*.html'):
-        rendered = LocalReference((docs / 'reference-header.html').read_text())
-        rendered.root_page = page.parent == destination
-        rendered.feed(page.read_text())
-        rendered.close()
-        page.write_text(''.join(rendered.parts))
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        # Stage beside the destination so the final rename stays on one filesystem.
+        with tempfile.TemporaryDirectory(prefix='.rust-reference-',
+                                         dir=destination.parent) as staging:
+            staged = Path(staging) / 'rust'
+            shutil.copytree(Path(build) / 'doc', staged)
+            for page in staged.rglob('*.html'):
+                rendered = LocalReference((docs / 'reference-header.html').read_text())
+                rendered.root_page = page.parent == staged
+                rendered.feed(page.read_text())
+                rendered.close()
+                page.write_text(''.join(rendered.parts))
+            publish_reference(staged, destination)
+            # The staging context now removes the OLD tree, if there was one.
     # The reference is public, navigable documentation, including linked source.
     # Keep the linked rustdoc Help and Settings routes discoverable too; their
     # explanatory text is public, while interactive controls are not search content.
