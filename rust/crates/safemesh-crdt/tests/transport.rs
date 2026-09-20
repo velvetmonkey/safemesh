@@ -17,6 +17,54 @@ fn deliver_all(
 }
 
 #[test]
+fn dropped_envelopes_can_be_drained_and_cleared() {
+    let mut transport: InMemoryTransport<GCounterDelta> = InMemoryTransport::new();
+    transport.subscribe(1);
+    transport.subscribe(2);
+    assert_eq!(transport.drain_dropped(), 0);
+    transport.clear_dropped();
+
+    transport.send(1, 2, vec![]).unwrap();
+    for expected in 1..=3 {
+        transport.drop_next_send();
+        transport.send(1, 2, vec![]).unwrap();
+        assert_eq!(transport.dropped_len(), expected);
+        assert_eq!(transport.dropped_len(), expected);
+    }
+    let before = transport.dropped_len();
+    assert_eq!(transport.drain_dropped(), before);
+    assert_eq!(transport.dropped_len(), 0);
+    assert_eq!(transport.drain_dropped(), 0);
+
+    for expected in 1..=2 {
+        transport.drop_next_send();
+        transport.send(1, 2, vec![]).unwrap();
+        assert_eq!(transport.dropped_len(), expected);
+    }
+    transport.clear_dropped();
+    assert_eq!(transport.dropped_len(), 0);
+    transport.clear_dropped();
+    assert_eq!(transport.drain_dropped(), 0);
+    assert_eq!(transport.pending_len(), 1);
+    let incoming = transport.drain(2);
+    assert_eq!(incoming.len(), 1);
+    assert_eq!((incoming[0].from, incoming[0].to), (1, 2));
+    assert!(incoming[0].records.is_empty());
+
+    transport.drop_next_send();
+    transport.duplicate_next_send();
+    transport.clear_dropped();
+    assert_eq!(transport.drain_dropped(), 0);
+    transport.send(1, 2, vec![]).unwrap();
+    assert_eq!(transport.dropped_len(), 1);
+    assert_eq!(transport.pending_len(), 0);
+    assert_eq!(transport.drain_dropped(), 1);
+    transport.send(1, 2, vec![]).unwrap();
+    assert_eq!(transport.drain(2).len(), 2);
+    assert_eq!(transport.dropped_len(), 0);
+}
+
+#[test]
 fn transport_requires_subscription_and_connectivity() {
     let mut transport: InMemoryTransport<GCounterDelta> = InMemoryTransport::new();
     let records = vec![];
