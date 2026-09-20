@@ -1,0 +1,19 @@
+---
+title: Merge illustrations
+description: Illustrations of independent edits, delivery and replay; not a running integration.
+template: splash
+---
+import ConvergenceExplainer from '../../components/home/ConvergenceExplainer.astro';
+import PrimitiveMesh from '../../components/home/PrimitiveMesh.astro';
+
+export const labUrl = import.meta.env.LAB_URL || 'http://localhost:4173/';
+
+<div class="sm-hero">
+  <div>
+    <p class="sm-hero-intro">Build apps that work offline and merge shared data when they reconnect with SafeMesh, from Rust, TypeScript/JavaScript via WASM, Python or C. <a href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/using-safemesh/`}>Each language path has its own scope</a>.</p>
+    <p>These illustrations explain independent edits and repeated delivery. For a running counter, return to the <a href={import.meta.env.BASE_URL}>homepage</a>; for failure modes, open the <a href={labUrl}>Lab</a>.</p>
+  </div>
+  <ConvergenceExplainer labUrl={labUrl} />
+</div>
+
+<PrimitiveMesh />

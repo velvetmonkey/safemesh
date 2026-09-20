@@ -6,21 +6,21 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const cards = [
   {
     number: '01 / BUILD',
-    title: 'Save. Restart. Sync.',
-    body: 'One counter, one membership set, two processes. Start with output you can recognize.',
+    title: 'Count offline events',
+    body: 'G-Counter combines each writer’s cumulative tally. Receiving the same state again leaves the count unchanged.',
     href: `${base}/getting-started/`,
   },
   {
     number: '02 / UNDERSTAND',
-    title: 'See why they agree.',
-    body: 'Learn what a delta carries, what a merge does, and why a duplicate is harmless.',
+    title: 'Share set membership',
+    body: 'OR-Set tracks adds and observed removes. Learn what happens when devices edit the same member offline.',
     href: `${base}/concepts/`,
   },
   {
     number: '03 / CONNECT',
-    title: 'Use your own stack.',
-    body: 'Choose Rust, TypeScript, Python or C. See exactly which responsibilities are yours.',
-    href: `${base}/using-safemesh/`,
+    title: 'Persist, restart, reconnect',
+    body: 'Continue to the Linux durable Rust walkthrough or the TypeScript guide with application-owned storage.',
+    href: `${base}/getting-started/`,
   },
 ];
 ---
@@ -28,10 +28,8 @@ const cards = [
 <nav class="sm-path-grid" aria-label="Choose a starting point">
   {cards.map((card) => (
     <a class="sm-path-card" href={card.href}>
-      <span class="sm-path-number">{card.number}</span>
       <span class="sm-path-card-title">{card.title}</span>
       <p>{card.body}</p>
-      <span class="sm-path-arrow" aria-hidden="true">↗</span>
     </a>
   ))}
 </nav>

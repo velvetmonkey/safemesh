@@ -14,7 +14,7 @@ export default defineConfig({
   integrations: [starlight({
     title: 'SafeMesh documentation',
     customCss: ['./src/styles/safemesh.css'],
-    components: { Header: './src/components/Header.astro' },
+    components: { Header: './src/components/Header.astro', PageTitle: './src/components/PageTitle.astro' },
     sidebar: [
       { label: 'Orientation', slug: '' },
       { label: 'Getting started', slug: 'getting-started' },

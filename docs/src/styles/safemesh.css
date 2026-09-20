@@ -329,3 +329,19 @@
     .sm-button, .sm-path-card, .sm-replica-core { transition: background-color .18s, border-color .18s; }
   }
 }
+
+/* The homepage mock: direct task copy and an immediately readable code card. */
+:root:has(.sm-counter-card) { --sl-content-width: 74rem; }
+body:has(.sm-counter-card) .main-pane > main > .content-panel:first-child { display: none; }
+.sm-hero .sm-hero-tagline { font-size: clamp(2.3rem, 4vw, 3.3rem); line-height: 1.12; margin: 1.5rem 0 1.8rem; }
+.sm-eyebrow { font-size: .75rem; letter-spacing: .12em; color: var(--sm-accent); font-weight: 750; margin: 0; }
+.sm-hero .sm-hero-note, .sm-languages { font: .8rem/1.7 var(--sm-font); margin-top: 1.3rem; }
+.sm-guarantees { display: flex; align-items: center; justify-content: space-between; gap: 2rem; border-top: 1px solid var(--sm-line); padding: 1.5rem 0; font-size: .8rem; }
+.sm-guarantees p { margin: 0; }
+.sm-guarantees a { white-space: nowrap; }
+.sm-path-card { border-right: 0; }
+.sm-path-card-title { font-size: 1rem; margin-top: 0; }
+@media (max-width: 45rem) {
+  .sm-guarantees { align-items: start; flex-direction: column; gap: .7rem; }
+  .sm-hero { margin-bottom: 2rem; }
+}

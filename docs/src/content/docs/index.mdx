@@ -5,30 +5,19 @@ template: splash
 ---
 
 import Hero from '../../components/home/Hero.astro';
-import ConvergenceExplainer from '../../components/home/ConvergenceExplainer.astro';
-import PrimitiveMesh from '../../components/home/PrimitiveMesh.astro';
+import CounterCard from '../../components/home/CounterCard.astro';
 import PathGrid from '../../components/home/PathGrid.astro';
 import EvidenceBridge from '../../components/home/EvidenceBridge.astro';
 
-export const labUrl = import.meta.env.LAB_URL || 'http://localhost:4173/';
-
-<nav class="sm-docs-entry" aria-label="Documentation entry">
-  <div>
-    <strong>SafeMesh documentation</strong>
-    <p>Start with Getting started, then follow the table of contents in the sidebar
-    (Menu on mobile).</p>
-  </div>
-  <a class="sm-button sm-button-primary" href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/getting-started/`}>
-    Next: Getting started <span aria-hidden="true">→</span>
-  </a>
-</nav>
-
 <div class="sm-hero">
   <Hero />
-  <ConvergenceExplainer labUrl={labUrl} />
+  <CounterCard />
 </div>
 
-<PrimitiveMesh />
+<div class="sm-guarantees">
+  <p>Lean proves merge models. Rust is tested against generated cases.<br />Bindings, storage and transport sit outside those proofs.</p>
+  <a href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/claims/`}>Guarantees &amp; limits →</a>
+</div>
 
 <PathGrid />
 
@@ -118,6 +107,8 @@ For decrementing stock, use [paired supported G-Counters](/safemesh/getting-star
 Application schemas, custom durable replicas and delivery/retry/storage remain caller-owned.
 
 ## More entry points
+
+- [Merge illustrations](/safemesh/merge-illustrations/): independent edits, delivery and repeated state.
 
 - [Project entrypoint](https://github.com/velvetmonkey/safemesh/blob/main/README.md): the repository's current status and package instructions.
 - [Generated API reference](/safemesh/reference/): the Rust core API from this build's source.
