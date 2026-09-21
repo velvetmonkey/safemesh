@@ -248,3 +248,64 @@ fn queued_packets_wait_for_link_healing() {
     assert_eq!(transport.drain(1)[0].from, 2);
     assert_eq!(transport.pending_len(), 0);
 }
+
+// Rejected sends preserve armed faults until a valid send consumes them.
+fn sm70_rejected_fault(drop: bool, rejection: u8) {
+    let mut transport: InMemoryTransport<GCounterDelta> = InMemoryTransport::new();
+    for peer in [1, 2, 3, 4] {
+        transport.subscribe(peer);
+    }
+    transport.set_connected(1, 2, false);
+    if drop {
+        transport.drop_next_send();
+    } else {
+        transport.duplicate_next_send();
+    }
+    let (from, to, error) = match rejection {
+        0 => (9, 2, TransportError::NotSubscribed { peer: 9 }),
+        1 => (1, 9, TransportError::NotSubscribed { peer: 9 }),
+        _ => (1, 2, TransportError::Disconnected { from: 1, to: 2 }),
+    };
+    assert_eq!(transport.send(from, to, vec![]), Err(error));
+    assert_eq!(transport.pending_len(), 0);
+    assert_eq!(transport.dropped_len(), 0);
+    transport.send(3, 4, vec![]).unwrap();
+    assert_eq!(transport.pending_len(), if drop { 0 } else { 2 });
+    assert_eq!(transport.dropped_len(), usize::from(drop));
+    let incoming = transport.drain(4);
+    for envelope in incoming {
+        assert_eq!((envelope.from, envelope.to), (3, 4));
+    }
+    transport.send(3, 4, vec![]).unwrap();
+    assert_eq!(transport.pending_len(), 1, "fault is one-shot");
+}
+
+#[test]
+fn sm70_invariant_drop_sender() {
+    sm70_rejected_fault(true, 0);
+}
+
+#[test]
+fn sm70_invariant_drop_recipient() {
+    sm70_rejected_fault(true, 1);
+}
+
+#[test]
+fn sm70_invariant_drop_disconnected() {
+    sm70_rejected_fault(true, 2);
+}
+
+#[test]
+fn sm70_invariant_duplicate_sender() {
+    sm70_rejected_fault(false, 0);
+}
+
+#[test]
+fn sm70_invariant_duplicate_recipient() {
+    sm70_rejected_fault(false, 1);
+}
+
+#[test]
+fn sm70_invariant_duplicate_disconnected() {
+    sm70_rejected_fault(false, 2);
+}
