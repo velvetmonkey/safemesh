@@ -65,6 +65,31 @@ fn dropped_envelopes_can_be_drained_and_cleared() {
 }
 
 #[test]
+fn self_link_disconnect_is_observable_and_heals() {
+    let mut transport: InMemoryTransport<GCounterDelta> = InMemoryTransport::new();
+    assert!(transport.is_connected(7, 7));
+    transport.subscribe(7);
+    transport.send(7, 7, vec![]).unwrap();
+
+    transport.set_connected(7, 7, false);
+    assert!(!transport.is_connected(7, 7));
+    assert_eq!(
+        transport.send(7, 7, vec![]),
+        Err(TransportError::Disconnected { from: 7, to: 7 })
+    );
+    assert!(transport.drain(7).is_empty());
+    assert_eq!(transport.pending_len(), 1);
+    assert!(transport.is_connected(7, 8));
+    assert!(transport.is_connected(8, 8));
+
+    transport.set_connected(7, 7, true);
+    assert!(transport.is_connected(7, 7));
+    assert_eq!(transport.drain(7).len(), 1);
+    assert_eq!(transport.pending_len(), 0);
+    assert!(transport.send(7, 7, vec![]).is_ok());
+}
+
+#[test]
 fn transport_requires_subscription_and_connectivity() {
     let mut transport: InMemoryTransport<GCounterDelta> = InMemoryTransport::new();
     let records = vec![];
