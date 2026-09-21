@@ -43,9 +43,11 @@ The Linux x64 wheel reaches CPython 3.8 and later through PyO3's `abi3-py38` sta
 artifact reach, not a claim that every interpreter or platform is tested; macOS, Windows, ARM64,
 and other operating-system or architecture combinations have no artifact evidence here.
 
-The checked distribution coordinate is CPython 3.11 on Linux x64. The `full-gate` CI job runs on the
-`ubuntu-latest` runner label with Python 3.11; this is the tested set, and maintainer support remains
-unknown.
+The Python CI matrix builds and installs the wheel, runs the Rust-side binding tests, and executes
+the data-mule demo and two-app inventory sync test on Linux x64 with CPython 3.8, 3.9, 3.10, 3.11,
+3.12, 3.13, and 3.14. The `full-gate` job requires every matrix entry to pass and retains its Python
+3.11 distribution smoke test. Both use `ubuntu-latest`; other interpreters and future Python minors
+are not established by this matrix, and maintainer support remains unknown.
 
 ```sh
 cd rust/crates/safemesh-python
