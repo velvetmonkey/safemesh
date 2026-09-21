@@ -127,7 +127,8 @@ fn anti_entropy_recovers_after_drop_duplicate_and_reorder() {
             replica: 1,
             tally: 1,
         },
-    );
+    )
+    .unwrap();
     left.append(
         &mut safemesh_crdt::GCounter::new(3),
         1,
@@ -135,7 +136,8 @@ fn anti_entropy_recovers_after_drop_duplicate_and_reorder() {
             replica: 1,
             tally: 2,
         },
-    );
+    )
+    .unwrap();
     left.append(
         &mut safemesh_crdt::GCounter::new(3),
         1,
@@ -143,7 +145,8 @@ fn anti_entropy_recovers_after_drop_duplicate_and_reorder() {
             replica: 1,
             tally: 3,
         },
-    );
+    )
+    .unwrap();
 
     let mut transport = InMemoryTransport::new();
     transport.subscribe(1);
@@ -175,7 +178,8 @@ fn partition_then_heal_uses_versions_to_cover_missing_records() {
             replica: 1,
             tally: 1,
         },
-    );
+    )
+    .unwrap();
 
     let mut transport = InMemoryTransport::new();
     transport.subscribe(1);
@@ -251,8 +255,12 @@ fn version_exchange_public_api_round_trip() {
 #[test]
 fn version_exchange_public_api_trust_boundary() {
     let mut source = EventLog::new();
-    source.append(&mut safemesh_crdt::GSet::new(), 7, 1u64);
-    source.append(&mut safemesh_crdt::GSet::new(), 7, 2u64);
+    source
+        .append(&mut safemesh_crdt::GSet::new(), 7, 1u64)
+        .unwrap();
+    source
+        .append(&mut safemesh_crdt::GSet::new(), 7, 2u64)
+        .unwrap();
     let empty_receiver = EventLog::<u64>::new();
     let lie = rebuild(&BTreeMap::from([(7, 2)]), &BTreeSet::new());
     assert_eq!(source.since(empty_receiver.version()).len(), 2);
