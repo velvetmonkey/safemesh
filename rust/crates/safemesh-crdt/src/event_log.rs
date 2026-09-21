@@ -21,6 +21,26 @@ pub enum AppendError {
     InvalidRecord(WireError),
 }
 
+impl core::fmt::Display for AppendError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::SequenceExhausted => {
+                f.write_str("cannot append: replica sequence number exhausted")
+            }
+            Self::InvalidRecord(error) => write!(f, "cannot append invalid record: {error}"),
+        }
+    }
+}
+
+impl core::error::Error for AppendError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::InvalidRecord(error) => Some(error),
+            Self::SequenceExhausted => None,
+        }
+    }
+}
+
 /// Append-only, deduplicating event log for CRDT deltas.
 /// Equality compares log data, excluding the in-memory first-admission binding flag.
 #[derive(Clone, Debug)]
