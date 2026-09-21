@@ -18,6 +18,7 @@ export default defineConfig({
     sidebar: [
       { label: 'Orientation', slug: '' },
       { label: 'Getting started', slug: 'getting-started' },
+      { label: 'Pinned Rust source install', slug: 'pinned-source' },
       { label: 'Concepts', slug: 'concepts' },
       { label: 'Architecture', slug: 'architecture' },
       { label: 'The proof and its boundary', slug: 'proof' },

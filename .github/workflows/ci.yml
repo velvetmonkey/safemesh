@@ -90,6 +90,7 @@ jobs:
           version="$(python3 -c 'import tomllib; print(tomllib.load(open("rust/Cargo.toml", "rb"))["workspace"]["package"]["rust-version"])')"
           rustup toolchain install "$version" --profile minimal
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          cargo install wasm-pack --version 0.15.0 --locked
 
       - name: "FLOOR COMPILE: Build workspace and laws at declared Rust floor"
         working-directory: rust
@@ -239,7 +240,9 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Install declared MSRV
-        run: rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
+        run: |
+          rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
+          cargo install wasm-pack --version 0.15.0 --locked
 
       - name: Test at declared MSRV
         working-directory: rust
