@@ -2,6 +2,19 @@ import { describe, expect, it } from 'vitest'
 import { addDelta, applyORSetDelta, bottomORSet, mergeORSet, observedTokens, readORSet, removeDelta } from './orset'
 
 describe('OR-Set mirror', () => {
+  it('observes only live tokens while retaining tombstones', () => {
+    const state = [addDelta('water', 'live'), addDelta('water', 'removed'), removeDelta(['removed'])]
+      .reduce(applyORSetDelta, bottomORSet())
+
+    expect(observedTokens(state, 'water')).toEqual(['live'])
+    expect(observedTokens(state, 'absent')).toEqual([])
+    const removed = applyORSetDelta(state, removeDelta(observedTokens(state, 'water')))
+    expect(observedTokens(removed, 'water')).toEqual([])
+    expect(readORSet(removed)).toEqual([])
+    expect(removed.adds).toEqual({ live: 'water', removed: 'water' })
+    expect(removed.tombstones).toEqual({ live: true, removed: true })
+  })
+
   it('keeps a concurrent fresh add visible after an observed-token remove', () => {
     const first = addDelta('radio', 'p0-1')
     const concurrent = addDelta('radio', 'p1-2')

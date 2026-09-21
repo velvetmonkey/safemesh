@@ -223,6 +223,15 @@ fn orset_delta_is_add_wins() {
         set.observed_tokens(&"medkit")
             .into_iter()
             .collect::<Vec<_>>(),
+        vec![11]
+    );
+    assert!(set.observed_tokens(&"absent").is_empty());
+    set.apply_remove(set.observed_tokens(&"medkit"));
+    assert!(set.observed_tokens(&"medkit").is_empty());
+    assert!(!set.contains(&"medkit"));
+    assert_eq!(set.adds().len(), 2);
+    assert_eq!(
+        set.tombstones().iter().copied().collect::<Vec<_>>(),
         vec![10, 11]
     );
 }
