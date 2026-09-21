@@ -1,145 +1,156 @@
-/* Generated TypeScript surface for SafeMesh WASM bindings. */
-export class SafeMeshGCounter {
-  constructor(replicas: number);
-  applyBump(replica: number, tally: bigint): void;
-  tryApplyBump(replica: number, tally: bigint): void;
-  value(): bigint;
-  state(): BigUint64Array;
-  free(): void;
-}
-
-export class SafeMeshGCounterReplica {
-  constructor(replicaId: bigint, replicas: number);
-  appendBump(counterReplica: number, tally: bigint): Uint8Array;
-  mergeRecordBytes(bytes: Uint8Array): void;
-  mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate" | "collision")[];
-  logBytes(): Uint8Array;
-  versionFor(replica: bigint): bigint;
-  value(): bigint;
-  sameStateAs(other: SafeMeshGCounterReplica): boolean;
-  state(): BigUint64Array;
-  free(): void;
-}
-
-export class SafeMeshLwwRegister {
-  constructor();
-  set(timestamp: bigint, replica: bigint, value: bigint): void;
-  hasValue(): boolean;
-  valueOr(defaultValue: bigint): bigint;
-  timestampOr(defaultValue: bigint): bigint;
-  writerReplicaOr(defaultValue: bigint): bigint;
-  free(): void;
-}
+/* tslint:disable */
+/* eslint-disable */
 
 export class SafeMeshEnableWinsFlag {
-  constructor();
-  enable(token: bigint): void;
-  disableObserved(): void;
-  value(): boolean;
-  enabledTokens(): BigUint64Array;
-  tombstoneTokens(): BigUint64Array;
-  free(): void;
-}
-
-export class SafeMeshLwwMap {
-  constructor();
-  set(key: bigint, timestamp: bigint, replica: bigint, value: bigint): void;
-  remove(key: bigint, timestamp: bigint, replica: bigint): void;
-  hasKey(key: bigint): boolean;
-  valueOr(key: bigint, defaultValue: bigint): bigint;
-  visibleKeys(): BigUint64Array;
-  entryKeys(): BigUint64Array;
-  removalKeys(): BigUint64Array;
-  free(): void;
-}
-
-export class SafeMeshLwwRegisterReplica {
-  constructor(replicaId: bigint);
-  appendSet(timestamp: bigint, writerReplica: bigint, value: bigint): Uint8Array;
-  mergeRecordBytes(bytes: Uint8Array): void;
-  mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate" | "collision")[];
-  logBytes(): Uint8Array;
-  versionFor(replica: bigint): bigint;
-  hasValue(): boolean;
-  valueOr(defaultValue: bigint): bigint;
-  timestampOr(defaultValue: bigint): bigint;
-  writerReplicaOr(defaultValue: bigint): bigint;
-  free(): void;
-}
-
-export class SafeMeshLwwMapReplica {
-  constructor(replicaId: bigint);
-  appendSet(key: bigint, timestamp: bigint, writerReplica: bigint, value: bigint): Uint8Array;
-  appendRemove(key: bigint, timestamp: bigint, writerReplica: bigint): Uint8Array;
-  mergeRecordBytes(bytes: Uint8Array): void;
-  mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate" | "collision")[];
-  logBytes(): Uint8Array;
-  versionFor(replica: bigint): bigint;
-  hasKey(key: bigint): boolean;
-  valueOr(key: bigint, defaultValue: bigint): bigint;
-  visibleKeys(): BigUint64Array;
-  entryKeys(): BigUint64Array;
-  removalKeys(): BigUint64Array;
-  free(): void;
+    free(): void;
+    [Symbol.dispose](): void;
+    disableObserved(): void;
+    enable(token: bigint): void;
+    enabledTokens(): BigUint64Array;
+    constructor();
+    tombstoneTokens(): BigUint64Array;
+    value(): boolean;
 }
 
 export class SafeMeshEnableWinsFlagReplica {
-  constructor(replicaId: bigint);
-  appendEnable(token: bigint): Uint8Array;
-  appendDisableObserved(): Uint8Array;
-  mergeRecordBytes(bytes: Uint8Array): void;
-  mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate" | "collision")[];
-  logBytes(): Uint8Array;
-  versionFor(replica: bigint): bigint;
-  value(): boolean;
-  enabledTokens(): BigUint64Array;
-  tombstoneTokens(): BigUint64Array;
-  free(): void;
+    free(): void;
+    [Symbol.dispose](): void;
+    appendDisableObserved(): Uint8Array;
+    appendEnable(token: bigint): Uint8Array;
+    enabledTokens(): BigUint64Array;
+    logBytes(): Uint8Array;
+    /**
+     * Return one core admission verdict for every decoded input record.
+     */
+    mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate" | "collision")[];
+    mergeRecordBytes(bytes: Uint8Array): void;
+    constructor(replica_id: bigint);
+    tombstoneTokens(): BigUint64Array;
+    value(): boolean;
+    versionFor(replica: bigint): bigint;
 }
 
-export class SafeMeshStringOrSetReplica {
-  static createAllocated(writers: bigint, author: bigint): SafeMeshStringOrSetReplica;
-  appendAllocatedAdd(element: string): Uint8Array;
-  exportIdentity(): Uint8Array;
-  static importIdentity(bytes: Uint8Array): SafeMeshStringOrSetReplica;
-  constructor(replicaId: bigint);
-  appendAdd(element: string, token: bigint): Uint8Array;
-  appendRemoveObserved(element: string): Uint8Array;
-  mergeRecordBytes(bytes: Uint8Array): "accepted" | "duplicate";
-  mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate" | "collision")[];
-  logBytes(): Uint8Array;
-  versionFor(replica: bigint): bigint;
-  elements(): string[];
-  observedTokens(element: string): BigUint64Array;
-  tombstones(): BigUint64Array;
-  addEntries(): SafeMeshStringOrSetAddEntry[];
-  static inspectRecordBytes(bytes: Uint8Array): SafeMeshStringOrSetRecord;
-  free(): void;
+export class SafeMeshGCounter {
+    free(): void;
+    [Symbol.dispose](): void;
+    applyBump(replica: number, tally: bigint): void;
+    constructor(replicas: number);
+    state(): BigUint64Array;
+    /**
+     * Apply a coordinate delta, throwing a descriptive Error for a bad index.
+     */
+    tryApplyBump(replica: number, tally: bigint): void;
+    /**
+     * The counter total as an exact `bigint`, also past the 64-bit boundary.
+     */
+    value(): bigint;
 }
 
-export class SafeMeshStringOrSetAddEntry {
-  element(): string;
-  token(): bigint;
-  free(): void;
+export class SafeMeshGCounterReplica {
+    free(): void;
+    [Symbol.dispose](): void;
+    appendBump(counter_replica: number, tally: bigint): Uint8Array;
+    logBytes(): Uint8Array;
+    /**
+     * Return one core admission verdict for every decoded input record.
+     */
+    mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate" | "collision")[];
+    mergeRecordBytes(bytes: Uint8Array): void;
+    constructor(replica_id: bigint, replicas: number);
+    /**
+     * Compare the Rust-core carrier states without reproducing its equality in JavaScript.
+     */
+    sameStateAs(other: SafeMeshGCounterReplica): boolean;
+    state(): BigUint64Array;
+    /**
+     * The counter total as an exact `bigint`, also past the 64-bit boundary.
+     */
+    value(): bigint;
+    versionFor(replica: bigint): bigint;
 }
 
-export class SafeMeshStringOrSetRecord {
-  replica(): bigint;
-  sequence(): bigint;
-  deltaKind(): "add" | "remove";
-  element(): string | undefined;
-  token(): bigint | undefined;
-  tokens(): BigUint64Array;
-  free(): void;
+/**
+ * State-based WASM replica using the core's canonical full-carrier wire codec.
+ * Operations return snapshots, not event-log records.
+ */
+export class SafeMeshGSetReplica {
+    free(): void;
+    [Symbol.dispose](): void;
+    insert(value: bigint): Uint8Array;
+    mergeStateBytes(bytes: Uint8Array): void;
+    constructor();
+    stateBytes(): Uint8Array;
 }
 
-export function gcounterDeltaToWire(replica: number, tally: bigint): Uint8Array;
-export function lwwRegisterDeltaToWire(timestamp: bigint, replica: bigint, value: bigint): Uint8Array;
-export function lwwMapSetDeltaToWire(key: bigint, timestamp: bigint, replica: bigint, value: bigint): Uint8Array;
-export function lwwMapRemoveDeltaToWire(key: bigint, timestamp: bigint, replica: bigint): Uint8Array;
-export function enableWinsFlagEnableDeltaToWire(token: bigint): Uint8Array;
-export function enableWinsFlagDisableDeltaToWire(tokens: BigUint64Array): Uint8Array;
+export class SafeMeshLwwMap {
+    free(): void;
+    [Symbol.dispose](): void;
+    entryKeys(): BigUint64Array;
+    hasKey(key: bigint): boolean;
+    constructor();
+    removalKeys(): BigUint64Array;
+    remove(key: bigint, timestamp: bigint, replica: bigint): void;
+    set(key: bigint, timestamp: bigint, replica: bigint, value: bigint): void;
+    valueOr(key: bigint, default_value: bigint): bigint;
+    visibleKeys(): BigUint64Array;
+}
 
+export class SafeMeshLwwMapReplica {
+    free(): void;
+    [Symbol.dispose](): void;
+    appendRemove(key: bigint, timestamp: bigint, writer_replica: bigint): Uint8Array;
+    appendSet(key: bigint, timestamp: bigint, writer_replica: bigint, value: bigint): Uint8Array;
+    entryKeys(): BigUint64Array;
+    hasKey(key: bigint): boolean;
+    logBytes(): Uint8Array;
+    /**
+     * Return one core admission verdict for every decoded input record.
+     */
+    mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate" | "collision")[];
+    mergeRecordBytes(bytes: Uint8Array): void;
+    constructor(replica_id: bigint);
+    removalKeys(): BigUint64Array;
+    /**
+     * Canonical complete carrier, including hidden entries and remove dots.
+     */
+    stateBytes(): Uint8Array;
+    valueOr(key: bigint, default_value: bigint): bigint;
+    versionFor(replica: bigint): bigint;
+    visibleKeys(): BigUint64Array;
+}
+
+export class SafeMeshLwwRegister {
+    free(): void;
+    [Symbol.dispose](): void;
+    hasValue(): boolean;
+    constructor();
+    set(timestamp: bigint, replica: bigint, value: bigint): void;
+    timestampOr(default_value: bigint): bigint;
+    valueOr(default_value: bigint): bigint;
+    writerReplicaOr(default_value: bigint): bigint;
+}
+
+export class SafeMeshLwwRegisterReplica {
+    free(): void;
+    [Symbol.dispose](): void;
+    appendSet(timestamp: bigint, writer_replica: bigint, value: bigint): Uint8Array;
+    hasValue(): boolean;
+    logBytes(): Uint8Array;
+    /**
+     * Return one core admission verdict for every decoded input record.
+     */
+    mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate" | "collision")[];
+    mergeRecordBytes(bytes: Uint8Array): void;
+    constructor(replica_id: bigint);
+    timestampOr(default_value: bigint): bigint;
+    valueOr(default_value: bigint): bigint;
+    versionFor(replica: bigint): bigint;
+    writerReplicaOr(default_value: bigint): bigint;
+}
+
+/**
+ * Observed-remove set of u64 elements and u64 tokens; tokens are global to the set.
+ */
 export class SafeMeshOrSet {
     free(): void;
     [Symbol.dispose](): void;
@@ -158,3 +169,169 @@ export class SafeMeshOrSet {
     observedTokens(element: bigint): BigUint64Array;
     tombstones(): BigUint64Array;
 }
+
+export class SafeMeshPnCounterReplica {
+    free(): void;
+    [Symbol.dispose](): void;
+    appendDec(counter_replica: number, tally: bigint): Uint8Array;
+    appendInc(counter_replica: number, tally: bigint): Uint8Array;
+    logBytes(): Uint8Array;
+    /**
+     * Return one core admission verdict for every decoded input record.
+     */
+    mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate" | "collision")[];
+    mergeRecordBytes(bytes: Uint8Array): void;
+    constructor(replica_id: bigint, replicas: number);
+    /**
+     * Compare the Rust-core carrier states without reproducing its equality in JavaScript.
+     */
+    sameStateAs(other: SafeMeshPnCounterReplica): boolean;
+    /**
+     * Complete carrier: increment coordinates followed by decrement coordinates.
+     */
+    state(): BigUint64Array;
+    /**
+     * The counter total as an exact `bigint`, also past the 64-bit boundary.
+     */
+    value(): bigint;
+    versionFor(replica: bigint): bigint;
+}
+
+/**
+ * State-based WASM replica using the core's canonical full-carrier wire codec.
+ * Operations return snapshots, not event-log records.
+ */
+export class SafeMeshRgaReplica {
+    free(): void;
+    [Symbol.dispose](): void;
+    delete(position: bigint): Uint8Array;
+    insert(position: bigint, value: bigint): Uint8Array;
+    mergeStateBytes(bytes: Uint8Array): void;
+    constructor();
+    stateBytes(): Uint8Array;
+}
+
+/**
+ * One `(element, token)` add pair as the core `OrSet` stores it.
+ */
+export class SafeMeshStringOrSetAddEntry {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    element(): string;
+    token(): bigint;
+}
+
+/**
+ * A record decoded by the core, exposed field by field so a consumer can label
+ * record bytes without keeping its own metadata alongside them.
+ *
+ * `deltaKind()` is `"add"` (then `element()` and `token()` are set, `tokens()`
+ * is empty) or `"remove"` (then `tokens()` carries the tombstoned tokens and
+ * `element()`/`token()` are undefined).
+ */
+export class SafeMeshStringOrSetRecord {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    deltaKind(): "add" | "remove";
+    element(): string | undefined;
+    replica(): bigint;
+    sequence(): bigint;
+    token(): bigint | undefined;
+    tokens(): BigUint64Array;
+}
+
+/**
+ * Observed-remove set of UTF-8 string elements and u64 tokens, carried by an
+ * event log so records can be replayed, deduplicated and repaired from a log.
+ *
+ * Every value is computed by `safemesh_crdt::OrSet<String, u64>` and
+ * `safemesh_crdt::EventLog`. The optional allocated lifecycle checks ownership
+ * and holds a live-author claim within this WASM instance. Tokens remain global
+ * to the set, exactly as in `SafeMeshOrSet`.
+ */
+export class SafeMeshStringOrSetReplica {
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Every `(element, token)` add pair the core holds, tombstoned or not.
+     */
+    addEntries(): SafeMeshStringOrSetAddEntry[];
+    /**
+     * Append an add record for `(element, token)` and return its wire bytes.
+     * Allocated instances reject caller tokens; use appendAllocatedAdd instead.
+     */
+    appendAdd(element: string, token: bigint): Uint8Array;
+    /**
+     * Allocate through the Rust ownership rule, append, and return record bytes.
+     */
+    appendAllocatedAdd(element: string): Uint8Array;
+    /**
+     * Append a remove record tombstoning every token this replica has observed
+     * for `element`, as the core reports them, and return its wire bytes.
+     */
+    appendRemoveObserved(element: string): Uint8Array;
+    /**
+     * Create an allocated writer. At most one allocated handle per author may
+     * live in this WASM instance; free() releases it. The caller provides any
+     * cross-instance/process exclusion and must not restore stale snapshots.
+     */
+    static createAllocated(writers: bigint, author: bigint): SafeMeshStringOrSetReplica;
+    /**
+     * Live members, sorted and unique, as the core computes them.
+     */
+    elements(): string[];
+    /**
+     * Export fixed writer configuration, next sequence, and the complete log.
+     * The bytes are caller-persisted identity storage, not a transport packet.
+     */
+    exportIdentity(): Uint8Array;
+    /**
+     * Allocation/history consistency check; failure never creates a fresh writer.
+     * A self-consistent stale snapshot is not detected. There is no disk I/O.
+     */
+    static importIdentity(bytes: Uint8Array): SafeMeshStringOrSetReplica;
+    /**
+     * Decode record bytes through the core without admitting them anywhere.
+     *
+     * Named after `mergeRecordBytes`: same input, but this only looks. It does
+     * not touch any replica, so it is static.
+     */
+    static inspectRecordBytes(bytes: Uint8Array): SafeMeshStringOrSetRecord;
+    logBytes(): Uint8Array;
+    /**
+     * Return one core admission verdict for every decoded input record.
+     */
+    mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate" | "collision")[];
+    /**
+     * Decode one record and admit it through the core event log.
+     *
+     * Returns the core's admission verdict: `"accepted"` when the record was
+     * new and applied, `"duplicate"` when a record with the same identity and
+     * payload was already in the log (state does not move). A record whose
+     * identity is known but whose payload differs throws `record ID collision`.
+     */
+    mergeRecordBytes(bytes: Uint8Array): "accepted" | "duplicate";
+    constructor(replica_id: bigint);
+    /**
+     * Every token ever added for `element`, including tombstoned ones.
+     */
+    observedTokens(element: string): BigUint64Array;
+    tombstones(): BigUint64Array;
+    versionFor(replica: bigint): bigint;
+}
+
+export function enableWinsFlagDisableDeltaToWire(tokens: BigUint64Array): Uint8Array;
+
+export function enableWinsFlagEnableDeltaToWire(token: bigint): Uint8Array;
+
+export function gcounterDeltaToWire(replica: number, tally: bigint): Uint8Array;
+
+export function initialize_bindings(): void;
+
+export function lwwMapRemoveDeltaToWire(key: bigint, timestamp: bigint, replica: bigint): Uint8Array;
+
+export function lwwMapSetDeltaToWire(key: bigint, timestamp: bigint, replica: bigint, value: bigint): Uint8Array;
+
+export function lwwRegisterDeltaToWire(timestamp: bigint, replica: bigint, value: bigint): Uint8Array;
