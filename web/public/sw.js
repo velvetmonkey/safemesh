@@ -15,8 +15,8 @@ const APP_SHELL = typeof BUILD === 'undefined'
   ? ['', 'README.md', 'manifest.webmanifest', 'pwa-icon.svg', 'favicon.svg'].map((name) => BASE + name)
   : BUILD.assets
 
-// The Lab's four guided scenarios run locally; runtime extras are optional.
-// Allow eight extras per scenario without retaining an unbounded browsing history.
+// The Lab's guided scenarios run locally; runtime extras are optional.
+// Keep a shared budget of 32 recent extras to bound browsing history independently of scenario count.
 const MAX_RUNTIME_ENTRIES = 32
 let runtimeWrites = Promise.resolve()
 
