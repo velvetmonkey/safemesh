@@ -214,6 +214,10 @@ Probe (read only): `python3 rust/crates/safemesh-crdt/tests/identity_probe.py
 PATH.log PATH.transaction PATH.fence PATH.state`. Container suffix is explicit;
 it does not establish an identity. The probe validates log length/CRC before
 reporting its embedded schema. It is not a complete semantic decoder.
+The `Check bootstrap file identities` step in SafeMesh CI (`full-gate`) runs the
+probe on all nine retained files and checks successful exit, the output header,
+and each exact identity row. An unreadable file or changed identity fails with
+the file path, including a changed frame tag that the probe reports as unparsed.
 
 Load-failure regression: `load_failures` copies both durable stores and measures
 23-byte truncation, CRC corruption, tag 0x02 and tag 0xff. Current errors are

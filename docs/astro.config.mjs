@@ -23,6 +23,7 @@ export default defineConfig({
         { label: 'Connect replicas', slug: 'connect-replicas' },
         { label: 'Evaluate guarantees', slug: 'evaluate-guarantees' },
       ] },
+      { label: 'Pinned Rust source install', slug: 'pinned-source' },
       { label: 'Concepts', slug: 'concepts' },
       { label: 'Architecture', slug: 'architecture' },
       { label: 'The proof and its boundary', slug: 'proof' },

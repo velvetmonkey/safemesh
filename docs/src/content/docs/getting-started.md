@@ -3,6 +3,9 @@ title: Try a merge — main (unreleased)
 description: Merge two independent counter updates and replay one without counting it twice.
 ---
 
+For a standalone Rust dependency tied to an exact tested source revision, use the
+[pinned source-build recipe](/safemesh/pinned-source/).
+
 Keep local copies, make independent changes, then merge them. This first program
 combines `4` and `2` into `6`; repeating the merge leaves `6` unchanged.
 

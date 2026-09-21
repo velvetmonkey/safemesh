@@ -38,6 +38,7 @@ pub trait TransportAdapter<D> {
 /// useful for CI and demos; it is not a real radio/network adapter.
 /// Packets queued before a partition remain pending until the link heals;
 /// draining a peer delivers only packets whose links are currently connected.
+/// All links, including self-links, start connected and can be partitioned.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InMemoryTransport<D> {
     subscribed: BTreeSet<u64>,
@@ -91,6 +92,18 @@ impl<D> InMemoryTransport<D> {
         self.dropped.len()
     }
 
+    /// Returns the number of dropped envelopes and clears them.
+    pub fn drain_dropped(&mut self) -> usize {
+        let count = self.dropped_len();
+        self.clear_dropped();
+        count
+    }
+
+    /// Discards all dropped envelopes without changing pending deliveries or faults.
+    pub fn clear_dropped(&mut self) {
+        self.dropped.clear();
+    }
+
     fn link(a: u64, b: u64) -> (u64, u64) {
         if a <= b {
             (a, b)
@@ -125,7 +138,7 @@ impl<D: Clone> TransportAdapter<D> for InMemoryTransport<D> {
     }
 
     fn is_connected(&self, a: u64, b: u64) -> bool {
-        a == b || !self.disconnected.contains(&Self::link(a, b))
+        !self.disconnected.contains(&Self::link(a, b))
     }
 
     fn send(&mut self, from: u64, to: u64, records: Vec<Record<D>>) -> Result<(), TransportError> {
@@ -158,10 +171,9 @@ impl<D: Clone> TransportAdapter<D> for InMemoryTransport<D> {
         let mut incoming = Vec::new();
         let mut retained = Vec::new();
         for envelope in self.queue.drain(..) {
-            let connected = envelope.from == envelope.to
-                || !self
-                    .disconnected
-                    .contains(&Self::link(envelope.from, envelope.to));
+            let connected = !self
+                .disconnected
+                .contains(&Self::link(envelope.from, envelope.to));
             if envelope.to == peer && connected {
                 incoming.push(envelope);
             } else {

@@ -80,12 +80,19 @@ impl<D> EventLog<D> {
         self.replica_count
     }
 
-    pub fn append<C: Crdt<Delta = D>>(&mut self, state: &mut C, replica: u64, delta: D) -> RecordId
+    /// Allocate a fresh ID and admit a delta without applying it to `state`.
+    /// Returns an error if the sequence is exhausted or admission refuses the
+    /// record; in either case the log and state remain unchanged.
+    pub fn append<C: Crdt<Delta = D>>(
+        &mut self,
+        state: &mut C,
+        replica: u64,
+        delta: D,
+    ) -> Result<RecordId, AppendError>
     where
         D: PartialEq,
     {
         self.append_with(state, replica, delta, |_, _| {})
-            .expect("event log append refused or sequence exhausted")
     }
 
     /// Allocate a fresh ID, then use the same gate as incoming records.

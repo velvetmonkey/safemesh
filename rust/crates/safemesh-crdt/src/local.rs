@@ -47,6 +47,44 @@ pub struct LocalReplica<C: Crdt> {
     last_sequence: u64,
 }
 
+// A private tentative insertion. Only version metadata (bounded by configured
+// writers), not historical payloads or the identity index, is copied. Restore on
+// errors and unwinding; persistence still sees the exact candidate EventLog.
+struct PendingInsertion<'a, D> {
+    log: &'a mut EventLog<D>,
+    id: RecordId,
+    len: usize,
+    replica_count: Option<usize>,
+    shape_bound: bool,
+    version: Option<crate::VersionVector>,
+}
+impl<'a, D> PendingInsertion<'a, D> {
+    fn new(log: &'a mut EventLog<D>, id: RecordId) -> Self {
+        Self {
+            id,
+            len: log.records.len(),
+            replica_count: log.replica_count,
+            shape_bound: log.shape_bound,
+            version: Some(log.version.clone()),
+            log,
+        }
+    }
+    fn accept(mut self) {
+        self.version = None;
+    }
+}
+impl<D> Drop for PendingInsertion<'_, D> {
+    fn drop(&mut self) {
+        if let Some(version) = self.version.take() {
+            self.log.seen.remove(&self.id);
+            self.log.records.truncate(self.len);
+            self.log.replica_count = self.replica_count;
+            self.log.shape_bound = self.shape_bound;
+            self.log.version = version;
+        }
+    }
+}
+
 impl<C: Crdt> Drop for LocalReplica<C> {
     fn drop(&mut self) {
         // Explicitly release our open-file-description lock before close. A
@@ -194,8 +232,8 @@ where
         if outcome != Admission::Accepted {
             return Ok(outcome);
         }
-        let mut candidate = self.log.clone();
-        let outcome = candidate.insert_record(&self.state, record.clone());
+        let candidate = PendingInsertion::new(&mut self.log, record.id);
+        let outcome = candidate.log.insert_record(&self.state, record.clone());
         let sequence = if record.id.replica == self.config.writer {
             self.last_sequence.max(record.id.sequence)
         } else {
@@ -204,9 +242,9 @@ where
         // Keep the OS lock but revoke writes before any fallible persistence.
         // An error (including an ambiguous rename/sync) cannot be renewed away.
         self.held = false;
-        commit(&candidate, sequence)?;
+        commit(candidate.log, sequence)?;
         self.state.apply_delta(record.delta);
-        self.log = candidate;
+        candidate.accept();
         self.last_sequence = sequence;
         self.held = true;
         Ok(outcome)
@@ -888,6 +926,32 @@ mod durable_tests {
         assert_eq!(r.log().records().len(), 128);
         assert_eq!(r.last_sequence, 128);
         assert_eq!(r.state().0, 128);
+        assert_eq!(
+            r.admit_committed(r.ticket(), record(129, 129), false, |log, sequence| {
+                assert_eq!(log.records().len(), 129);
+                assert_eq!(sequence, 129);
+                Ok(())
+            })
+            .unwrap(),
+            Admission::Accepted
+        );
+        assert_eq!(clones.get(), 1, "accepted writes must not clone history");
+        let before = r.log.version().clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = r.admit_committed(r.ticket(), record(130, 130), false, |_, _| {
+                panic!("commit unwind")
+            });
+        }));
+        assert!(result.is_err());
+        assert_eq!(r.log.records().len(), 129);
+        assert_eq!(r.log.version(), &before);
+        assert_eq!(r.state().0, 129);
+        assert_eq!(r.last_sequence, 129);
+        assert!(!r.held);
+        assert_eq!(
+            r.log.admission(&r.state, &record(130, 130)),
+            Admission::Accepted
+        );
     }
 
     fn read(root: &Path) -> CommittedTransaction {
@@ -1378,10 +1442,18 @@ mod durable_tests {
     fn durable_acknowledged_survives_set() {
         acknowledged_survives("set");
     }
-    fn failure<C: Crdt + std::fmt::Debug>(mut r: DurableReplica<C>, delta: C::Delta, boundary: u8)
-    where
+    fn failure<C: Crdt + std::fmt::Debug>(
+        mut r: DurableReplica<C>,
+        delta: C::Delta,
+        boundary: u8,
+        prior: Option<C::Delta>,
+    ) where
         C::Delta: OwnedDelta + Clone + PartialEq + WireEncode + WireSchema,
     {
+        if let Some(prior) = prior {
+            r.append(r.ticket(), prior).unwrap();
+        }
+        let version = r.log().version().clone();
         let state = format!("{:?}", r.state());
         let log = r.log().to_wire_bytes().unwrap();
         let allocation = r.allocation_bytes();
@@ -1394,6 +1466,7 @@ mod durable_tests {
         fault(0, false);
         assert_eq!(format!("{:?}", r.state()), state);
         assert_eq!(r.log().to_wire_bytes().unwrap(), log);
+        assert_eq!(r.log().version(), &version);
         assert_eq!(r.allocation_bytes(), allocation);
         assert!(matches!(
             r.append(ticket, delta.clone()),
@@ -1416,7 +1489,9 @@ mod durable_tests {
     }
     #[test]
     fn durable_io_failure_disables_writes() {
-        for boundary in 2..=6 {
+        for (boundary, populated) in
+            (2..=6).flat_map(|boundary| [false, true].map(|populated| (boundary, populated)))
+        {
             failure(
                 DurableReplica::counter(&root(), config()).unwrap(),
                 GCounterDelta {
@@ -1424,18 +1499,61 @@ mod durable_tests {
                     tally: 9,
                 },
                 boundary,
+                populated.then_some(GCounterDelta {
+                    replica: 0,
+                    tally: 1,
+                }),
             );
             failure(
                 DurableReplica::utf8_set(&root(), config()).unwrap(),
                 OrSetDelta::Add {
                     element: "東京".into(),
-                    token: 2,
+                    token: if populated { 4 } else { 2 },
                 },
                 boundary,
+                populated.then_some(OrSetDelta::Add {
+                    element: "prior".into(),
+                    token: 2,
+                }),
             );
             std::println!(
                 "controls=4,5 write/sync/uncertain-boundary={boundary} error+disabled=PASS"
             );
+        }
+        // Closing a remote gap can advance over several existing records.
+        // Failure must restore that prefix as well as the identity index.
+        for prior in [&[][..], &[2, 3][..]] {
+            let mut r = LocalReplica::counter(&root(), config()).unwrap();
+            let remote = |sequence| Record {
+                id: RecordId {
+                    replica: 1,
+                    sequence,
+                },
+                delta: GCounterDelta {
+                    replica: 1,
+                    tally: sequence,
+                },
+            };
+            for &sequence in prior {
+                assert_eq!(
+                    r.receive(r.ticket(), remote(sequence)).unwrap(),
+                    Admission::Accepted
+                );
+            }
+            let before = r.log().clone();
+            let state = r.state().clone();
+            assert!(matches!(
+                r.admit_committed(r.ticket(), remote(1), false, |log, sequence| {
+                    assert_eq!(log.version().get(1), prior.last().copied().unwrap_or(1));
+                    assert_eq!(sequence, 0);
+                    Err(LocalError::Io(io::Error::other("commit failed")))
+                }),
+                Err(LocalError::Io(_))
+            ));
+            assert_eq!(r.log(), &before);
+            assert_eq!(r.state(), &state);
+            assert_eq!(r.last_sequence, 0);
+            assert!(!r.held);
         }
     }
     #[test]
