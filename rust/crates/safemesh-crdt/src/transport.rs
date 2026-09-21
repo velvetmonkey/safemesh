@@ -91,6 +91,18 @@ impl<D> InMemoryTransport<D> {
         self.dropped.len()
     }
 
+    /// Returns the number of dropped envelopes and clears them.
+    pub fn drain_dropped(&mut self) -> usize {
+        let count = self.dropped_len();
+        self.clear_dropped();
+        count
+    }
+
+    /// Discards all dropped envelopes without changing pending deliveries or faults.
+    pub fn clear_dropped(&mut self) {
+        self.dropped.clear();
+    }
+
     fn link(a: u64, b: u64) -> (u64, u64) {
         if a <= b {
             (a, b)
