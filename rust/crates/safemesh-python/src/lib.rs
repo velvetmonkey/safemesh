@@ -5,8 +5,9 @@
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use safemesh_crdt::{
-    Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta, LwwMap,
-    LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, Record, WireDecode, WireEncode,
+    Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta, GSet, LwwMap,
+    LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, PnCounter, Record, Rga, WireDecode,
+    WireEncode,
 };
 
 // Reject bool at the Python boundary before any method body can mutate state.
@@ -1008,6 +1009,9 @@ mod py_lww_register_replica_python {
 fn safemesh_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGCounter>()?;
     m.add_class::<PyOrSet>()?;
+    m.add_class::<PyGSet>()?;
+    m.add_class::<PyPnCounter>()?;
+    m.add_class::<PyRga>()?;
     m.add_class::<PyGCounterReplica>()?;
     m.add_class::<PyLwwRegister>()?;
     m.add_class::<PyLwwRegisterReplica>()?;
@@ -1090,6 +1094,180 @@ impl PyOrSet {
     }
 }
 
+/// Python value wrapper over Rust `GSet<u64>`; no durable constructor is exposed by the core.
+#[pyclass(name = "GSet")]
+#[derive(Default)]
+pub struct PyGSet {
+    inner: GSet<u64>,
+}
+
+// PyO3 0.22 generates redundant PyErr conversions in its wrappers.
+#[allow(clippy::useless_conversion)]
+mod py_gset_python {
+    use super::*;
+    #[pymethods]
+    impl PyGSet {
+        #[new]
+        pub fn new() -> Self {
+            Self { inner: GSet::new() }
+        }
+
+        pub fn insert(&mut self, #[pyo3(from_py_with = "numeric")] element: u64) {
+            self.inner.insert(element);
+        }
+        pub fn contains(&self, #[pyo3(from_py_with = "numeric")] element: u64) -> bool {
+            self.inner.contains(&element)
+        }
+        pub fn elements(&self) -> Vec<u64> {
+            self.inner.elements().iter().copied().collect()
+        }
+
+        /// Merge full state; self-merge is an identity operation.
+        #[pyo3(name = "merge")]
+        pub fn merge_py(slf: &Bound<'_, Self>, other: &Bound<'_, Self>) -> PyResult<()> {
+            if slf.is(other) {
+                return Ok(());
+            }
+            let other = other.try_borrow()?;
+            slf.try_borrow_mut()?.inner.merge(&other.inner);
+            Ok(())
+        }
+    }
+}
+
+/// Python value wrapper over Rust `Rga<u64, u64>`; no durable constructor is exposed by the core.
+#[pyclass(name = "Rga")]
+#[derive(Default)]
+pub struct PyRga {
+    inner: Rga<u64, u64>,
+}
+
+// PyO3 0.22 generates redundant PyErr conversions in its wrappers.
+#[allow(clippy::useless_conversion)]
+mod py_rga_python {
+    use super::*;
+    #[pymethods]
+    impl PyRga {
+        #[new]
+        pub fn new() -> Self {
+            Self { inner: Rga::new() }
+        }
+
+        pub fn insert(
+            &mut self,
+            #[pyo3(from_py_with = "numeric")] position: u64,
+            #[pyo3(from_py_with = "numeric")] value: u64,
+        ) {
+            self.inner.insert(position, value);
+        }
+        pub fn delete(&mut self, #[pyo3(from_py_with = "numeric")] position: u64) {
+            self.inner.delete(position);
+        }
+        pub fn placed(&self) -> Vec<(u64, u64)> {
+            self.inner.placed().iter().copied().collect()
+        }
+        pub fn tombstones(&self) -> Vec<u64> {
+            self.inner.tombstones().iter().copied().collect()
+        }
+        pub fn live_entries(&self) -> Vec<(u64, u64)> {
+            self.inner.live_entries()
+        }
+        pub fn read_positions(&self) -> Vec<u64> {
+            self.inner.read_positions()
+        }
+
+        /// Merge full state; self-merge is an identity operation.
+        #[pyo3(name = "merge")]
+        pub fn merge_py(slf: &Bound<'_, Self>, other: &Bound<'_, Self>) -> PyResult<()> {
+            if slf.is(other) {
+                return Ok(());
+            }
+            let other = other.try_borrow()?;
+            slf.try_borrow_mut()?.inner.merge(&other.inner);
+            Ok(())
+        }
+    }
+}
+
+/// Python value wrapper over Rust `PnCounter`; no durable constructor is exposed by the core.
+#[pyclass(name = "PnCounter")]
+pub struct PyPnCounter {
+    inner: PnCounter,
+}
+
+// PyO3 0.22 generates redundant PyErr conversions in its wrappers.
+#[allow(clippy::useless_conversion)]
+mod py_pncounter_python {
+    use super::*;
+    #[pymethods]
+    impl PyPnCounter {
+        #[new]
+        pub fn new(#[pyo3(from_py_with = "numeric_replicas")] replicas: usize) -> Self {
+            Self {
+                inner: PnCounter::new(replicas),
+            }
+        }
+
+        /// Exact signed read, including totals outside the 64-bit range.
+        pub fn value(&self) -> i128 {
+            self.inner.value()
+        }
+        pub fn p_state(&self) -> Vec<u64> {
+            self.inner.p_state().to_vec()
+        }
+        pub fn n_state(&self) -> Vec<u64> {
+            self.inner.n_state().to_vec()
+        }
+
+        pub fn apply_inc(
+            &mut self,
+            #[pyo3(from_py_with = "numeric")] replica: usize,
+            #[pyo3(from_py_with = "numeric")] tally: u64,
+        ) -> PyResult<()> {
+            self.try_apply_inc(replica, tally)
+        }
+        pub fn try_apply_inc(
+            &mut self,
+            #[pyo3(from_py_with = "numeric")] replica: usize,
+            #[pyo3(from_py_with = "numeric")] tally: u64,
+        ) -> PyResult<()> {
+            self.inner
+                .try_apply_inc(replica, tally)
+                .map_err(|error| pyo3::exceptions::PyIndexError::new_err(format!("{error:?}")))
+        }
+
+        pub fn apply_dec(
+            &mut self,
+            #[pyo3(from_py_with = "numeric")] replica: usize,
+            #[pyo3(from_py_with = "numeric")] tally: u64,
+        ) -> PyResult<()> {
+            self.try_apply_dec(replica, tally)
+        }
+        pub fn try_apply_dec(
+            &mut self,
+            #[pyo3(from_py_with = "numeric")] replica: usize,
+            #[pyo3(from_py_with = "numeric")] tally: u64,
+        ) -> PyResult<()> {
+            self.inner
+                .try_apply_dec(replica, tally)
+                .map_err(|error| pyo3::exceptions::PyIndexError::new_err(format!("{error:?}")))
+        }
+
+        /// Merge full state; self-merge is an identity operation.
+        #[pyo3(name = "merge")]
+        pub fn merge_py(slf: &Bound<'_, Self>, other: &Bound<'_, Self>) -> PyResult<()> {
+            if slf.is(other) {
+                return Ok(());
+            }
+            let other = other.try_borrow()?;
+            slf.try_borrow_mut()?
+                .inner
+                .merge(&other.inner)
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(format!("{error:?}")))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1098,6 +1276,22 @@ mod tests {
     fn with_python<T>(f: impl FnOnce(Python<'_>) -> T) -> T {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(f)
+    }
+
+    #[test]
+    fn python_collection_wrappers() {
+        with_python(|py| {
+            let module = PyModule::new_bound(py, "safemesh_python").unwrap();
+            safemesh_python(&module).unwrap();
+            let globals = pyo3::types::PyDict::new_bound(py);
+            globals.set_item("sm", module).unwrap();
+            py.run_bound(
+                include_str!("../tests/collection_wrappers.py"),
+                Some(&globals),
+                None,
+            )
+            .unwrap();
+        });
     }
 
     #[test]

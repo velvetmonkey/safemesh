@@ -110,3 +110,46 @@ persists tombstones even before an add arrives, and a reused token affects every
 element carrying it. Observed tokens include tombstoned adds. Merge unions all
 adds and tombstones, and reads return sorted unique live members. This is the
 core's token semantics, including token reuse; the binding does not allocate IDs.
+
+## Experimental value classes
+
+`GSet`, `PnCounter`, and `Rga` delegate directly to the Rust value types. Their
+`merge(other)` methods mutate the receiver; merging an object with itself is a
+no-op. Numeric arguments accept integers, reject booleans, and retain full
+unsigned 64-bit precision for elements, positions, values, and tallies.
+
+```python
+left, right = sm.GSet(), sm.GSet()
+left.insert(10)
+right.insert(20)
+left.merge(right)
+assert left.elements() == [10, 20]
+
+counter = sm.PnCounter(2)
+counter.apply_inc(0, 8)
+counter.apply_dec(1, 11)
+assert counter.value() == -3
+
+sequence = sm.Rga()
+sequence.insert(2, 20)
+sequence.insert(1, 10)
+sequence.delete(2)
+assert sequence.live_entries() == [(1, 10)]
+```
+
+`GSet.contains(element)` tests membership. `PnCounter` takes the replica count;
+`apply_inc`/`apply_dec` and their `try_apply_inc`/`try_apply_dec` aliases take a
+replica coordinate and an absolute monotone tally. Invalid coordinates raise
+`IndexError`; merging different replica counts raises `ValueError`, without
+mutation. `p_state()` and `n_state()` return the component tallies, and `value()`
+returns an exact signed Python integer even outside the 64-bit range.
+
+`Rga` uses caller-supplied positions and values, both unsigned 64-bit integers.
+`placed()` returns all positioned values, `tombstones()` returns deleted
+positions, and `read_positions()` projects the sorted live entries. Distinct
+values at the same position remain distinct entries. Deleting a position hides
+all its values, including later arrivals. This wrapper does not allocate
+positions or implement text editing.
+
+These three classes have no durable `Replica` companion: the Rust core does not
+expose public `DurableReplica` construction and restart for these types.
