@@ -3,6 +3,9 @@ title: Getting started — main (unreleased)
 description: Add SafeMesh to a Rust or TypeScript program, save an edit, restart and sync a second replica.
 ---
 
+For a standalone Rust dependency tied to an exact tested source revision, use the
+[pinned source-build recipe](/safemesh/pinned-source/).
+
 **v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
 
 

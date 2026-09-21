@@ -9,6 +9,15 @@ permissions:
   contents: read
 
 jobs:
+  pinned-source:
+    name: Pinned Rust source consumer
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout recipe and checker
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Execute commands extracted from the docs with an empty Cargo home
+        run: python3 scripts/check-pinned-source.py
+
   docs-build:
     runs-on: ubuntu-latest
     permissions:
@@ -71,7 +80,7 @@ jobs:
           path: docs/dist
 
   deploy:
-    needs: docs-build
+    needs: [docs-build, pinned-source]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'velvetmonkey/safemesh'
     runs-on: ubuntu-latest
     permissions:
