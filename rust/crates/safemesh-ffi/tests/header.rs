@@ -190,5 +190,9 @@ enum SafeMeshStatus safemesh_orset_tombstones(const struct SafeMeshOrSet *set,
 
 #[test]
 fn committed_header_has_not_drifted() {
-    assert_eq!(HEADER, EXPECTED_HEADER);
+    // A checkout may use CRLF; preserve every other byte when checking drift.
+    assert_eq!(
+        HEADER.replace("\r\n", "\n"),
+        EXPECTED_HEADER.replace("\r\n", "\n")
+    );
 }
