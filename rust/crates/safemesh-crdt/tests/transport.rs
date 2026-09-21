@@ -65,6 +65,31 @@ fn dropped_envelopes_can_be_drained_and_cleared() {
 }
 
 #[test]
+fn self_link_disconnect_is_observable_and_heals() {
+    let mut transport: InMemoryTransport<GCounterDelta> = InMemoryTransport::new();
+    assert!(transport.is_connected(7, 7));
+    transport.subscribe(7);
+    transport.send(7, 7, vec![]).unwrap();
+
+    transport.set_connected(7, 7, false);
+    assert!(!transport.is_connected(7, 7));
+    assert_eq!(
+        transport.send(7, 7, vec![]),
+        Err(TransportError::Disconnected { from: 7, to: 7 })
+    );
+    assert!(transport.drain(7).is_empty());
+    assert_eq!(transport.pending_len(), 1);
+    assert!(transport.is_connected(7, 8));
+    assert!(transport.is_connected(8, 8));
+
+    transport.set_connected(7, 7, true);
+    assert!(transport.is_connected(7, 7));
+    assert_eq!(transport.drain(7).len(), 1);
+    assert_eq!(transport.pending_len(), 0);
+    assert!(transport.send(7, 7, vec![]).is_ok());
+}
+
+#[test]
 fn transport_requires_subscription_and_connectivity() {
     let mut transport: InMemoryTransport<GCounterDelta> = InMemoryTransport::new();
     let records = vec![];
@@ -102,7 +127,8 @@ fn anti_entropy_recovers_after_drop_duplicate_and_reorder() {
             replica: 1,
             tally: 1,
         },
-    );
+    )
+    .unwrap();
     left.append(
         &mut safemesh_crdt::GCounter::new(3),
         1,
@@ -110,7 +136,8 @@ fn anti_entropy_recovers_after_drop_duplicate_and_reorder() {
             replica: 1,
             tally: 2,
         },
-    );
+    )
+    .unwrap();
     left.append(
         &mut safemesh_crdt::GCounter::new(3),
         1,
@@ -118,7 +145,8 @@ fn anti_entropy_recovers_after_drop_duplicate_and_reorder() {
             replica: 1,
             tally: 3,
         },
-    );
+    )
+    .unwrap();
 
     let mut transport = InMemoryTransport::new();
     transport.subscribe(1);
@@ -150,7 +178,8 @@ fn partition_then_heal_uses_versions_to_cover_missing_records() {
             replica: 1,
             tally: 1,
         },
-    );
+    )
+    .unwrap();
 
     let mut transport = InMemoryTransport::new();
     transport.subscribe(1);
@@ -226,8 +255,12 @@ fn version_exchange_public_api_round_trip() {
 #[test]
 fn version_exchange_public_api_trust_boundary() {
     let mut source = EventLog::new();
-    source.append(&mut safemesh_crdt::GSet::new(), 7, 1u64);
-    source.append(&mut safemesh_crdt::GSet::new(), 7, 2u64);
+    source
+        .append(&mut safemesh_crdt::GSet::new(), 7, 1u64)
+        .unwrap();
+    source
+        .append(&mut safemesh_crdt::GSet::new(), 7, 2u64)
+        .unwrap();
     let empty_receiver = EventLog::<u64>::new();
     let lie = rebuild(&BTreeMap::from([(7, 2)]), &BTreeSet::new());
     assert_eq!(source.since(empty_receiver.version()).len(), 2);
