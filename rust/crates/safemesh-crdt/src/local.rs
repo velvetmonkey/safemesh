@@ -25,6 +25,36 @@ pub enum LocalError {
     InvalidHistory,
     Io(io::Error),
 }
+
+impl core::fmt::Display for LocalError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Refused => {
+                f.write_str("local writer operation refused by ownership or lease checks")
+            }
+            Self::Exhausted => {
+                f.write_str("local writer sequence, generation, or token allocation exhausted")
+            }
+            Self::RecoveryRequired => f.write_str("local store requires recovery"),
+            Self::Configuration => f.write_str("invalid or mismatched local writer configuration"),
+            Self::History(error) => write!(f, "local history wire validation failed: {error}"),
+            Self::InvalidHistory => {
+                f.write_str("local history failed replay or sequence validation")
+            }
+            Self::Io(error) => write!(f, "local store I/O failed: {error}"),
+        }
+    }
+}
+
+impl core::error::Error for LocalError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::History(error) => Some(error),
+            Self::Io(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 impl From<io::Error> for LocalError {
     fn from(e: io::Error) -> Self {
         Self::Io(e)

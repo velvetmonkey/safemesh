@@ -18,6 +18,19 @@ pub enum TransportError {
     Disconnected { from: u64, to: u64 },
 }
 
+impl core::fmt::Display for TransportError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NotSubscribed { peer } => write!(f, "peer {peer} is not subscribed"),
+            Self::Disconnected { from, to } => {
+                write!(f, "transport link from {from} to {to} is disconnected")
+            }
+        }
+    }
+}
+
+impl core::error::Error for TransportError {}
+
 /// Engineered transport coverage contract.
 ///
 /// A transport adapter is responsible for peer subscription, connectivity
