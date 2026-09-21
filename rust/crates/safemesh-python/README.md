@@ -31,7 +31,19 @@ python3 -m pip install 'maturin>=1.7,<2'
 
 ## Claim boundary
 
-This package provides binding glue with **API present** in `src/lib.rs`. **Artifact available** means a locally built wheel, not a PyPI release. **Build checked** and **runtime tested**: the local wheel was built with maturin 1.15.0, installed, and used to run `examples/data_mule_demo.py` on Ubuntu 24.04 x64 with CPython 3.12.3. **Integration tested** beyond that modeled local demo is unclaimed; **maintainer-supported** status is unknown. The G-Counter path reaches the Lean-backed Rust carrier; LWW Register, Enable-wins Flag, and LWW Map remain tested-not-proven. The binding itself is not a separate proof.
+This package provides binding glue with **API present** in `src/lib.rs`.
+**Artifact available** means a locally built wheel, not a PyPI release.
+**Build checked** and **runtime tested**: CI builds and installs a wheel and runs
+the Rust-side binding tests on Linux x64 (`ubuntu-latest`) with CPython 3.8, 3.9,
+3.10, 3.11, 3.12, 3.13, and 3.14.
+**Integration tested**: each matrix entry runs `examples/data_mule_demo.py` and
+`demos/two-app-inventory/test_sync.py` against the installed wheel.
+These tests cover modeled in-process convergence and two-app HTTP sync on localhost.
+They do not establish other interpreter, Python minor, OS, or architecture coverage.
+**Maintainer-supported** status is unknown.
+The G-Counter path reaches the Lean-backed Rust carrier; LWW Register,
+Enable-wins Flag, and LWW Map remain tested-not-proven.
+The binding itself is not a separate proof.
 
 See the repository `CLAIMS.md` and `WHAT-IS-PROVEN.md` for the full wording rule.
 
