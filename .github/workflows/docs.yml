@@ -80,7 +80,7 @@ jobs:
           path: docs/dist
 
   deploy:
-    needs: docs-build
+    needs: [docs-build, pinned-source]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'velvetmonkey/safemesh'
     runs-on: ubuntu-latest
     permissions:
