@@ -24,7 +24,7 @@ Counter tallies are absolute values for the selected replica component, not amou
 
 ## Prerequisites and run command
 
-See [Getting started: Before you start](/safemesh/getting-started/#before-you-start) for toolchain setup and checkout instructions.
+See [Getting started: Before you start](/safemesh/persist-and-restart/#before-you-start) for toolchain setup and checkout instructions.
 
 SafeMesh's Rust crate floor for consumers is **Rust 1.89**. For the source builds,
 demos and locked wasm-pack 0.15.0 installation on this page, use **Rust 1.96.1**,
