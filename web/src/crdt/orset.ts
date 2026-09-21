@@ -83,7 +83,7 @@ export function readORSet(state: ORSetState): ORSetElement[] {
       visible.add(element)
     }
   }
-  return [...visible].sort((a, b) => a.localeCompare(b))
+  return [...visible].sort(compareCodePoints)
 }
 
 export function observedTokens(state: ORSetState, element: ORSetElement): ORSetToken[] {
@@ -101,5 +101,21 @@ export function sameORSet(left: ORSetState, right: ORSetState): boolean {
 }
 
 function sortedRecord<T>(record: Record<string, T>): Record<string, T> {
-  return Object.fromEntries(Object.entries(record).sort(([a], [b]) => a.localeCompare(b)))
+  return Object.fromEntries(Object.entries(record).sort(([a], [b]) => compareCodePoints(a, b)))
+}
+
+// Unicode scalar order matches Rust str::Ord's UTF-8 byte order, including
+// supplementary characters (unlike JavaScript's default UTF-16 sort).
+// Lone surrogates have a deterministic code-point order but no Rust str equivalent.
+function compareCodePoints(a: string, b: string): number {
+  let i = 0
+  let j = 0
+  while (i < a.length && j < b.length) {
+    const left = a.codePointAt(i)!
+    const right = b.codePointAt(j)!
+    if (left !== right) return left - right
+    i += left > 0xffff ? 2 : 1
+    j += right > 0xffff ? 2 : 1
+  }
+  return (i < a.length ? 1 : 0) - (j < b.length ? 1 : 0)
 }
