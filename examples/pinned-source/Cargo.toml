@@ -1,0 +1,8 @@
+[package]
+name = "safemesh-pinned-consumer"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+safemesh-crdt = { git = "https://github.com/velvetmonkey/safemesh", rev = "cab067b1113605007d8cd0098cbc996b15fffafc" }
