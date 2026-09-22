@@ -317,22 +317,26 @@ fn lww_map_tracks_value_and_remove_dots_per_key() {
 #[test]
 fn event_log_deduplicates_and_serves_since_version() {
     let mut left = EventLog::new();
-    let first = left.append(
-        &mut GCounter::new(3),
-        1,
-        GCounterDelta {
-            replica: 1,
-            tally: 1,
-        },
-    );
-    let second = left.append(
-        &mut GCounter::new(3),
-        1,
-        GCounterDelta {
-            replica: 1,
-            tally: 2,
-        },
-    );
+    let first = left
+        .append(
+            &mut GCounter::new(3),
+            1,
+            GCounterDelta {
+                replica: 1,
+                tally: 1,
+            },
+        )
+        .unwrap();
+    let second = left
+        .append(
+            &mut GCounter::new(3),
+            1,
+            GCounterDelta {
+                replica: 1,
+                tally: 2,
+            },
+        )
+        .unwrap();
 
     assert_eq!(first.sequence, 1);
     assert_eq!(second.sequence, 2);
@@ -346,14 +350,16 @@ fn event_log_deduplicates_and_serves_since_version() {
     assert_eq!(right.version().get(1), 2);
     assert!(left.since(right.version()).is_empty());
 
-    let third = left.append(
-        &mut GCounter::new(3),
-        2,
-        GCounterDelta {
-            replica: 2,
-            tally: 1,
-        },
-    );
+    let third = left
+        .append(
+            &mut GCounter::new(3),
+            2,
+            GCounterDelta {
+                replica: 2,
+                tally: 1,
+            },
+        )
+        .unwrap();
     let missing = left.since(right.version());
     assert_eq!(missing.len(), 1);
     assert_eq!(missing[0].id, third);
@@ -362,30 +368,36 @@ fn event_log_deduplicates_and_serves_since_version() {
 #[test]
 fn event_log_version_does_not_hide_out_of_order_gaps() {
     let mut source = EventLog::new();
-    let first = source.append(
-        &mut GCounter::new(3),
-        1,
-        GCounterDelta {
-            replica: 1,
-            tally: 1,
-        },
-    );
-    let second = source.append(
-        &mut GCounter::new(3),
-        1,
-        GCounterDelta {
-            replica: 1,
-            tally: 2,
-        },
-    );
-    let third = source.append(
-        &mut GCounter::new(3),
-        1,
-        GCounterDelta {
-            replica: 1,
-            tally: 3,
-        },
-    );
+    let first = source
+        .append(
+            &mut GCounter::new(3),
+            1,
+            GCounterDelta {
+                replica: 1,
+                tally: 1,
+            },
+        )
+        .unwrap();
+    let second = source
+        .append(
+            &mut GCounter::new(3),
+            1,
+            GCounterDelta {
+                replica: 1,
+                tally: 2,
+            },
+        )
+        .unwrap();
+    let third = source
+        .append(
+            &mut GCounter::new(3),
+            1,
+            GCounterDelta {
+                replica: 1,
+                tally: 3,
+            },
+        )
+        .unwrap();
 
     let mut reordered = EventLog::new();
     reordered.merge_records(&GCounter::new(3), [source.records()[2].clone()]);

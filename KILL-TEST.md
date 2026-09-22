@@ -26,6 +26,20 @@ The scenario models a field sample moving from clinic to courier to lab while a 
 
 The final projection must converge to one sample, lab custody, one active temperature alert, four audit entries, and four counted domain events. The program exits nonzero if replicas do not converge after heal.
 
+## Persist and restart checks
+
+The cold-chain example above and `break_it` exercise in-process delivery faults; neither kills a process or restores a persisted store. For the Rust persist/reload path, run [`examples/m2slice.rs`](rust/crates/safemesh-crdt/examples/m2slice.rs) on Linux with a fresh scratch directory (from the repository root):
+
+```sh
+cd rust
+cargo run -p safemesh-crdt --features local-writer --example m2slice --locked -- "$HOME/scratch/safemesh-m2slice-$(date +%s)" --require-integrity
+cargo test -p safemesh-crdt --features local-writer --lib --locked local::durable_tests
+```
+
+`EventLog` supplies the record history encoded in the shape-bearing, CRC-checked [wire frame](rust/crates/safemesh-crdt/src/wire.rs); it does not perform disk I/O itself. [`DurableReplica`](rust/crates/safemesh-crdt/src/local.rs) persists that history with writer configuration and allocation sequence, and its checked restart reacquires ownership, validates the history and restores state by replay. The example checks acknowledged counter/UTF-8 set edits after a child exits with code 77 without running destructors, checks fresh allocations, reconciles peers, and checks a second restart. Its byte-tamper checks require corrupt frames to be rejected. The local unit tests also inject process exits at replacement boundaries and I/O errors, including a partial temporary-file write; these are finite checks, not a guarantee for arbitrary crash-mid-write or power-loss recovery.
+
+A genuine process-kill/restart check also exists: [`demos/two-app-inventory/journey.py`](demos/two-app-inventory/journey.py) sends SIGKILL, launches a new process on the same store, asserts unchanged state, record count and log digests, and checks convergence after both applications are killed and restarted. Follow its [build and run instructions](demos/two-app-inventory/README.md). This exercises the Python binding with the demo's SQLite storage adapter, not the Rust `DurableReplica` store; `m2slice` uses an explicit process exit rather than SIGKILL. Neither check proves hardware power-loss recovery or cold-chain domain correctness. See [CLAIMS.md](CLAIMS.md) and [WHAT-IS-PROVEN.md](WHAT-IS-PROVEN.md#claim-to-evidence-map) for proof boundaries.
+
 ## Ten questions
 
 | Question | Cold-chain answer | Evidence |
