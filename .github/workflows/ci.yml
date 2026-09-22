@@ -48,12 +48,51 @@ jobs:
           # Bootstrap provenance verifies the generating commit is a HEAD ancestor.
           fetch-depth: 0
 
+      - name: Check bootstrap file identities
+        shell: python
+        run: |
+          import pathlib
+          import subprocess
+          import sys
+
+          root = pathlib.Path("rust/crates/safemesh-crdt/tests")
+          header = "file | package version | event-log frame version | payload schema version | durable wrapper version | details"
+          # Retained bootstrap identities, documented in fixtures/bootstrap/README.md.
+          # ABSENT is intentional; filenames and source versions are not identities.
+          transaction = "ABSENT (unversioned three-field prefix)"
+          expected = {
+              "counter.log": ("0x03", "safemesh/gcounter-delta/v1", "ABSENT", ""),
+              "counter.transaction": ("0x03", "safemesh/gcounter-delta/v1", transaction, "words=(2, 0, 1)"),
+              "counter.fence": ("ABSENT", "ABSENT", "ABSENT", "ownership sidecar words=(2, 0, 1)"),
+              "orset.log": ("0x03", "safemesh/orset-delta-utf8-u64/v1", "ABSENT", ""),
+              "orset.transaction": ("0x03", "safemesh/orset-delta-utf8-u64/v1", transaction, "words=(2, 0, 2)"),
+              "orset.fence": ("ABSENT", "ABSENT", "ABSENT", "ownership sidecar words=(2, 0, 1)"),
+              "pn.log": ("0x03", "safemesh/pncounter-delta/v1", "ABSENT", ""),
+              "gset.state": ("ABSENT", "ABSENT", "ABSENT", "state tag=0x20; schema identity not embedded"),
+              "rga.state": ("ABSENT", "ABSENT", "ABSENT", "state tag=0x40; schema identity not embedded"),
+          }
+          failed = False
+          for name, identity in expected.items():
+              path = root / "fixtures/bootstrap" / name
+              result = subprocess.run(
+                  [sys.executable, str(root / "identity_probe.py"), str(path)],
+                  capture_output=True, text=True,
+              )
+              print(result.stdout, end="")
+              print(result.stderr, end="", file=sys.stderr)
+              row = " | ".join((str(path), "ABSENT", *identity))
+              if result.returncode != 0 or result.stdout.splitlines() != [header, row]:
+                  print(f"{path}: identity probe failed (exit {result.returncode}); expected row: {row}", file=sys.stderr)
+                  failed = True
+          sys.exit(1 if failed else 0)
+
       - name: Install declared Rust floor
         id: floor
         run: |
           version="$(python3 -c 'import tomllib; print(tomllib.load(open("rust/Cargo.toml", "rb"))["workspace"]["package"]["rust-version"])')"
           rustup toolchain install "$version" --profile minimal
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          cargo install wasm-pack --version 0.15.0 --locked
 
       - name: "FLOOR COMPILE: Build workspace and laws at declared Rust floor"
         working-directory: rust
@@ -164,7 +203,9 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Install declared MSRV
-        run: rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
+        run: |
+          rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
+          cargo install wasm-pack --version 0.15.0 --locked
 
       - name: Test at declared MSRV
         working-directory: rust

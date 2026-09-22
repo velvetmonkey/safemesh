@@ -21,6 +21,26 @@ pub enum AppendError {
     InvalidRecord(WireError),
 }
 
+impl core::fmt::Display for AppendError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::SequenceExhausted => {
+                f.write_str("cannot append: replica sequence number exhausted")
+            }
+            Self::InvalidRecord(error) => write!(f, "cannot append invalid record: {error}"),
+        }
+    }
+}
+
+impl core::error::Error for AppendError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::InvalidRecord(error) => Some(error),
+            Self::SequenceExhausted => None,
+        }
+    }
+}
+
 /// Append-only, deduplicating event log for CRDT deltas.
 /// Equality compares log data, excluding the in-memory first-admission binding flag.
 #[derive(Clone, Debug)]
@@ -80,12 +100,19 @@ impl<D> EventLog<D> {
         self.replica_count
     }
 
-    pub fn append<C: Crdt<Delta = D>>(&mut self, state: &mut C, replica: u64, delta: D) -> RecordId
+    /// Allocate a fresh ID and admit a delta without applying it to `state`.
+    /// Returns an error if the sequence is exhausted or admission refuses the
+    /// record; in either case the log and state remain unchanged.
+    pub fn append<C: Crdt<Delta = D>>(
+        &mut self,
+        state: &mut C,
+        replica: u64,
+        delta: D,
+    ) -> Result<RecordId, AppendError>
     where
         D: PartialEq,
     {
         self.append_with(state, replica, delta, |_, _| {})
-            .expect("event log append refused or sequence exhausted")
     }
 
     /// Allocate a fresh ID, then use the same gate as incoming records.
