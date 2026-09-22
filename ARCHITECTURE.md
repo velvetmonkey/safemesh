@@ -47,6 +47,16 @@ The canonical Rust wire format uses fixed one-byte tags, little-endian integer f
 
 `rust/crates/safemesh-ffi` is the first C ABI spine. It exposes opaque G-Counter handles and a delta-to-wire helper through `include/safemesh.h`. The crate carries `cbindgen.toml`; the committed header is protected by a drift test so ABI changes are explicit.
 
+## Persist, restore and restart
+
+[`EventLog`](rust/crates/safemesh-crdt/src/event_log.rs) retains record IDs and delta payloads; it does not write files by itself. To persist a log, its `to_wire_bytes` encodes the history in the canonical [wire frame](rust/crates/safemesh-crdt/src/wire.rs), including CRDT shape and a CRC integrity check. Decode with `from_wire_bytes_for` against the intended carrier, then replay the deltas to restore state.
+
+On Linux local filesystems, [`DurableReplica`](rust/crates/safemesh-crdt/src/local.rs) wraps that log with writer ownership and persistence: it replaces a transaction containing writer configuration, the allocation sequence and log bytes, syncing the file and parent directory before acknowledging an accepted write. The store directory must already exist durably and remain in place. `restart_counter` and `restart_utf8_set` reacquire the writer lock, validate the committed history and saved allocation mark, replay into fresh state, and renew the write ticket; invalid history is rejected rather than exposed as writable state.
+
+[`examples/m2slice.rs`](rust/crates/safemesh-crdt/examples/m2slice.rs) demonstrates persist/restore, partition and reconciliation end to end for G-Counter and UTF-8 OR-Set. With `--features local-writer` on Linux, it also runs a child process that acknowledges durable edits and exits without destructors, then checks restart, fresh record IDs/tokens and another restart after reconciliation. See [the runnable checks](KILL-TEST.md#persist-and-restart-checks).
+
+These are engineered Rust mechanisms, not proofs of filesystem durability or power-loss recovery. The local tests inject exits at replacement boundaries and I/O errors, including a partial temporary-file write; they do not establish recovery from every crash mid-write. The CRC is not authentication. See [CLAIMS.md](CLAIMS.md) and [the proof/evidence map](WHAT-IS-PROVEN.md#claim-to-evidence-map) for the precise model guarantees and exclusions.
+
 ## Bindings
 
 `rust/crates/safemesh-wasm` and `rust/crates/safemesh-python` are the first language bindings. They expose G-Counter operations, G-Counter replica/event-log exchange, and canonical record/log bytes by calling the same Rust core. They do not reimplement merge logic. Runtime tested: Rust-side binding tests exercise canonical record/log exchange. Integration tested: the Linux package smoke flow exercises the generated Node package and installed Python wheel. Maintainer-supported status for both bindings is unknown.
