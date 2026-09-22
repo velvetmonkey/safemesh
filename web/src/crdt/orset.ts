@@ -47,7 +47,7 @@ export function addDelta(element: ORSetElement, token: ORSetToken): ORSetDelta {
 
 // Mirrors SafeMesh.orRemoveDelta: remove only tombstones observed add tokens.
 export function removeDelta(tokens: ORSetToken[]): ORSetDelta {
-  return { kind: 'orset.remove', tokens: [...new Set(tokens)].sort() }
+  return { kind: 'orset.remove', tokens: [...new Set(tokens)].sort(compareCodePoints) }
 }
 
 // Mirrors deltaORSet_adds / deltaORSet_tombs: merge is union of add instances
@@ -90,7 +90,7 @@ export function observedTokens(state: ORSetState, element: ORSetElement): ORSetT
   return Object.entries(state.adds)
     .filter(([token, value]) => value === element && !Object.hasOwn(state.tombstones, token))
     .map(([token]) => token)
-    .sort()
+    .sort(compareCodePoints)
 }
 
 export function sameORSet(left: ORSetState, right: ORSetState): boolean {
