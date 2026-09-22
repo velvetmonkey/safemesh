@@ -77,3 +77,24 @@ it.each(['en', 'sv'])('uses Rust string ordering under %s collation', (locale) =
     localeCompare.mockRestore()
   }
 })
+
+const fullwidthTildeGrinningFaceTokens = {
+  input: ['peer-\u{1F600}-1', 'peer-\uFF5E-1'],
+  expected: ['peer-\uFF5E-1', 'peer-\u{1F600}-1'],
+}
+
+it('removeDelta orders U+FF5E FULLWIDTH TILDE before U+1F600 GRINNING FACE tokens', () => {
+  const { input, expected } = fullwidthTildeGrinningFaceTokens
+  expect(removeDelta([...input, input[0]])).toEqual({ kind: 'orset.remove', tokens: expected })
+})
+
+it('observedTokens orders U+FF5E FULLWIDTH TILDE before U+1F600 GRINNING FACE tokens', () => {
+  const { input, expected } = fullwidthTildeGrinningFaceTokens
+  const state = [
+    ...input.map(token => addDelta('radio', token)),
+    addDelta('radio', 'removed'),
+    addDelta('water', 'other-element'),
+    removeDelta(['removed']),
+  ].reduce(applyORSetDelta, bottomORSet())
+  expect(observedTokens(state, 'radio')).toEqual(expected)
+})
