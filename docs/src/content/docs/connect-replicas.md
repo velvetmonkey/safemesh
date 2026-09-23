@@ -22,8 +22,9 @@ and `VersionVectorLimits`: the opt-in author and zero-replica budgets are checke
 **before prefix validation and before either collection is cloned**. `None` is
 unbounded. These budgets do not bound the version message's decoding allocation:
 your decoder must enforce byte and entry limits before constructing either collection.
-There is no built-in version wire codec. This exercise passes the collections
-directly between objects; it does not implement that application decoder.
+The built-in version wire codec can decode with explicit entry budgets. This
+exercise passes the collections directly between objects; it does not use that
+codec.
 
 <!-- gold:source rust:rust/examples/connect_replicas.rs -->
 ```rust
@@ -65,7 +66,7 @@ fn main() {
         Admission::Accepted
     );
     assert_eq!(received.version().get(0), 0);
-    // The app carries BOTH version collections; no built-in version wire codec.
+    // This example passes both version collections directly between objects.
     // Enforce byte/entry budgets in that decoder before allocating these collections.
     let peer = VersionVector::from_peer_prefixes_with_limits(
         received.version().entries(),

@@ -5,11 +5,13 @@
 use crate::{
     Admission, Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounterDelta, GSet, LwwMap,
     LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta, PnCounterDelta, Record, Rga,
+    VersionVector,
 };
 use alloc::{string::String, vec::Vec};
 
 pub(super) const TAG_RECORD: u8 = 0x01;
 pub(super) const TAG_EVENT_LOG: u8 = 0x03;
+pub(super) const TAG_VERSION_VECTOR: u8 = 0x04;
 pub(super) const TAG_GCOUNTER_DELTA: u8 = 0x10;
 pub(super) const TAG_PNCOUNTER_INC: u8 = 0x11;
 pub(super) const TAG_PNCOUNTER_DEC: u8 = 0x12;
@@ -48,6 +50,13 @@ pub enum WireError {
     },
     /// Fixed and unbounded replica domains are incompatible.
     ArityKindMismatch,
+    VersionAuthorLimitExceeded {
+        max_authors: usize,
+    },
+    VersionZeroReplicaLimitExceeded {
+        max_zero_replicas: usize,
+    },
+    NonCanonicalVersionVector,
 }
 
 impl core::fmt::Display for WireError {
@@ -74,6 +83,16 @@ impl core::fmt::Display for WireError {
             Self::ArityKindMismatch => {
                 f.write_str("invalid or incompatible replica-domain arity kind")
             }
+            Self::VersionAuthorLimitExceeded { max_authors } => {
+                write!(f, "wire version exceeds author limit {max_authors}")
+            }
+            Self::VersionZeroReplicaLimitExceeded { max_zero_replicas } => {
+                write!(
+                    f,
+                    "wire version exceeds zero-acknowledgement limit {max_zero_replicas}"
+                )
+            }
+            Self::NonCanonicalVersionVector => f.write_str("noncanonical wire version vector"),
         }
     }
 }
@@ -132,6 +151,7 @@ wire_schema!(OrSetDelta<u64, u64>, "safemesh/orset-delta-u64-u64/v1", false);
 wire_schema!(OrSetDelta<String, u64>, "safemesh/orset-delta-utf8-u64/v1", false);
 wire_schema!(OrSet<u64, u64>, "safemesh/orset-u64-u64/v1", false);
 wire_schema!(Rga<u64, u64>, "safemesh/rga-u64-u64/v1", false);
+wire_schema!(VersionVector, "safemesh/version-vector/v1", false);
 wire_schema!(
     LwwRegisterDelta<u64>,
     "safemesh/lww-register-delta-u64/v1",
