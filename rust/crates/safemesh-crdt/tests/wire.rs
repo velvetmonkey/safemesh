@@ -126,6 +126,76 @@ fn rga_delta_variants_roundtrip_and_refuse_corruption() {
     }
 }
 
+fn assert_rga_vector<T>(name: &str, value: T, bytes: &[u8])
+where
+    T: WireEncode + WireDecode + PartialEq + Debug,
+{
+    assert_eq!(
+        value.to_wire_bytes().unwrap(),
+        bytes,
+        "{name} encoder drift"
+    );
+    assert_eq!(T::from_wire_bytes(bytes), Ok(value), "{name} decode drift");
+}
+
+#[test]
+fn rga_delta_u64_committed_vectors_are_canonical() {
+    let insert = RgaDelta::Insert {
+        position: 30u64,
+        value: 3u64,
+    };
+    let delete = RgaDelta::<u64, u64>::Delete { position: 30 };
+    let max = RgaDelta::Insert {
+        position: u64::MAX,
+        value: u64::MAX,
+    };
+    let record = Record {
+        id: RecordId {
+            replica: 9,
+            sequence: 4,
+        },
+        delta: insert.clone(),
+    };
+    let mut log = EventLog::new();
+    let mut state = Rga::new();
+    log.append(&mut state, 9, insert.clone()).unwrap();
+    log.append(&mut state, 9, delete.clone()).unwrap();
+    assert_eq!(log.records().len(), 2);
+    assert_eq!(log.records()[0].delta, insert);
+    assert_eq!(log.records()[1].delta, delete);
+
+    assert_rga_vector(
+        "empty.log",
+        EventLog::<RgaDelta<u64, u64>>::new(),
+        include_bytes!("fixtures/rga-delta-u64/empty.log"),
+    );
+    assert_rga_vector(
+        "insert.delta",
+        insert,
+        include_bytes!("fixtures/rga-delta-u64/insert.delta"),
+    );
+    assert_rga_vector(
+        "delete.delta",
+        delete,
+        include_bytes!("fixtures/rga-delta-u64/delete.delta"),
+    );
+    assert_rga_vector(
+        "max.delta",
+        max,
+        include_bytes!("fixtures/rga-delta-u64/max.delta"),
+    );
+    assert_rga_vector(
+        "insert.record",
+        record,
+        include_bytes!("fixtures/rga-delta-u64/insert.record"),
+    );
+    assert_rga_vector(
+        "sequence.log",
+        log,
+        include_bytes!("fixtures/rga-delta-u64/sequence.log"),
+    );
+}
+
 #[test]
 fn event_log_roundtrips_and_preserves_deduped_records() {
     let mut log = EventLog::with_replica_count(2);
