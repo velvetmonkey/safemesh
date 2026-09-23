@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Ben Cassie
 // SPDX-License-Identifier: Apache-2.0
 //! Fieldcheck-only framing and durable peer evidence; not an authenticated transport.
-use crate::{canonical, records, Replica};
+use crate::{canonical, records, review_projection, Replica};
 use safemesh_crdt::{
     ownership::allocate_token, Admission, OrSetDelta, Record, VersionVector, WireDecode, WireEncode,
 };
@@ -239,12 +239,15 @@ impl Service {
     }
     pub fn status(&self) -> Result<Value, String> {
         let local = full_map(&self.replica)?;
+        let known = records(&self.replica)?;
+        let (needs_review, resolved) = review_projection(&known)?;
         let agreed = !self.failed && self.receipt.as_ref().is_some_and(|r| r.records == local);
         let confirmed = self.receipt.as_ref().map_or(0, |r| {
             local.iter().filter(|e| r.records.contains(e)).count()
         });
         Ok(
-            json!({"status":true, "records":records(&self.replica)?.values().collect::<Vec<_>>(),
+            json!({"status":true, "records":known.values().collect::<Vec<_>>(),
+            "needs_review":needs_review,"resolved":resolved,
             "record_map":local, "projected":self.replica.state().elements().len(),
             "peer_confirmed":confirmed,"agreed":agreed,"network":self.network,
             "delivery":if agreed { format!("Both devices have these {} records (last durable peer confirmation)", local.len()) } else { "Waiting for durable peer confirmation of this exact set".into() }}),
@@ -450,6 +453,7 @@ pub fn start(state: Shared, listen: Option<&str>, connect: Option<&str>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use safemesh_crdt::ownership::WriterConfig;
 
     #[test]
     fn populated_summary_survives_tagged_json() {
@@ -474,5 +478,85 @@ mod tests {
     fn crc_known_vector_and_single_byte_corruption() {
         assert_eq!(crc(b"123456789"), 0xcbf43926);
         assert_ne!(crc(b"123456789"), crc(b"123456788"));
+    }
+
+    #[test]
+    fn review_before_observations_is_not_an_orphan() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "reordered-review-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        fs::create_dir_all(&root).unwrap();
+        for name in ["source-a", "source-b", "receiver"] {
+            fs::create_dir(root.join(name)).unwrap();
+        }
+        let mut source_a = Replica::utf8_set(
+            &root.join("source-a"),
+            WriterConfig {
+                writers: 2,
+                writer: 0,
+            },
+        )
+        .unwrap();
+        let mut source_b = Replica::utf8_set(
+            &root.join("source-b"),
+            WriterConfig {
+                writers: 2,
+                writer: 1,
+            },
+        )
+        .unwrap();
+        let observation = |id: &str, answer: &str, refs: Vec<&str>| {
+            serde_json::to_string(&crate::Inspection {
+                schema_version: 1,
+                checklist_version: 1,
+                item_id: "north-yard/gate-3/latch".into(),
+                event_id: id.into(),
+                inspector: "tester".into(),
+                answer: answer.into(),
+                note: id.into(),
+                observed_event_ids: refs.into_iter().map(str::to_string).collect(),
+            })
+            .unwrap()
+        };
+        let a = source_a
+            .add(source_a.ticket(), observation("reorder-a", "Pass", vec![]))
+            .unwrap();
+        let b = source_b
+            .add(source_b.ticket(), observation("reorder-b", "Fail", vec![]))
+            .unwrap();
+        let review = source_a
+            .add(
+                source_a.ticket(),
+                observation("reorder-review", "Pass", vec!["reorder-a", "reorder-b"]),
+            )
+            .unwrap();
+        let receiver = Replica::utf8_set(
+            &root.join("receiver"),
+            WriterConfig {
+                writers: 2,
+                writer: 1,
+            },
+        )
+        .unwrap();
+        let mut service = Service::open(receiver, 1, &root.join("receiver")).unwrap();
+        service
+            .accept(&[Entry::of(&review).unwrap()], false)
+            .unwrap();
+        assert_eq!(records(&service.replica).unwrap().len(), 1);
+        service
+            .accept(&[Entry::of(&b).unwrap(), Entry::of(&a).unwrap()], false)
+            .unwrap();
+        let status = service.status().unwrap();
+        assert_eq!(status["records"].as_array().unwrap().len(), 3);
+        assert_eq!(status["needs_review"], json!([]));
+        assert_eq!(status["resolved"], json!(["north-yard/gate-3/latch"]));
     }
 }
