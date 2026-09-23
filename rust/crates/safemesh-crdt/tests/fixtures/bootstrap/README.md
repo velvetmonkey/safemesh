@@ -48,11 +48,12 @@ The log encoder embeds D::wire_schema(), NOT EventLog<D>::wire_schema().
 
 Five carriers have byte evidence, but only G-Counter and OR-Set have durable
 history coverage. PN-Counter has native event-log replay but no public durable
-constructor. G-Set's native delta is u64 and RGA's is RgaDelta; neither has the
-required native delta WireEncode/WireDecode/WireSchema implementation, and
-neither has OwnedDelta or a durable constructor. Their state snapshots exercise
-public decode/merge, not native history replay. Text UTF-8 history is not claimed
-by the u64 RGA snapshot. These are explicit missing coverage, not substitute APIs.
+constructor. G-Set's native delta is u64 and lacks the required native delta
+WireEncode/WireDecode/WireSchema implementation. RGA's native RgaDelta has that
+codec, but neither carrier has OwnedDelta or a durable constructor. Their state
+snapshots exercise public decode/merge, not native history replay. Text UTF-8
+history is not claimed by the u64 RGA snapshot. These are explicit missing
+coverage, not substitute APIs.
 
 ## Independent expectations (machine-read by replay)
 

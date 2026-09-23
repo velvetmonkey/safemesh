@@ -6,8 +6,8 @@ use std::fmt::Debug;
 
 use safemesh_crdt::{
     EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounterDelta, GSet, LwwMap, LwwMapDelta,
-    LwwRegister, LwwRegisterDelta, OrSet, PnCounterDelta, Record, RecordId, Rga, WireDecode,
-    WireEncode, WireError,
+    LwwRegister, LwwRegisterDelta, OrSet, PnCounterDelta, Record, RecordId, Rga, RgaDelta,
+    WireDecode, WireEncode, WireError,
 };
 
 fn roundtrip<T>(value: T)
@@ -97,6 +97,33 @@ fn canonical_state_encodings_are_sorted() {
     rga.insert(10, 1);
     rga.delete(30);
     roundtrip(rga);
+}
+
+#[test]
+fn rga_delta_variants_roundtrip_and_refuse_corruption() {
+    for delta in [
+        RgaDelta::Insert {
+            position: 30u64,
+            value: 3u64,
+        },
+        RgaDelta::Delete { position: 30 },
+    ] {
+        let bytes = delta.to_wire_bytes().unwrap();
+        assert_eq!(
+            RgaDelta::<u64, u64>::from_wire_bytes(&bytes),
+            Ok(delta.clone())
+        );
+        assert_eq!(
+            RgaDelta::<u64, u64>::from_wire_bytes(&bytes[..bytes.len() - 1]),
+            Err(WireError::UnexpectedEof)
+        );
+        let mut invalid_tag = bytes;
+        invalid_tag[0] = 0xff;
+        assert_eq!(
+            RgaDelta::<u64, u64>::from_wire_bytes(&invalid_tag),
+            Err(WireError::InvalidTag)
+        );
+    }
 }
 
 #[test]
