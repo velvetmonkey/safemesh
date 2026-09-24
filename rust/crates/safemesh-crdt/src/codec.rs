@@ -5,8 +5,9 @@
 use crate::{
     Admission, Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounterDelta, GSet, LwwMap,
     LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta, PnCounterDelta, Record, Rga,
+    RgaDelta,
 };
-use alloc::{string::String, vec::Vec};
+use alloc::{borrow::Cow, string::String, vec::Vec};
 
 pub(super) const TAG_RECORD: u8 = 0x01;
 pub(super) const TAG_EVENT_LOG: u8 = 0x03;
@@ -15,11 +16,14 @@ pub(super) const TAG_PNCOUNTER_INC: u8 = 0x11;
 pub(super) const TAG_PNCOUNTER_DEC: u8 = 0x12;
 pub(super) const TAG_GSET_U64: u8 = 0x20;
 pub(super) const TAG_ORSET_U64: u8 = 0x30;
+pub(super) const TAG_ORSET_STRING: u8 = 0x35;
 pub(super) const TAG_ORSET_ADD_U64: u8 = 0x31;
 pub(super) const TAG_ORSET_REMOVE_U64: u8 = 0x32;
 pub(super) const TAG_ORSET_ADD_STRING: u8 = 0x33;
 pub(super) const TAG_ORSET_REMOVE_STRING: u8 = 0x34;
 pub(super) const TAG_RGA_U64: u8 = 0x40;
+pub(super) const TAG_RGA_INSERT_U64: u8 = 0x41;
+pub(super) const TAG_RGA_DELETE_U64: u8 = 0x42;
 pub(super) const TAG_LWW_REGISTER_DELTA_U64: u8 = 0x50;
 pub(super) const TAG_LWW_REGISTER_U64: u8 = 0x51;
 pub(super) const TAG_ENABLE_WINS_FLAG_ENABLE_U64: u8 = 0x60;
@@ -37,6 +41,7 @@ pub enum WireError {
     TrailingBytes,
     LengthOverflow,
     RecordCollision,
+    DuplicateEntry,
     IntegrityMismatch,
     InvalidUtf8,
     /// Legacy frame, or a fixed-domain log constructed without its arity.
@@ -61,6 +66,9 @@ impl core::fmt::Display for WireError {
             Self::TrailingBytes => f.write_str("unexpected trailing bytes after wire value"),
             Self::LengthOverflow => f.write_str("wire length exceeds the representable range"),
             Self::RecordCollision => f.write_str("record identity has conflicting payloads"),
+            Self::DuplicateEntry => {
+                f.write_str("wire OR-set contains a duplicate element and token")
+            }
             Self::IntegrityMismatch => f.write_str("wire frame integrity check failed"),
             Self::InvalidUtf8 => f.write_str("wire string contains invalid UTF-8"),
             Self::MissingShape => f.write_str("wire frame is missing required shape metadata"),
@@ -110,15 +118,16 @@ impl From<WireError> for DecodeError {
 /// External implementations must use a globally unique schema and change it when
 /// the wire interpretation changes. Never reuse a built-in `safemesh/` identity.
 pub trait WireSchema {
-    fn wire_schema() -> Vec<u8>;
+    /// Borrow fixed identities; return owned bytes for composed schemas.
+    fn wire_schema() -> Cow<'static, [u8]>;
     const REQUIRES_ARITY: bool = false;
 }
 
 macro_rules! wire_schema {
     ($ty:ty, $name:literal, $fixed:expr) => {
         impl WireSchema for $ty {
-            fn wire_schema() -> Vec<u8> {
-                $name.as_bytes().to_vec()
+            fn wire_schema() -> Cow<'static, [u8]> {
+                Cow::Borrowed($name.as_bytes())
             }
             const REQUIRES_ARITY: bool = $fixed;
         }
@@ -131,7 +140,9 @@ wire_schema!(GSet<u64>, "safemesh/gset-u64/v1", false);
 wire_schema!(OrSetDelta<u64, u64>, "safemesh/orset-delta-u64-u64/v1", false);
 wire_schema!(OrSetDelta<String, u64>, "safemesh/orset-delta-utf8-u64/v1", false);
 wire_schema!(OrSet<u64, u64>, "safemesh/orset-u64-u64/v1", false);
+wire_schema!(OrSet<String, u64>, "safemesh/orset-utf8-u64/v1", false);
 wire_schema!(Rga<u64, u64>, "safemesh/rga-u64-u64/v1", false);
+wire_schema!(RgaDelta<u64, u64>, "safemesh/rga-delta-u64-u64/v1", false);
 wire_schema!(
     LwwRegisterDelta<u64>,
     "safemesh/lww-register-delta-u64/v1",
@@ -152,18 +163,18 @@ wire_schema!(LwwMapDelta<u64, u64>, "safemesh/lww-map-delta-u64-u64/v1", false);
 wire_schema!(LwwMap<u64, u64>, "safemesh/lww-map-u64-u64/v1", false);
 
 impl<D: WireSchema> WireSchema for Record<D> {
-    fn wire_schema() -> Vec<u8> {
+    fn wire_schema() -> Cow<'static, [u8]> {
         let mut schema = b"safemesh/record/v1/".to_vec();
-        schema.extend(D::wire_schema());
-        schema
+        schema.extend_from_slice(D::wire_schema().as_ref());
+        Cow::Owned(schema)
     }
 }
 
 impl<D: WireSchema> WireSchema for EventLog<D> {
-    fn wire_schema() -> Vec<u8> {
+    fn wire_schema() -> Cow<'static, [u8]> {
         let mut schema = b"safemesh/event-log/v2/".to_vec();
-        schema.extend(D::wire_schema());
-        schema
+        schema.extend_from_slice(D::wire_schema().as_ref());
+        Cow::Owned(schema)
     }
 }
 
@@ -378,24 +389,25 @@ impl<'a> WireCursor<'a> {
     }
 }
 
-/// Append one byte.
-pub(super) fn write_u8(out: &mut Vec<u8>, value: u8) {
+/// Append one byte in the same format as [`WireCursor::read_u8`].
+pub fn write_u8(out: &mut Vec<u8>, value: u8) {
     out.push(value);
 }
 
-/// Append a `u32` as four little-endian bytes.
-pub(super) fn write_u32(out: &mut Vec<u8>, value: u32) {
+/// Append a `u32` as four little-endian bytes, matching [`WireCursor::read_u32`].
+pub fn write_u32(out: &mut Vec<u8>, value: u32) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
-/// Append a `u64` as eight little-endian bytes.
-pub(super) fn write_u64(out: &mut Vec<u8>, value: u64) {
+/// Append a `u64` as eight little-endian bytes, matching [`WireCursor::read_u64`].
+pub fn write_u64(out: &mut Vec<u8>, value: u64) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
 /// Append `len` as a four-byte little-endian `u32`.
 /// Returns `LengthOverflow` without changing `out` if `len` exceeds `u32::MAX`.
-pub(super) fn write_len(out: &mut Vec<u8>, len: usize) -> Result<(), WireError> {
+/// The result can be read with [`WireCursor::read_len`].
+pub fn write_len(out: &mut Vec<u8>, len: usize) -> Result<(), WireError> {
     let len = u32::try_from(len).map_err(|_| WireError::LengthOverflow)?;
     write_u32(out, len);
     Ok(())
@@ -403,7 +415,8 @@ pub(super) fn write_len(out: &mut Vec<u8>, len: usize) -> Result<(), WireError> 
 
 /// Append a `u32` length prefix followed by the bytes verbatim.
 /// Returns `LengthOverflow` without changing `out` if the slice length exceeds `u32::MAX`.
-pub(super) fn write_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), WireError> {
+/// Read the prefix with [`WireCursor::read_len`] and the payload with [`WireCursor::read_exact`].
+pub fn write_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), WireError> {
     write_len(out, bytes.len())?;
     out.extend_from_slice(bytes);
     Ok(())
@@ -448,7 +461,7 @@ impl<D: WireEncode + WireSchema> EventLog<D> {
         }
         let mut body = Vec::new();
         write_u32(&mut body, u32::MAX);
-        write_bytes(&mut body, &D::wire_schema())?;
+        write_bytes(&mut body, D::wire_schema().as_ref())?;
         match replica_count {
             Some(count) => {
                 write_u8(&mut body, 1);
@@ -498,7 +511,7 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
             return Err(WireError::MissingShape.into());
         }
         let schema_len = body.read_len()?;
-        if body.read_exact(schema_len)? != D::wire_schema() {
+        if body.read_exact(schema_len)? != D::wire_schema().as_ref() {
             return Err(WireError::DeltaTypeMismatch.into());
         }
         let replica_count = match body.read_u8()? {

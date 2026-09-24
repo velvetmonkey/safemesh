@@ -15,6 +15,31 @@ const APP_SHELL = typeof BUILD === 'undefined'
   ? ['', 'README.md', 'manifest.webmanifest', 'pwa-icon.svg', 'favicon.svg'].map((name) => BASE + name)
   : BUILD.assets
 
+// The Lab's guided scenarios run locally; runtime extras are optional.
+// Keep a shared budget of 32 recent extras to bound browsing history independently of scenario count.
+const MAX_RUNTIME_ENTRIES = 32
+let runtimeWrites = Promise.resolve()
+
+function cacheRuntimeResponse(request, response) {
+  const write = runtimeWrites.then(async () => {
+    const cache = await caches.open(CACHE_NAME)
+    // Refreshes re-enter at the newest position. Cache.keys() returns insertion order.
+    await cache.delete(request)
+    const extras = (await cache.keys()).filter((entry) => {
+      const url = new URL(entry.url)
+      return !(url.origin === self.location.origin && !url.search && APP_SHELL.includes(url.pathname))
+    })
+    // Make room before insertion so even concurrent fetches never exceed the cap.
+    for (const oldest of extras.slice(0, Math.max(0, extras.length - MAX_RUNTIME_ENTRIES + 1))) {
+      await cache.delete(oldest)
+    }
+    await cache.put(request, response)
+  })
+  // A failed cache operation must not poison subsequent refreshes.
+  runtimeWrites = write.catch(() => {})
+  return write
+}
+
 // addAll commits atomically, and each production Request verifies the bytes
 // emitted by this build. A deployment racing installation therefore fails closed.
 self.addEventListener('install', (event) => {
@@ -88,8 +113,7 @@ self.addEventListener('fetch', (event) => {
   event.waitUntil(network.then(async (response) => {
     if (response.ok) {
       const copy = response.clone()
-      const cache = await caches.open(CACHE_NAME)
-      await cache.put(request, copy)
+      await cacheRuntimeResponse(request, copy)
     }
   }).catch((error) => console.warn('SafeMesh refresh unavailable.', error)))
   event.respondWith(cached.then((hit) => hit || network.catch(() => undefined)))

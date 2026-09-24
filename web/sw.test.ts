@@ -124,6 +124,8 @@ function fetchWorker() {
           if (response?.headers.has('vary') && !options?.ignoreVary) return undefined
           return response?.clone()
         },
+        async keys() { return [...entries.keys()].map((url) => new Request(url)) },
+        async delete(input: string | Request) { return entries.delete(key(input)) },
         put(input: string | Request, response: Response) {
           const write = barrier.then(() => { entries.set(key(input), response.clone()) })
           writes.push(write)
@@ -247,5 +249,27 @@ describe('service worker fetch ownership', () => {
     const w = fetchWorker()
     expect(w.dispatch('/lab/data.json', 'cors', 'POST').response).toBeUndefined()
     expect(w.requests).toEqual([])
+  })
+})
+
+describe('service worker runtime entry bound', () => {
+  it('bounds concurrent runtime writes and preserves every installed shell entry', async () => {
+    const w = fetchWorker(), cache = await w.caches.open(CURRENT)
+    const shell = ['/lab/', '/lab/assets/a.js', '/lab/README.md']
+    for (const path of shell) await cache.put(path, new Response('installed A'))
+    await Promise.all(Array.from({ length: 80 }, (_, i) => w.dispatch(`/lab/extra-${i}`, 'cors').finish()))
+    const paths = (await cache.keys()).map((entry) => new URL(entry.url).pathname)
+    expect(paths).toEqual([...shell, ...Array.from({ length: 32 }, (_, i) => `/lab/extra-${i + 48}`)])
+    for (const path of shell) expect(await (await cache.match(path))!.text()).toBe('installed A')
+  })
+
+  it('reinserts a refreshed entry at the newest position', async () => {
+    const w = fetchWorker(), cache = await w.caches.open(CURRENT)
+    for (let i = 0; i < 32; i++) await w.dispatch(`/lab/extra-${i}`, 'cors').finish()
+    await w.dispatch('/lab/extra-0', 'cors').finish()
+    await w.dispatch('/lab/extra-32', 'cors').finish()
+    expect(await cache.match('/lab/extra-0')).toBeDefined()
+    expect(await cache.match('/lab/extra-1')).toBeUndefined()
+    expect(await cache.keys()).toHaveLength(32)
   })
 })
