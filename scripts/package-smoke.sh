@@ -30,7 +30,9 @@ python3 -m venv "$tmp_dir/venv"
   --find-links "$tmp_dir/wheels" \
   safemesh-python
 
-"$tmp_dir/venv/bin/python" - <<'PY'
+python_install_smoke() {
+  local python="$1"
+  "$python" - <<'PY'
 import safemesh_python as sm
 
 left = sm.GCounterReplica(1, 3)
@@ -75,10 +77,26 @@ assert map_left.value_or(7, 0) == map_right.value_or(7, 0) == 300
 print("PYTHON_INSTALL_SMOKE=true")
 PY
 
-"$tmp_dir/venv/bin/python" \
+  "$python" \
   "$repo_root/rust/crates/safemesh-python/examples/data_mule_demo.py"
 
-"$tmp_dir/venv/bin/python" "$repo_root/demos/two-app-inventory/test_sync.py"
+  "$python" "$repo_root/demos/two-app-inventory/test_sync.py"
+}
+
+python_install_smoke "$tmp_dir/venv/bin/python"
+
+# Exercise the published source archive through pip's isolated build backend.
+# A fresh target directory and disabled pip cache force compilation from source.
+(
+  cd "$repo_root/rust/crates/safemesh-python"
+  maturin sdist --out "$tmp_dir/sdist"
+)
+python3 -m venv "$tmp_dir/sdist-venv"
+CARGO_TARGET_DIR="$tmp_dir/sdist-target" \
+  "$tmp_dir/sdist-venv/bin/pip" install --verbose --no-cache-dir \
+  --no-binary safemesh-python "$tmp_dir"/sdist/*.tar.gz
+python_install_smoke "$tmp_dir/sdist-venv/bin/python"
+echo "PYTHON_SDIST_INSTALL_SMOKE=true"
 
 if ! command -v wasm-pack >/dev/null 2>&1; then
   cargo install wasm-pack --version 0.15.0 --locked

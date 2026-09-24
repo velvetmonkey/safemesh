@@ -51,6 +51,36 @@ pub enum WireError {
     ArityKindMismatch,
 }
 
+impl core::fmt::Display for WireError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::OwnershipViolation => {
+                f.write_str("record violates replica ownership or coordinate bounds")
+            }
+            Self::UnexpectedEof => f.write_str("unexpected end of wire input"),
+            Self::InvalidTag => f.write_str("unexpected wire tag"),
+            Self::TrailingBytes => f.write_str("unexpected trailing bytes after wire value"),
+            Self::LengthOverflow => f.write_str("wire length exceeds the representable range"),
+            Self::RecordCollision => f.write_str("record identity has conflicting payloads"),
+            Self::IntegrityMismatch => f.write_str("wire frame integrity check failed"),
+            Self::InvalidUtf8 => f.write_str("wire string contains invalid UTF-8"),
+            Self::MissingShape => f.write_str("wire frame is missing required shape metadata"),
+            Self::DeltaTypeMismatch => {
+                f.write_str("wire delta schema does not match the expected type")
+            }
+            Self::ReplicaCountMismatch { expected, actual } => write!(
+                f,
+                "replica-count mismatch: expected={expected}, actual={actual}"
+            ),
+            Self::ArityKindMismatch => {
+                f.write_str("invalid or incompatible replica-domain arity kind")
+            }
+        }
+    }
+}
+
+impl core::error::Error for WireError {}
+
 /// Optional limits for [`EventLog::from_wire_bytes_with_limits`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DecodeLimits {
@@ -350,24 +380,25 @@ impl<'a> WireCursor<'a> {
     }
 }
 
-/// Append one byte.
-pub(super) fn write_u8(out: &mut Vec<u8>, value: u8) {
+/// Append one byte in the same format as [`WireCursor::read_u8`].
+pub fn write_u8(out: &mut Vec<u8>, value: u8) {
     out.push(value);
 }
 
-/// Append a `u32` as four little-endian bytes.
-pub(super) fn write_u32(out: &mut Vec<u8>, value: u32) {
+/// Append a `u32` as four little-endian bytes, matching [`WireCursor::read_u32`].
+pub fn write_u32(out: &mut Vec<u8>, value: u32) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
-/// Append a `u64` as eight little-endian bytes.
-pub(super) fn write_u64(out: &mut Vec<u8>, value: u64) {
+/// Append a `u64` as eight little-endian bytes, matching [`WireCursor::read_u64`].
+pub fn write_u64(out: &mut Vec<u8>, value: u64) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
 /// Append `len` as a four-byte little-endian `u32`.
 /// Returns `LengthOverflow` without changing `out` if `len` exceeds `u32::MAX`.
-pub(super) fn write_len(out: &mut Vec<u8>, len: usize) -> Result<(), WireError> {
+/// The result can be read with [`WireCursor::read_len`].
+pub fn write_len(out: &mut Vec<u8>, len: usize) -> Result<(), WireError> {
     let len = u32::try_from(len).map_err(|_| WireError::LengthOverflow)?;
     write_u32(out, len);
     Ok(())
@@ -375,7 +406,8 @@ pub(super) fn write_len(out: &mut Vec<u8>, len: usize) -> Result<(), WireError> 
 
 /// Append a `u32` length prefix followed by the bytes verbatim.
 /// Returns `LengthOverflow` without changing `out` if the slice length exceeds `u32::MAX`.
-pub(super) fn write_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), WireError> {
+/// Read the prefix with [`WireCursor::read_len`] and the payload with [`WireCursor::read_exact`].
+pub fn write_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), WireError> {
     write_len(out, bytes.len())?;
     out.extend_from_slice(bytes);
     Ok(())
