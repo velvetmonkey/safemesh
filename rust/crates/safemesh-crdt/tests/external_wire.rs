@@ -1,4 +1,7 @@
-use safemesh_crdt::{GCounterDelta, WireCursor, WireDecode, WireEncode, WireError};
+use safemesh_crdt::{
+    write_bytes, write_len, write_u32, write_u64, write_u8, GCounterDelta, WireCursor, WireDecode,
+    WireEncode, WireError,
+};
 #[derive(Debug, PartialEq)]
 struct Stranger {
     replica: u64,
@@ -29,6 +32,47 @@ fn external_decoder_reads_library_value() {
             tally: value.tally,
         }
     );
+}
+
+#[test]
+fn external_writers_roundtrip_with_public_readers() {
+    let mut bytes = Vec::new();
+    write_u8(&mut bytes, 0xa5);
+    write_u32(&mut bytes, 0x0102_0304);
+    write_u64(&mut bytes, 0x0102_0304_0506_0708);
+    write_len(&mut bytes, 3).unwrap();
+    write_bytes(&mut bytes, &[0, 0xff, 0x80]).unwrap();
+
+    let mut cursor = WireCursor::new(&bytes);
+    assert_eq!(cursor.read_u8().unwrap(), 0xa5);
+    assert_eq!(cursor.read_u32().unwrap(), 0x0102_0304);
+    assert_eq!(cursor.read_u64().unwrap(), 0x0102_0304_0506_0708);
+    assert_eq!(cursor.read_len().unwrap(), 3);
+    let len = cursor.read_len().unwrap();
+    assert_eq!(cursor.read_exact(len).unwrap(), &[0, 0xff, 0x80]);
+    assert!(cursor.is_empty());
+
+    let mut set_frame = Vec::new();
+    write_u8(&mut set_frame, 0x20);
+    write_len(&mut set_frame, 2).unwrap();
+    write_u64(&mut set_frame, 2);
+    write_u64(&mut set_frame, 9);
+    let mut expected = GSet::new();
+    expected.insert(2u64);
+    expected.insert(9u64);
+    assert_eq!(GSet::<u64>::from_wire_bytes(&set_frame).unwrap(), expected);
+}
+
+#[test]
+fn external_write_len_rejects_unrepresentable_prefix_without_mutation() {
+    if let Ok(too_large) = usize::try_from(u64::from(u32::MAX) + 1) {
+        let mut bytes = vec![0xa5];
+        assert_eq!(
+            write_len(&mut bytes, too_large),
+            Err(WireError::LengthOverflow)
+        );
+        assert_eq!(bytes, [0xa5]);
+    }
 }
 
 use safemesh_crdt::{EventLog, GSet, WireSchema};
@@ -81,7 +125,7 @@ fn external_custom_payload_roundtrips_in_library_log() {
         name: b"reading".to_vec(),
     };
     let mut log = EventLog::new();
-    log.append(&mut GSet::new(), 2, value);
+    log.append(&mut GSet::new(), 2, value).unwrap();
     let bytes = log.to_wire_bytes().unwrap();
     assert_eq!(EventLog::<Custom>::from_wire_bytes(&bytes).unwrap(), log);
 }

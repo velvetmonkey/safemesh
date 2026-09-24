@@ -17,6 +17,79 @@ fn deliver_all(
 }
 
 #[test]
+fn dropped_envelopes_can_be_drained_and_cleared() {
+    let mut transport: InMemoryTransport<GCounterDelta> = InMemoryTransport::new();
+    transport.subscribe(1);
+    transport.subscribe(2);
+    assert_eq!(transport.drain_dropped(), 0);
+    transport.clear_dropped();
+
+    transport.send(1, 2, vec![]).unwrap();
+    for expected in 1..=3 {
+        transport.drop_next_send();
+        transport.send(1, 2, vec![]).unwrap();
+        assert_eq!(transport.dropped_len(), expected);
+        assert_eq!(transport.dropped_len(), expected);
+    }
+    let before = transport.dropped_len();
+    assert_eq!(transport.drain_dropped(), before);
+    assert_eq!(transport.dropped_len(), 0);
+    assert_eq!(transport.drain_dropped(), 0);
+
+    for expected in 1..=2 {
+        transport.drop_next_send();
+        transport.send(1, 2, vec![]).unwrap();
+        assert_eq!(transport.dropped_len(), expected);
+    }
+    transport.clear_dropped();
+    assert_eq!(transport.dropped_len(), 0);
+    transport.clear_dropped();
+    assert_eq!(transport.drain_dropped(), 0);
+    assert_eq!(transport.pending_len(), 1);
+    let incoming = transport.drain(2);
+    assert_eq!(incoming.len(), 1);
+    assert_eq!((incoming[0].from, incoming[0].to), (1, 2));
+    assert!(incoming[0].records.is_empty());
+
+    transport.drop_next_send();
+    transport.duplicate_next_send();
+    transport.clear_dropped();
+    assert_eq!(transport.drain_dropped(), 0);
+    transport.send(1, 2, vec![]).unwrap();
+    assert_eq!(transport.dropped_len(), 1);
+    assert_eq!(transport.pending_len(), 0);
+    assert_eq!(transport.drain_dropped(), 1);
+    transport.send(1, 2, vec![]).unwrap();
+    assert_eq!(transport.drain(2).len(), 2);
+    assert_eq!(transport.dropped_len(), 0);
+}
+
+#[test]
+fn self_link_disconnect_is_observable_and_heals() {
+    let mut transport: InMemoryTransport<GCounterDelta> = InMemoryTransport::new();
+    assert!(transport.is_connected(7, 7));
+    transport.subscribe(7);
+    transport.send(7, 7, vec![]).unwrap();
+
+    transport.set_connected(7, 7, false);
+    assert!(!transport.is_connected(7, 7));
+    assert_eq!(
+        transport.send(7, 7, vec![]),
+        Err(TransportError::Disconnected { from: 7, to: 7 })
+    );
+    assert!(transport.drain(7).is_empty());
+    assert_eq!(transport.pending_len(), 1);
+    assert!(transport.is_connected(7, 8));
+    assert!(transport.is_connected(8, 8));
+
+    transport.set_connected(7, 7, true);
+    assert!(transport.is_connected(7, 7));
+    assert_eq!(transport.drain(7).len(), 1);
+    assert_eq!(transport.pending_len(), 0);
+    assert!(transport.send(7, 7, vec![]).is_ok());
+}
+
+#[test]
 fn transport_requires_subscription_and_connectivity() {
     let mut transport: InMemoryTransport<GCounterDelta> = InMemoryTransport::new();
     let records = vec![];
@@ -54,7 +127,8 @@ fn anti_entropy_recovers_after_drop_duplicate_and_reorder() {
             replica: 1,
             tally: 1,
         },
-    );
+    )
+    .unwrap();
     left.append(
         &mut safemesh_crdt::GCounter::new(3),
         1,
@@ -62,7 +136,8 @@ fn anti_entropy_recovers_after_drop_duplicate_and_reorder() {
             replica: 1,
             tally: 2,
         },
-    );
+    )
+    .unwrap();
     left.append(
         &mut safemesh_crdt::GCounter::new(3),
         1,
@@ -70,7 +145,8 @@ fn anti_entropy_recovers_after_drop_duplicate_and_reorder() {
             replica: 1,
             tally: 3,
         },
-    );
+    )
+    .unwrap();
 
     let mut transport = InMemoryTransport::new();
     transport.subscribe(1);
@@ -102,7 +178,8 @@ fn partition_then_heal_uses_versions_to_cover_missing_records() {
             replica: 1,
             tally: 1,
         },
-    );
+    )
+    .unwrap();
 
     let mut transport = InMemoryTransport::new();
     transport.subscribe(1);
@@ -178,8 +255,12 @@ fn version_exchange_public_api_round_trip() {
 #[test]
 fn version_exchange_public_api_trust_boundary() {
     let mut source = EventLog::new();
-    source.append(&mut safemesh_crdt::GSet::new(), 7, 1u64);
-    source.append(&mut safemesh_crdt::GSet::new(), 7, 2u64);
+    source
+        .append(&mut safemesh_crdt::GSet::new(), 7, 1u64)
+        .unwrap();
+    source
+        .append(&mut safemesh_crdt::GSet::new(), 7, 2u64)
+        .unwrap();
     let empty_receiver = EventLog::<u64>::new();
     let lie = rebuild(&BTreeMap::from([(7, 2)]), &BTreeSet::new());
     assert_eq!(source.since(empty_receiver.version()).len(), 2);
@@ -247,4 +328,65 @@ fn queued_packets_wait_for_link_healing() {
     assert_eq!(transport.drain(2)[0].from, 1);
     assert_eq!(transport.drain(1)[0].from, 2);
     assert_eq!(transport.pending_len(), 0);
+}
+
+// Rejected sends preserve armed faults until a valid send consumes them.
+fn sm70_rejected_fault(drop: bool, rejection: u8) {
+    let mut transport: InMemoryTransport<GCounterDelta> = InMemoryTransport::new();
+    for peer in [1, 2, 3, 4] {
+        transport.subscribe(peer);
+    }
+    transport.set_connected(1, 2, false);
+    if drop {
+        transport.drop_next_send();
+    } else {
+        transport.duplicate_next_send();
+    }
+    let (from, to, error) = match rejection {
+        0 => (9, 2, TransportError::NotSubscribed { peer: 9 }),
+        1 => (1, 9, TransportError::NotSubscribed { peer: 9 }),
+        _ => (1, 2, TransportError::Disconnected { from: 1, to: 2 }),
+    };
+    assert_eq!(transport.send(from, to, vec![]), Err(error));
+    assert_eq!(transport.pending_len(), 0);
+    assert_eq!(transport.dropped_len(), 0);
+    transport.send(3, 4, vec![]).unwrap();
+    assert_eq!(transport.pending_len(), if drop { 0 } else { 2 });
+    assert_eq!(transport.dropped_len(), usize::from(drop));
+    let incoming = transport.drain(4);
+    for envelope in incoming {
+        assert_eq!((envelope.from, envelope.to), (3, 4));
+    }
+    transport.send(3, 4, vec![]).unwrap();
+    assert_eq!(transport.pending_len(), 1, "fault is one-shot");
+}
+
+#[test]
+fn sm70_invariant_drop_sender() {
+    sm70_rejected_fault(true, 0);
+}
+
+#[test]
+fn sm70_invariant_drop_recipient() {
+    sm70_rejected_fault(true, 1);
+}
+
+#[test]
+fn sm70_invariant_drop_disconnected() {
+    sm70_rejected_fault(true, 2);
+}
+
+#[test]
+fn sm70_invariant_duplicate_sender() {
+    sm70_rejected_fault(false, 0);
+}
+
+#[test]
+fn sm70_invariant_duplicate_recipient() {
+    sm70_rejected_fault(false, 1);
+}
+
+#[test]
+fn sm70_invariant_duplicate_disconnected() {
+    sm70_rejected_fault(false, 2);
 }
