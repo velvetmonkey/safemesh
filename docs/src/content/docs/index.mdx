@@ -24,8 +24,6 @@ import EvidenceBridge from '../../components/home/EvidenceBridge.astro';
 ## What it does
 
 SafeMesh provides **Lean-backed CRDT convergence for small, embeddable state sync**.
-Lean proves mathematical models; Rust is checked against a finite generated corpus.
-Bindings, storage and transport are outside that proof. See the [claims ceiling](/safemesh/claims/).
 It is for developers building state-sync systems who bring the transport and application schema.
 This page follows **main (unreleased)**, rather than a release manual.
 
@@ -61,9 +59,9 @@ The proof bridges to code in three steps:
 
 <EvidenceBridge />
 
-### v0 support
+### v0 focus
 
-**G-Counter and OR-Set** are the two types selected for v0; **Supported** in the
+**G-Counter and OR-Set** are the two types selected for v0; **v0 focus** in the
 table means this type selection, within the language-path limits below. All other
 carriers remain **experimental**. The repository's source history records the
 decision behind this selection; release status is a separate question from proof status, below.
@@ -76,8 +74,8 @@ Proof breadth and release support are separate: the five existing carrier proofs
 
 | Type | v0 status | Evidence |
 | --- | --- | --- |
-| G-Counter (`GCounter`) | **Supported** | [Lean model](https://github.com/velvetmonkey/safemesh/blob/main/lean/SafeMesh/DeltaGCounter.lean), [Rust conformance](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/tests/conformance.rs) |
-| OR-Set (`OrSet`) | **Supported** | [Lean model](https://github.com/velvetmonkey/safemesh/blob/main/lean/SafeMesh/DeltaORSet.lean), [Rust conformance](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/tests/conformance.rs) |
+| G-Counter (`GCounter`) | **v0 focus** | [Lean model](https://github.com/velvetmonkey/safemesh/blob/main/lean/SafeMesh/DeltaGCounter.lean), [Rust conformance](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/tests/conformance.rs) |
+| OR-Set (`OrSet`) | **v0 focus** | [Lean model](https://github.com/velvetmonkey/safemesh/blob/main/lean/SafeMesh/DeltaORSet.lean), [Rust conformance](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/tests/conformance.rs) |
 | G-Set (`GSet`) | **Experimental** | [Proof and finite-test boundary](/safemesh/claims/#tested-not-proven) |
 | PN-Counter (`PnCounter`) | **Experimental** | [Proof and finite-test boundary](/safemesh/claims/#tested-not-proven) |
 | RGA/Text (`Rga`) | **Experimental** | [Proof and finite-test boundary](/safemesh/claims/#tested-not-proven) |
@@ -85,7 +83,7 @@ Proof breadth and release support are separate: the five existing carrier proofs
 | Enable-wins Flag (`EnableWinsFlag`) | **Experimental** | [Tested, not proven](/safemesh/claims/#tested-not-proven) |
 | LWW Map (`LwwMap`) | **Experimental** | [Tested, not proven](/safemesh/claims/#tested-not-proven) |
 
-The supported language paths have different limits:
+These language paths have different limits:
 
 - Rust: G-Counter and numeric/UTF-8 OR-Set mutation, record exchange and checked
   restore; only Linux Rust has the durable writer.
@@ -101,7 +99,7 @@ The supported language paths have different limits:
 - C: G-Counter carrier mutation/read and delta encoding, and numeric OR-Set
   mutation/remove/whole-state merge; no log or recovery promise.
 
-Bindings are tested glue, not Lean proofs. The [install matrix](https://github.com/velvetmonkey/safemesh/blob/main/README.md#install-matrix)
+The [install matrix](https://github.com/velvetmonkey/safemesh/blob/main/README.md#install-matrix)
 records measured environments and artifact availability separately.
 For decrementing stock, use [paired supported G-Counters](/safemesh/getting-started/#decrement-with-supported-types).
 Application schemas, custom durable replicas and delivery/retry/storage remain caller-owned.
