@@ -6,8 +6,8 @@ use std::fmt::Debug;
 
 use safemesh_crdt::{
     EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounterDelta, GSet, LwwMap, LwwMapDelta,
-    LwwRegister, LwwRegisterDelta, OrSet, PnCounterDelta, Record, RecordId, Rga, WireDecode,
-    WireEncode, WireError,
+    LwwRegister, LwwRegisterDelta, OrSet, PnCounterDelta, Record, RecordId, Rga, RgaDelta,
+    WireDecode, WireEncode, WireError,
 };
 
 fn roundtrip<T>(value: T)
@@ -97,6 +97,103 @@ fn canonical_state_encodings_are_sorted() {
     rga.insert(10, 1);
     rga.delete(30);
     roundtrip(rga);
+}
+
+#[test]
+fn rga_delta_variants_roundtrip_and_refuse_corruption() {
+    for delta in [
+        RgaDelta::Insert {
+            position: 30u64,
+            value: 3u64,
+        },
+        RgaDelta::Delete { position: 30 },
+    ] {
+        let bytes = delta.to_wire_bytes().unwrap();
+        assert_eq!(
+            RgaDelta::<u64, u64>::from_wire_bytes(&bytes),
+            Ok(delta.clone())
+        );
+        assert_eq!(
+            RgaDelta::<u64, u64>::from_wire_bytes(&bytes[..bytes.len() - 1]),
+            Err(WireError::UnexpectedEof)
+        );
+        let mut invalid_tag = bytes;
+        invalid_tag[0] = 0xff;
+        assert_eq!(
+            RgaDelta::<u64, u64>::from_wire_bytes(&invalid_tag),
+            Err(WireError::InvalidTag)
+        );
+    }
+}
+
+fn assert_rga_vector<T>(name: &str, value: T, bytes: &[u8])
+where
+    T: WireEncode + WireDecode + PartialEq + Debug,
+{
+    assert_eq!(
+        value.to_wire_bytes().unwrap(),
+        bytes,
+        "{name} encoder drift"
+    );
+    assert_eq!(T::from_wire_bytes(bytes), Ok(value), "{name} decode drift");
+}
+
+#[test]
+fn rga_delta_u64_committed_vectors_are_canonical() {
+    let insert = RgaDelta::Insert {
+        position: 30u64,
+        value: 3u64,
+    };
+    let delete = RgaDelta::<u64, u64>::Delete { position: 30 };
+    let max = RgaDelta::Insert {
+        position: u64::MAX,
+        value: u64::MAX,
+    };
+    let record = Record {
+        id: RecordId {
+            replica: 9,
+            sequence: 4,
+        },
+        delta: insert.clone(),
+    };
+    let mut log = EventLog::new();
+    let mut state = Rga::new();
+    log.append(&mut state, 9, insert.clone()).unwrap();
+    log.append(&mut state, 9, delete.clone()).unwrap();
+    assert_eq!(log.records().len(), 2);
+    assert_eq!(log.records()[0].delta, insert);
+    assert_eq!(log.records()[1].delta, delete);
+
+    assert_rga_vector(
+        "empty.log",
+        EventLog::<RgaDelta<u64, u64>>::new(),
+        include_bytes!("fixtures/rga-delta-u64/empty.log"),
+    );
+    assert_rga_vector(
+        "insert.delta",
+        insert,
+        include_bytes!("fixtures/rga-delta-u64/insert.delta"),
+    );
+    assert_rga_vector(
+        "delete.delta",
+        delete,
+        include_bytes!("fixtures/rga-delta-u64/delete.delta"),
+    );
+    assert_rga_vector(
+        "max.delta",
+        max,
+        include_bytes!("fixtures/rga-delta-u64/max.delta"),
+    );
+    assert_rga_vector(
+        "insert.record",
+        record,
+        include_bytes!("fixtures/rga-delta-u64/insert.record"),
+    );
+    assert_rga_vector(
+        "sequence.log",
+        log,
+        include_bytes!("fixtures/rga-delta-u64/sequence.log"),
+    );
 }
 
 #[test]
