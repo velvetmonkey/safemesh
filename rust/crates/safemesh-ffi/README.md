@@ -86,6 +86,6 @@ The set delegates to Rust `OrSet<u64, u64>`: elements and tokens are unsigned
 64-bit integers (JavaScript uses `bigint`). Tokens are global to the set; use a
 fresh, replica-unique token for every add to obtain add-wins behavior. Removal
 persists tombstones even before an add arrives, and a reused token affects every
-element carrying it. Observed tokens include tombstoned adds. Merge unions all
-adds and tombstones, and reads return sorted unique live members. This is the
+element carrying it. Observed tokens include only live adds, excluding tombstoned
+tokens. Merge unions all adds and tombstones, and reads return sorted unique live members. This is the
 core's token semantics, including token reuse; the binding does not allocate IDs.
