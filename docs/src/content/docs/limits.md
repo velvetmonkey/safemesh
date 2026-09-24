@@ -41,13 +41,13 @@ SafeMesh's convergence claim is conditional on missing deltas eventually being r
 
 `VersionVector::from_peer_prefixes` accepts positive prefixes through `u64::MAX`, including 1,000,001. It copies the prefix map and independent sequence-zero acknowledgements directly, taking O(r + z) time and additional space for r prefix entries and z zero acknowledgements. Prefix magnitude does not determine reconstruction work. A zero-valued prefix remains noncanonical; carry sequence-zero possession in `zero_replicas`.
 
-Keep three application-owned limits at the receiving boundary:
+Keep three application-owned limits at the receiving boundary; `VersionVector::from_peer_prefixes_with_limits` accepts a `VersionVectorLimits` with optional `max_authors` and `max_zero_replicas` budgets and rejects oversized collections before validating prefixes or cloning either collection (`None` remains unbounded):
 
 - **Author-entry budget:** cap the number of prefix entries before reconstruction to bound validation and map cloning.
 - **Zero-acknowledgement budget:** cap the zero-author set before reconstruction to bound set cloning; the prefix-entry budget does not cover it.
 - **Encoded-byte budget:** cap the version message before decoding to bound parsing and input allocation, including repeated entries that a map or set would deduplicate.
 
-SafeMesh has no built-in version wire codec or universal numeric budgets for these collections. Choose budgets for your application, and enforce entry budgets during decoding as well as before reconstruction. These limits bound input cost without imposing a writer-lifetime ceiling. Peer versions remain possession claims: reconstruction does not verify that the sender holds the records. Evidence: [`VersionVector`](/safemesh/reference/rust/safemesh_crdt/struct.VersionVector.html).
+SafeMesh has a built-in version wire codec with default ceilings of 4,096 authors and 4,096 zero acknowledgements. Applications can choose their own budgets with `VersionVector::from_wire_bytes_with_limits` and should bound encoded bytes before decoding. The peer-prefix constructors retain their caller-selected budgets. These limits bound input cost without imposing a writer-lifetime ceiling. Peer versions remain possession claims: reconstruction does not verify that the sender holds the records. Evidence: [`VersionVector`](/safemesh/reference/rust/safemesh_crdt/struct.VersionVector.html).
 
 ## You need consensus or leader election
 
@@ -67,7 +67,7 @@ The universal results are about Lean definitions. Rust is checked against a fini
 
 ## You need a map of PN-counters
 
-PN-Counter is **experimental** in v0. Prefer [paired supported G-Counters](/safemesh/getting-started/#decrement-with-supported-types) for added/removed totals, optionally with an OR-Set for membership. The keyed schema and its consistency rules remain application-owned. There is no built-in map of PN-counters keyed by SKU names. `LwwMap` chooses a winning value; using it for a stock total loses concurrent increments. A caller can define an application `Crdt` containing a `BTreeMap<String, PnCounter>`, with per-key deltas, consistent replica arity and explicit key creation/removal rules, then supply its wire schema and codecs. Alternatively, keep separate PN-counter logs per stable SKU and route them in the application. Neither composition inherits a SafeMesh proof. Evidence: [`PnCounter`](/safemesh/reference/rust/safemesh_crdt/struct.PnCounter.html), [`LwwMap`](/safemesh/reference/rust/safemesh_crdt/struct.LwwMap.html), and the extension contract [`Crdt`](/safemesh/reference/rust/safemesh_crdt/trait.Crdt.html).
+PN-Counter is **experimental** in v0. Prefer [paired supported G-Counters](/safemesh/persist-and-restart/#decrement-with-supported-types) for added/removed totals, optionally with an OR-Set for membership. The keyed schema and its consistency rules remain application-owned. There is no built-in map of PN-counters keyed by SKU names. `LwwMap` chooses a winning value; using it for a stock total loses concurrent increments. A caller can define an application `Crdt` containing a `BTreeMap<String, PnCounter>`, with per-key deltas, consistent replica arity and explicit key creation/removal rules, then supply its wire schema and codecs. Alternatively, keep separate PN-counter logs per stable SKU and route them in the application. Neither composition inherits a SafeMesh proof. Evidence: [`PnCounter`](/safemesh/reference/rust/safemesh_crdt/struct.PnCounter.html), [`LwwMap`](/safemesh/reference/rust/safemesh_crdt/struct.LwwMap.html), and the extension contract [`Crdt`](/safemesh/reference/rust/safemesh_crdt/trait.Crdt.html).
 
 ## You need durable restart for a custom CRDT
 

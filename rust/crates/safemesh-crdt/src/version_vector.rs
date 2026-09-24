@@ -11,10 +11,11 @@ use alloc::collections::{BTreeMap, BTreeSet};
 /// Later records that arrive before earlier records must not advance this
 /// prefix, otherwise `since` could hide gaps. Sequence zero is acknowledged
 /// independently by `zero_replicas`; it is not implied by a positive prefix.
-/// There is no built-in version wire codec. Custom version exchanges must carry
-/// both [`Self::entries`] and [`Self::zero_replicas`]. A receiver can rebuild
-/// the vector with [`Self::from_peer_prefixes`] after checking application-owned
-/// author and zero-acknowledgement budgets, as below; record payloads are not required.
+/// The built-in wire codec carries both [`Self::entries`] and
+/// [`Self::zero_replicas`]. Custom version exchanges must carry both too. A
+/// receiver can rebuild the vector with [`Self::from_peer_prefixes`] after
+/// checking application-owned author and zero-acknowledgement budgets, as below;
+/// record payloads are not required.
 /// Legacy prefix-only exchanges cannot acknowledge zeros and will keep receiving
 /// them until upgraded.
 ///
@@ -46,7 +47,7 @@ use alloc::collections::{BTreeMap, BTreeSet};
 /// }
 ///
 /// let mut peer = EventLog::new();
-/// peer.append(&mut safemesh_crdt::GSet::new(), 7, 42u64);
+/// peer.append(&mut safemesh_crdt::GSet::new(), 7, 42u64).unwrap();
 /// // Carry both collections over the application's transport.
 /// let prefixes = peer.version().entries().clone();
 /// let zeros = peer.version().zero_replicas().clone();
@@ -59,6 +60,60 @@ use alloc::collections::{BTreeMap, BTreeSet};
 pub struct VersionVector {
     entries: BTreeMap<u64, u64>,
     zero_replicas: BTreeSet<u64>,
+}
+
+/// Optional collection budgets for [`VersionVector::from_peer_prefixes_with_limits`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VersionVectorLimits {
+    /// Maximum positive-prefix entries. `None` is unbounded; `Some(0)` requires none.
+    pub max_authors: Option<usize>,
+    /// Maximum sequence-zero acknowledgements, independently of prefix entries.
+    /// `None` is unbounded; `Some(0)` requires none.
+    pub max_zero_replicas: Option<usize>,
+}
+
+impl VersionVectorLimits {
+    /// Default wire entry ceilings. Callers can supply tighter or larger budgets
+    /// with [`VersionVector::from_wire_bytes_with_limits`].
+    pub const WIRE_DEFAULT: Self = Self {
+        max_authors: Some(4096),
+        max_zero_replicas: Some(4096),
+    };
+}
+
+/// Failure from opt-in bounded peer-version reconstruction.
+/// Separate from [`VersionVectorError`] to preserve existing exhaustive matches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VersionVectorLimitError {
+    Prefix(VersionVectorError),
+    AuthorLimitExceeded { max_authors: usize },
+    ZeroReplicaLimitExceeded { max_zero_replicas: usize },
+}
+
+impl core::fmt::Display for VersionVectorLimitError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Prefix(error) => error.fmt(f),
+            Self::AuthorLimitExceeded { max_authors } => {
+                write!(f, "peer version exceeds author limit {max_authors}")
+            }
+            Self::ZeroReplicaLimitExceeded { max_zero_replicas } => {
+                write!(
+                    f,
+                    "peer version exceeds zero-acknowledgement limit {max_zero_replicas}"
+                )
+            }
+        }
+    }
+}
+
+impl core::error::Error for VersionVectorLimitError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Prefix(error) => Some(error),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,13 +147,17 @@ impl VersionVector {
     ///
     /// Accepts every positive `u64` prefix, including `u64::MAX`, without
     /// iterating over sequences. Zero remains noncanonical: use `zero_replicas`.
+    /// This method imposes no collection budget. Use
+    /// [`Self::from_peer_prefixes_with_limits`] to enforce author and
+    /// zero-acknowledgement budgets before validation or cloning.
     /// Callers must retain three application-owned input limits:
     /// - author count bounds prefix validation and map cloning;
     /// - zero-acknowledgement count bounds set cloning;
     /// - encoded byte size, enforced before decoding, bounds input allocation
     ///   and parsing (including duplicate entries before collection deduplication).
     ///
-    /// No built-in version wire codec or universal application budget is imposed.
+    /// The built-in wire decoder has default entry ceilings; callers can choose
+    /// their own limits. This constructor imposes no universal application budget.
     /// Reconstruction takes O(entries.len() + zero_replicas.len()) time and space.
     pub fn from_peer_prefixes(
         entries: &BTreeMap<u64, u64>,
@@ -114,6 +173,36 @@ impl VersionVector {
             entries: entries.clone(),
             zero_replicas: zero_replicas.clone(),
         })
+    }
+
+    /// Reconstruct a peer version with caller-supplied collection budgets.
+    ///
+    /// Checks author count first, then zero-acknowledgement count, before
+    /// validating prefixes or cloning either collection. If both budgets are
+    /// exceeded, returns [`VersionVectorLimitError::AuthorLimitExceeded`].
+    /// No partial vector is returned. Exact limits are accepted.
+    /// [`VersionVectorLimits::default`] preserves the unbounded constructor's
+    /// values and wraps its errors in [`VersionVectorLimitError::Prefix`].
+    /// These checks do not bound decoding or input allocation: callers must
+    /// enforce encoded-byte and entry budgets at their decoding boundary too.
+    pub fn from_peer_prefixes_with_limits(
+        entries: &BTreeMap<u64, u64>,
+        zero_replicas: &BTreeSet<u64>,
+        limits: VersionVectorLimits,
+    ) -> Result<Self, VersionVectorLimitError> {
+        if let Some(max_authors) = limits.max_authors {
+            if entries.len() > max_authors {
+                return Err(VersionVectorLimitError::AuthorLimitExceeded { max_authors });
+            }
+        }
+        if let Some(max_zero_replicas) = limits.max_zero_replicas {
+            if zero_replicas.len() > max_zero_replicas {
+                return Err(VersionVectorLimitError::ZeroReplicaLimitExceeded {
+                    max_zero_replicas,
+                });
+            }
+        }
+        Self::from_peer_prefixes(entries, zero_replicas).map_err(VersionVectorLimitError::Prefix)
     }
 
     pub fn get(&self, replica: u64) -> u64 {

@@ -59,11 +59,12 @@ impl<T: Ord, K: Ord> OrSet<T, K> {
 }
 
 impl<T: Ord + Clone, K: Ord + Clone> OrSet<T, K> {
+    /// Return the live add tokens for `element`, excluding tombstoned tokens.
     pub fn observed_tokens(&self, element: &T) -> BTreeSet<K> {
         self.adds
             .iter()
             .filter_map(|(candidate, token)| {
-                if candidate == element {
+                if candidate == element && !self.tombstones.contains(token) {
                     Some(token.clone())
                 } else {
                     None

@@ -48,9 +48,10 @@ export type LogEntry = {
 }
 
 export type Simulation = {
-  peers: Peer[]
+  peers: readonly Peer[]
   queue: Packet[]
   partitioned: boolean
+  repairSkipLogged: boolean
   latencyMs: number
   dropRate: number
   antiEntropyMs: number
@@ -76,6 +77,7 @@ export function createSimulation(peerCount = 4): Simulation {
     })),
     queue: [],
     partitioned: false,
+    repairSkipLogged: false,
     latencyMs: 550,
     dropRate: 0.08,
     antiEntropyMs: 5000,
@@ -103,7 +105,12 @@ export function setPeerCount(sim: Simulation, peerCount: number): Simulation {
 export function setPartitioned(sim: Simulation, partitioned: boolean): Simulation {
   if (typeof partitioned !== 'boolean') throw new TypeError('partitioned must be a boolean')
   return appendLog(
-    { ...sim, partitioned, nextAntiEntropyAt: partitioned ? sim.nextAntiEntropyAt : sim.now },
+    {
+      ...sim,
+      partitioned,
+      repairSkipLogged: partitioned && sim.partitioned && sim.repairSkipLogged,
+      nextAntiEntropyAt: partitioned ? sim.nextAntiEntropyAt : sim.now,
+    },
     partitioned ? 'Network cut: new radio messages are stuck locally' : 'Network back up: camps catching up',
     'partition',
     partitioned ? 'partition enabled: generated deltas stay local' : 'partition healed: queued gossip resumes',
@@ -289,8 +296,8 @@ export function convergence(sim: Simulation): {
 
 // Peer arrays and their carriers are immutable. Clock and queue changes reuse them;
 // delivery replaces the array, invalidating comparisons on the same tick.
-const carrierComparisons = new WeakMap<Peer[], Omit<ReturnType<typeof convergence>, 'converged'>>()
-const repairComplete = new WeakSet<Peer[]>()
+const carrierComparisons = new WeakMap<readonly Peer[], Omit<ReturnType<typeof convergence>, 'converged'>>()
+const repairComplete = new WeakSet<readonly Peer[]>()
 
 export function runAntiEntropyNow(sim: Simulation): Simulation {
   return runAntiEntropy(sim)
@@ -485,13 +492,22 @@ function applyDeltaToPeer(peer: Peer, delta: MeshDelta): Peer {
 
 function maybeRunAntiEntropy(sim: Simulation): Simulation {
   if (sim.antiEntropyMs <= 0 || sim.now < sim.nextAntiEntropyAt) return sim
-  if (sim.partitioned) return sim
   return runAntiEntropy(sim)
 }
 
 function runAntiEntropy(sim: Simulation): Simulation {
   // Scheduling is guarded by maybeRunAntiEntropy; manual repair also works when it is off.
-  if (sim.partitioned) return sim
+  if (sim.partitioned) {
+    // The clock can leave scheduled repair overdue, and the UI calls tick every
+    // frame. Record one skip per partition even when other events are interleaved.
+    if (sim.repairSkipLogged) return sim
+    return appendLog(
+      { ...sim, repairSkipLogged: true },
+      'Anti-entropy cannot cross the partition yet',
+      'partition',
+      'anti-entropy skipped: partition still enabled',
+    )
+  }
 
   // Equal carrier states can still have different record histories. Only matching
   // version vectors (cached by convergence), or identical logs, prove no work remains.
