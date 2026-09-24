@@ -107,9 +107,66 @@ describe('mesh simulation', () => {
   it.each([0, 5000])('manual repair respects a partition with interval %i', (interval) => {
     let sim = setPartitioned(setAntiEntropyMs(createSimulation(2), interval), true)
     sim = dropNextPacket(bumpCounter(sim, 0))
+    const before = sim
     sim = runAntiEntropyNow(sim)
+    expect(sim.log).toHaveLength(before.log.length + 1)
+    expect(sim.log.slice(1)).toEqual(before.log)
+    expect(sim.log[0]).toMatchObject({
+      plain: 'Anti-entropy cannot cross the partition yet',
+      tone: 'partition',
+      technical: 'anti-entropy skipped: partition still enabled',
+    })
+    expect(sim.queue).toEqual(before.queue)
     expect(convergence(sim).gcounterValues).toEqual([1, 0])
     expect(sim.antiEntropyMs).toBe(interval)
+  })
+
+  it('logs scheduled repair blocked by a partition when the deadline arrives', () => {
+    const before = setPartitioned(setAntiEntropyMs(createSimulation(2), 5000), true)
+    const early = tick(before, 4999)
+    expect(early.log).toEqual(before.log)
+    const due = tick(early, 1)
+    expect(due.log).toHaveLength(before.log.length + 1)
+    expect(due.log.slice(1)).toEqual(before.log)
+    expect(due.log[0]).toMatchObject({
+      at: 5000,
+      plain: 'Anti-entropy cannot cross the partition yet',
+      tone: 'partition',
+      technical: 'anti-entropy skipped: partition still enabled',
+    })
+    expect(due.peers).toEqual(before.peers)
+    expect(due.queue).toEqual(before.queue)
+  })
+
+  it.each(['scheduled', 'manual', 'mixed'])('preserves earlier events through repeated %s repair skips', (mode) => {
+    let sim = setPartitioned(setAntiEntropyMs(createSimulation(2), mode === 'manual' ? 0 : 5000), true)
+    sim = bumpCounter(sim, 0)
+    const earlierEvents = sim.log
+
+    for (let frame = 0; frame < 200; frame += 1) {
+      sim = tick(sim, 33)
+      if (mode !== 'scheduled') sim = runAntiEntropyNow(sim)
+    }
+
+    expect(sim.log.filter((entry) => entry.technical === 'anti-entropy skipped: partition still enabled')).toHaveLength(1)
+    expect(sim.log.slice(1)).toEqual(earlierEvents)
+    expect(sim.queue.length).toBeGreaterThan(0)
+
+    sim = bumpCounter(sim, 1)
+    const newEvent = sim.log[0]
+    sim = mode === 'manual' ? runAntiEntropyNow(sim) : tick(sim, 33)
+    expect(sim.log[0]).toEqual(newEvent)
+    expect(sim.log.filter((entry) => entry.technical === 'anti-entropy skipped: partition still enabled')).toHaveLength(1)
+    expect(sim.log.slice(2)).toContainEqual(earlierEvents[0])
+
+    sim = setPartitioned(sim, false)
+    sim = mode === 'manual' ? runAntiEntropyNow(sim) : tick(sim, 0)
+    expect(sim.queue.some((packet) => packet.phase === 'repair')).toBe(true)
+
+    sim = setPartitioned(sim, true)
+    sim = runAntiEntropyNow(sim)
+    expect(sim.log[0].technical).toBe('anti-entropy skipped: partition still enabled')
+    expect(sim.log.filter((entry) => entry.technical === 'anti-entropy skipped: partition still enabled')).toHaveLength(2)
   })
 
   it('runs scheduled repair at each deadline, never before it', () => {

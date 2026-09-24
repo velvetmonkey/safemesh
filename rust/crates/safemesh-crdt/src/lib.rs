@@ -80,8 +80,8 @@ pub use transport::{
 
 mod codec;
 pub use codec::{
-    write_bytes, write_len, write_u32, write_u64, write_u8, DecodeError, DecodeLimits, WireCursor,
-    WireDecode, WireEncode, WireError, WireSchema,
+    write_bytes, write_len, write_u32, write_u64, write_u8, CollectionLimits, DecodeError,
+    DecodeLimits, WireCursor, WireDecode, WireEncode, WireError, WireSchema,
 };
 
 use codec::*;

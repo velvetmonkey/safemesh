@@ -100,6 +100,87 @@ fn canonical_state_encodings_are_sorted() {
 }
 
 #[test]
+fn gset_and_rga_collection_limits() {
+    use safemesh_crdt::{CollectionLimits, WireError};
+    let count = 4097u32;
+    let raised = CollectionLimits {
+        max_elements: Some(count as usize),
+    };
+    let mut bytes = vec![0x20];
+    bytes.extend_from_slice(&count.to_le_bytes());
+    for value in 0..u64::from(count) {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    assert_eq!(
+        GSet::<u64>::from_wire_bytes(&bytes),
+        Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+    );
+    let decoded = GSet::<u64>::from_wire_bytes_with_limits(&bytes, raised).unwrap();
+    assert_eq!(decoded.elements().len(), count as usize);
+    assert_eq!(decoded.to_wire_bytes().unwrap(), bytes);
+    let mut local = GSet::new();
+    local.insert(9000);
+    local.merge(&decoded);
+    assert!(local.contains(&9000) && local.contains(&4096));
+
+    let record = Record {
+        id: RecordId {
+            replica: 7,
+            sequence: 1,
+        },
+        delta: decoded,
+    };
+    let record_bytes = record.to_wire_bytes().unwrap();
+    assert_eq!(
+        Record::<GSet<u64>>::from_wire_bytes(&record_bytes),
+        Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+    );
+    let mut log_bytes = Vec::new();
+    EventLog::encode_records(None, &[record], &mut log_bytes).unwrap();
+    assert_eq!(
+        EventLog::<GSet<u64>>::from_wire_bytes(&log_bytes),
+        Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+    );
+
+    let mut placed = vec![0x40];
+    placed.extend_from_slice(&count.to_le_bytes());
+    for value in 0..u64::from(count) {
+        placed.extend_from_slice(&value.to_le_bytes());
+        placed.extend_from_slice(&value.to_le_bytes());
+    }
+    placed.extend_from_slice(&0u32.to_le_bytes());
+    assert_eq!(
+        Rga::<u64, u64>::from_wire_bytes(&placed),
+        Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+    );
+    assert_eq!(
+        Rga::<u64, u64>::from_wire_bytes_with_limits(&placed, raised)
+            .unwrap()
+            .to_wire_bytes()
+            .unwrap(),
+        placed
+    );
+
+    let mut tombstones = vec![0x40];
+    tombstones.extend_from_slice(&0u32.to_le_bytes());
+    tombstones.extend_from_slice(&count.to_le_bytes());
+    for position in 0..u64::from(count) {
+        tombstones.extend_from_slice(&position.to_le_bytes());
+    }
+    assert_eq!(
+        Rga::<u64, u64>::from_wire_bytes(&tombstones),
+        Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+    );
+    assert_eq!(
+        Rga::<u64, u64>::from_wire_bytes_with_limits(&tombstones, raised)
+            .unwrap()
+            .to_wire_bytes()
+            .unwrap(),
+        tombstones
+    );
+}
+
+#[test]
 fn rga_delta_variants_roundtrip_and_refuse_corruption() {
     for delta in [
         RgaDelta::Insert {

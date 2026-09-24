@@ -36,7 +36,7 @@ fn main() {
         Admission::Accepted
     );
     assert_eq!(received.version().get(0), 0);
-    // The app carries BOTH version collections; no built-in version wire codec.
+    // This example passes both version collections directly between objects.
     // Enforce byte/entry budgets in that decoder before allocating these collections.
     let peer = VersionVector::from_peer_prefixes_with_limits(
         received.version().entries(),

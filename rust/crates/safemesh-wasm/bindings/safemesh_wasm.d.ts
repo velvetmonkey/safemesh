@@ -315,7 +315,7 @@ export class SafeMeshStringOrSetReplica {
     mergeRecordBytes(bytes: Uint8Array): "accepted" | "duplicate";
     constructor(replica_id: bigint);
     /**
-     * Every token ever added for `element`, including tombstoned ones.
+     * Live add tokens for `element`, excluding tombstoned tokens.
      */
     observedTokens(element: string): BigUint64Array;
     tombstones(): BigUint64Array;

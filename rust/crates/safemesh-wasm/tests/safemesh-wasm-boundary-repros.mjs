@@ -127,9 +127,10 @@ check('persisted partition repeats allocate fresh adds and retain vaccine after 
         assert.deepEqual(state,carrier(right),'full add/tombstone carrier differs');
         assert.equal(state.adds.length,2+2*(round+1),'both partition adds must be fresh');
         assert.equal(new Set(state.adds.map(([,token])=>token)).size,state.adds.length);
-        const tokens=Array.from(left.observedTokens('vaccine'));
-        const removed=new Set(left.tombstones());
+        const tokens=state.adds.filter(([element])=>element==='vaccine').map(([,token])=>token);
+        const removed=new Set(state.tombstones);
         const live=tokens.filter(token=>!removed.has(token));
+        assert.deepEqual(Array.from(left.observedTokens('vaccine'),String).sort(),[...live].sort(),'observed tokens must exclude tombstones');
         assert.equal(live.length,1,'exactly one vaccine add must survive');
         assert(!previousTokens.has(live[0]),'repeat reused a previous vaccine token');
         assert.equal(tokens.length,round+2,'each phase must retain a new vaccine add');
