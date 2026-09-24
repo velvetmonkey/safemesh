@@ -18,6 +18,19 @@ pub enum TransportError {
     Disconnected { from: u64, to: u64 },
 }
 
+impl core::fmt::Display for TransportError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NotSubscribed { peer } => write!(f, "peer {peer} is not subscribed"),
+            Self::Disconnected { from, to } => {
+                write!(f, "transport link from {from} to {to} is disconnected")
+            }
+        }
+    }
+}
+
+impl core::error::Error for TransportError {}
+
 /// Engineered transport coverage contract.
 ///
 /// A transport adapter is responsible for peer subscription, connectivity
@@ -38,6 +51,7 @@ pub trait TransportAdapter<D> {
 /// useful for CI and demos; it is not a real radio/network adapter.
 /// Packets queued before a partition remain pending until the link heals;
 /// draining a peer delivers only packets whose links are currently connected.
+/// All links, including self-links, start connected and can be partitioned.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InMemoryTransport<D> {
     subscribed: BTreeSet<u64>,
@@ -137,7 +151,7 @@ impl<D: Clone> TransportAdapter<D> for InMemoryTransport<D> {
     }
 
     fn is_connected(&self, a: u64, b: u64) -> bool {
-        a == b || !self.disconnected.contains(&Self::link(a, b))
+        !self.disconnected.contains(&Self::link(a, b))
     }
 
     fn send(&mut self, from: u64, to: u64, records: Vec<Record<D>>) -> Result<(), TransportError> {
@@ -170,10 +184,9 @@ impl<D: Clone> TransportAdapter<D> for InMemoryTransport<D> {
         let mut incoming = Vec::new();
         let mut retained = Vec::new();
         for envelope in self.queue.drain(..) {
-            let connected = envelope.from == envelope.to
-                || !self
-                    .disconnected
-                    .contains(&Self::link(envelope.from, envelope.to));
+            let connected = !self
+                .disconnected
+                .contains(&Self::link(envelope.from, envelope.to));
             if envelope.to == peer && connected {
                 incoming.push(envelope);
             } else {

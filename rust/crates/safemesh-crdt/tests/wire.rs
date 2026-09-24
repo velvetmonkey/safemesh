@@ -6,8 +6,8 @@ use std::fmt::Debug;
 
 use safemesh_crdt::{
     EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounterDelta, GSet, LwwMap, LwwMapDelta,
-    LwwRegister, LwwRegisterDelta, OrSet, PnCounterDelta, Record, RecordId, Rga, WireDecode,
-    WireEncode, WireError,
+    LwwRegister, LwwRegisterDelta, OrSet, PnCounterDelta, Record, RecordId, Rga, RgaDelta,
+    WireDecode, WireEncode, WireError,
 };
 
 fn roundtrip<T>(value: T)
@@ -100,6 +100,103 @@ fn canonical_state_encodings_are_sorted() {
 }
 
 #[test]
+fn rga_delta_variants_roundtrip_and_refuse_corruption() {
+    for delta in [
+        RgaDelta::Insert {
+            position: 30u64,
+            value: 3u64,
+        },
+        RgaDelta::Delete { position: 30 },
+    ] {
+        let bytes = delta.to_wire_bytes().unwrap();
+        assert_eq!(
+            RgaDelta::<u64, u64>::from_wire_bytes(&bytes),
+            Ok(delta.clone())
+        );
+        assert_eq!(
+            RgaDelta::<u64, u64>::from_wire_bytes(&bytes[..bytes.len() - 1]),
+            Err(WireError::UnexpectedEof)
+        );
+        let mut invalid_tag = bytes;
+        invalid_tag[0] = 0xff;
+        assert_eq!(
+            RgaDelta::<u64, u64>::from_wire_bytes(&invalid_tag),
+            Err(WireError::InvalidTag)
+        );
+    }
+}
+
+fn assert_rga_vector<T>(name: &str, value: T, bytes: &[u8])
+where
+    T: WireEncode + WireDecode + PartialEq + Debug,
+{
+    assert_eq!(
+        value.to_wire_bytes().unwrap(),
+        bytes,
+        "{name} encoder drift"
+    );
+    assert_eq!(T::from_wire_bytes(bytes), Ok(value), "{name} decode drift");
+}
+
+#[test]
+fn rga_delta_u64_committed_vectors_are_canonical() {
+    let insert = RgaDelta::Insert {
+        position: 30u64,
+        value: 3u64,
+    };
+    let delete = RgaDelta::<u64, u64>::Delete { position: 30 };
+    let max = RgaDelta::Insert {
+        position: u64::MAX,
+        value: u64::MAX,
+    };
+    let record = Record {
+        id: RecordId {
+            replica: 9,
+            sequence: 4,
+        },
+        delta: insert.clone(),
+    };
+    let mut log = EventLog::new();
+    let mut state = Rga::new();
+    log.append(&mut state, 9, insert.clone()).unwrap();
+    log.append(&mut state, 9, delete.clone()).unwrap();
+    assert_eq!(log.records().len(), 2);
+    assert_eq!(log.records()[0].delta, insert);
+    assert_eq!(log.records()[1].delta, delete);
+
+    assert_rga_vector(
+        "empty.log",
+        EventLog::<RgaDelta<u64, u64>>::new(),
+        include_bytes!("fixtures/rga-delta-u64/empty.log"),
+    );
+    assert_rga_vector(
+        "insert.delta",
+        insert,
+        include_bytes!("fixtures/rga-delta-u64/insert.delta"),
+    );
+    assert_rga_vector(
+        "delete.delta",
+        delete,
+        include_bytes!("fixtures/rga-delta-u64/delete.delta"),
+    );
+    assert_rga_vector(
+        "max.delta",
+        max,
+        include_bytes!("fixtures/rga-delta-u64/max.delta"),
+    );
+    assert_rga_vector(
+        "insert.record",
+        record,
+        include_bytes!("fixtures/rga-delta-u64/insert.record"),
+    );
+    assert_rga_vector(
+        "sequence.log",
+        log,
+        include_bytes!("fixtures/rga-delta-u64/sequence.log"),
+    );
+}
+
+#[test]
 fn event_log_roundtrips_and_preserves_deduped_records() {
     let mut log = EventLog::with_replica_count(2);
     log.append(
@@ -109,7 +206,8 @@ fn event_log_roundtrips_and_preserves_deduped_records() {
             replica: 1,
             tally: 5,
         },
-    );
+    )
+    .unwrap();
     log.append(
         &mut safemesh_crdt::PnCounter::new(2),
         1,
@@ -117,7 +215,8 @@ fn event_log_roundtrips_and_preserves_deduped_records() {
             replica: 1,
             tally: 2,
         },
-    );
+    )
+    .unwrap();
 
     let bytes = log.to_wire_bytes().unwrap();
     let decoded = EventLog::<PnCounterDelta>::from_wire_bytes(&bytes).unwrap();
@@ -413,7 +512,9 @@ fn orset_delta_rejects_trailing_bytes_and_oversized_counts() {
 fn orset_delta_roundtrips_in_record_and_event_log() {
     let mut log = EventLog::new();
     for delta in orset_delta_cases() {
-        let id = log.append(&mut safemesh_crdt::OrSet::new(), 1, delta.clone());
+        let id = log
+            .append(&mut safemesh_crdt::OrSet::new(), 1, delta.clone())
+            .unwrap();
         roundtrip(Record { id, delta });
     }
     let bytes = log.to_wire_bytes().unwrap();
@@ -561,7 +662,9 @@ fn orset_utf8_wire_shape_and_record_roundtrips() {
     );
     let mut log = EventLog::new();
     for delta in orset_utf8_cases() {
-        let id = log.append(&mut safemesh_crdt::OrSet::new(), 1, delta.clone());
+        let id = log
+            .append(&mut safemesh_crdt::OrSet::new(), 1, delta.clone())
+            .unwrap();
         roundtrip(Record { id, delta });
     }
     let bytes = log.to_wire_bytes().unwrap();
@@ -581,7 +684,8 @@ fn event_log_refuses_every_single_byte_change() {
             element: "café☕".to_owned(),
             token: 42u64,
         },
-    );
+    )
+    .unwrap();
     let bytes = log.to_wire_bytes().unwrap();
     roundtrip(log.clone());
     let mut refused = 0;
@@ -633,7 +737,8 @@ fn event_log_empty_and_embedded_frames_roundtrip_and_reject_truncation() {
             replica: 1,
             tally: 7,
         },
-    );
+    )
+    .unwrap();
     let mut records = log.records().to_vec();
     records.push(Record {
         id: safemesh_crdt::RecordId {
@@ -697,14 +802,16 @@ fn event_log_shape_rejects_wrong_type_even_when_empty_or_nested() {
     for populated in [false, true] {
         let mut source = EventLog::for_crdt(&GCounter::new(2));
         if populated {
-            source.append(
-                &mut GCounter::new(2),
-                0,
-                GCounterDelta {
-                    replica: 0,
-                    tally: 7,
-                },
-            );
+            source
+                .append(
+                    &mut GCounter::new(2),
+                    0,
+                    GCounterDelta {
+                        replica: 0,
+                        tally: 7,
+                    },
+                )
+                .unwrap();
         }
         let bytes = source.to_wire_bytes().unwrap();
         assert_eq!(
@@ -731,11 +838,13 @@ fn event_log_shape_rejects_wrong_type_even_when_empty_or_nested() {
     }
     // Remove payloads have identical fields, but distinct element schemas.
     let mut source = EventLog::new();
-    source.append(
-        &mut safemesh_crdt::OrSet::new(),
-        0,
-        OrSetDelta::<u64, u64>::Remove { tokens: vec![7] },
-    );
+    source
+        .append(
+            &mut safemesh_crdt::OrSet::new(),
+            0,
+            OrSetDelta::<u64, u64>::Remove { tokens: vec![7] },
+        )
+        .unwrap();
     assert_eq!(
         EventLog::<OrSetDelta<String, u64>>::from_wire_bytes(&source.to_wire_bytes().unwrap()),
         Err(WireError::DeltaTypeMismatch)
@@ -831,8 +940,8 @@ std::thread_local! {
 struct BudgetPayload(u64);
 
 impl safemesh_crdt::WireSchema for BudgetPayload {
-    fn wire_schema() -> Vec<u8> {
-        b"test/decode-budget/v1".to_vec()
+    fn wire_schema() -> std::borrow::Cow<'static, [u8]> {
+        std::borrow::Cow::Borrowed(b"test/decode-budget/v1")
     }
 }
 
@@ -948,5 +1057,157 @@ fn decode_budget_boundaries_duplicates_and_default() {
             Err(DecodeError::Wire(WireError::IntegrityMismatch))
         );
         assert_eq!(BUDGET_PAYLOAD_READS.with(|reads| reads.get()), 0);
+    }
+}
+
+#[test]
+fn orset_utf8_state_roundtrips_canonically_with_tombstones() {
+    roundtrip(OrSet::<String, u64>::new());
+    let entries = ["", "ASCII", "é", "東京", "🦀", "e\u{301}", "a\0b"];
+    let mut state = OrSet::new();
+    for (token, element) in entries.iter().enumerate() {
+        state.add(element.to_string(), token as u64);
+    }
+    state.add("ASCII".to_string(), u64::MAX);
+    state.apply_remove([1, 99]);
+    let mut reversed = OrSet::new();
+    reversed.apply_remove([99, 1]);
+    reversed.add("ASCII".to_string(), u64::MAX);
+    for (token, element) in entries.iter().enumerate().rev() {
+        reversed.add(element.to_string(), token as u64);
+    }
+    assert_eq!(state.to_wire_bytes(), reversed.to_wire_bytes());
+    roundtrip(state.clone());
+    roundtrip(Record {
+        id: RecordId {
+            replica: 1,
+            sequence: 1,
+        },
+        delta: state.clone(),
+    });
+    let log = wire_log(
+        None,
+        &[Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 1,
+            },
+            delta: state,
+        }],
+    );
+    roundtrip(log.clone());
+    assert_eq!(
+        EventLog::<OrSet<u64, u64>>::from_wire_bytes(&log.to_wire_bytes().unwrap()),
+        Err(WireError::DeltaTypeMismatch)
+    );
+}
+
+#[test]
+fn orset_utf8_state_rejects_corruption_and_other_tags() {
+    let mut state = OrSet::new();
+    state.add("é".to_string(), 1);
+    state.add("🦀".to_string(), 2);
+    let original = state.to_wire_bytes().unwrap();
+    // Tag + u32 add count precede the first string's u32 byte length.
+    let mut scratch = original.clone();
+    assert_eq!(scratch[5], 2);
+    scratch[5] = 1;
+    assert_eq!(
+        OrSet::<String, u64>::from_wire_bytes(&scratch),
+        Err(WireError::InvalidUtf8)
+    );
+    scratch[5] = original[5];
+    assert_eq!(OrSet::<String, u64>::from_wire_bytes(&scratch), Ok(state));
+    scratch[5] = 255;
+    assert_eq!(
+        OrSet::<String, u64>::from_wire_bytes(&scratch),
+        Err(WireError::UnexpectedEof)
+    );
+    for end in 0..original.len() {
+        assert!(OrSet::<String, u64>::from_wire_bytes(&original[..end]).is_err());
+    }
+    let mut trailing = original.clone();
+    trailing.push(0);
+    assert_eq!(
+        OrSet::<String, u64>::from_wire_bytes(&trailing),
+        Err(WireError::TrailingBytes)
+    );
+    for tag in 0..=u8::MAX {
+        if tag != original[0] {
+            let mut bad = original.clone();
+            bad[0] = tag;
+            assert_eq!(
+                OrSet::<String, u64>::from_wire_bytes(&bad),
+                Err(WireError::InvalidTag)
+            );
+        }
+    }
+    assert_eq!(
+        OrSet::<u64, u64>::from_wire_bytes(&original),
+        Err(WireError::InvalidTag)
+    );
+    assert_eq!(
+        safemesh_crdt::OrSetDelta::<String, u64>::from_wire_bytes(&original),
+        Err(WireError::InvalidTag)
+    );
+}
+
+#[test]
+fn orset_utf8_state_rejects_duplicate_pairs_without_changing_receiver() {
+    fn frame(entries: &[(&str, u64)]) -> Vec<u8> {
+        let mut bytes = vec![0x35];
+        bytes.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        for (element, token) in entries {
+            bytes.extend_from_slice(&(element.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(element.as_bytes());
+            bytes.extend_from_slice(&token.to_le_bytes());
+        }
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes
+    }
+
+    let mut receiver = OrSet::<String, u64>::new();
+    receiver.add("preserved".into(), 41);
+    let before = receiver.clone();
+    for entries in [
+        vec![("repeat", 7), ("repeat", 7)],
+        vec![("repeat", 7), ("other", 9), ("repeat", 7)],
+        vec![("🦀", u64::MAX), ("🦀", u64::MAX)],
+    ] {
+        let decoded = OrSet::<String, u64>::from_wire_bytes(&frame(&entries));
+        if let Ok(state) = &decoded {
+            receiver.merge(state);
+        }
+        assert_eq!(decoded, Err(WireError::DuplicateEntry), "{entries:?}");
+        assert_eq!(receiver, before);
+    }
+
+    for entries in [
+        vec![("same", 1), ("same", 2)],
+        vec![("first", 1), ("second", 1)],
+    ] {
+        let decoded = OrSet::<String, u64>::from_wire_bytes(&frame(&entries)).unwrap();
+        assert_eq!(decoded.adds().len(), 2);
+        assert_eq!(decoded.to_wire_bytes().unwrap(), frame(&entries));
+    }
+}
+
+proptest::proptest! {
+    #[test]
+    fn orset_utf8_state_preserves_arbitrary_strings(
+        entries in proptest::collection::vec((proptest::prelude::any::<String>(), proptest::prelude::any::<u64>()), 0..32),
+        tombstones in proptest::collection::vec(proptest::prelude::any::<u64>(), 0..32),
+        left in proptest::prelude::any::<String>(),
+        right in proptest::prelude::any::<String>(),
+    ) {
+        let mut state = OrSet::new();
+        for (element, token) in entries { state.add(element, token); }
+        state.apply_remove(tombstones);
+        roundtrip(state);
+        let mut a = OrSet::new();
+        a.add(left.clone(), 7);
+        let mut b = OrSet::new();
+        b.add(right.clone(), 7);
+        proptest::prop_assert_eq!(a.to_wire_bytes().unwrap() == b.to_wire_bytes().unwrap(), left == right);
     }
 }

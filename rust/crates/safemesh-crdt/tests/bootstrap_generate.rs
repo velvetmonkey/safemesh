@@ -61,7 +61,7 @@ where
     println!(
         "{name}: package={} log_trait_schema={}",
         env!("CARGO_PKG_VERSION"),
-        String::from_utf8(EventLog::<C::Delta>::wire_schema()).unwrap()
+        String::from_utf8(EventLog::<C::Delta>::wire_schema().into_owned()).unwrap()
     );
 }
 #[test]
@@ -143,7 +143,7 @@ fn generate_bootstrap() {
     println!(
         "pn: package={} log_trait_schema={}",
         env!("CARGO_PKG_VERSION"),
-        String::from_utf8(EventLog::<PnCounterDelta>::wire_schema()).unwrap()
+        String::from_utf8(EventLog::<PnCounterDelta>::wire_schema().into_owned()).unwrap()
     );
     let mut gs = GSet::<u64>::new();
     gs.insert(7);
@@ -156,7 +156,7 @@ fn generate_bootstrap() {
     write_new(&out, "rga.state", &rga.to_wire_bytes().unwrap());
     println!(
         "state schemas (not embedded): {} {}",
-        String::from_utf8(GSet::<u64>::wire_schema()).unwrap(),
-        String::from_utf8(Rga::<u64, u64>::wire_schema()).unwrap()
+        String::from_utf8(GSet::<u64>::wire_schema().into_owned()).unwrap(),
+        String::from_utf8(Rga::<u64, u64>::wire_schema().into_owned()).unwrap()
     );
 }
