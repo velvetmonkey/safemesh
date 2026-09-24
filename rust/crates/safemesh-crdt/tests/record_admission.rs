@@ -876,8 +876,8 @@ fn inherited_types_accept_records_that_replay_subsumes() {
         assert_eq!(raw_log, log);
         (existing, fresh)
     }
-    // GSet and Rga have no delta wire codec, so the loader cannot carry them;
-    // exercise the trait method the loader calls, then replay by hand.
+    // GSet has no delta wire codec; keep the Rga trait-path check here too.
+    // Exercise the trait method the loader calls, then replay by hand.
     fn via_trait<C, D>(carrier: &C, fresh: C, record: Record<D>) -> (C, C)
     where
         C: Crdt<Delta = D> + Clone + Debug + PartialEq,
@@ -1644,4 +1644,38 @@ fn checked_restore_still_refuses_preexisting_sm001_data() {
         EventLog::<GCounterDelta>::from_wire_bytes_for(&bytes, &GCounter::new(1)),
         Err(WireError::OwnershipViolation)
     );
+}
+
+#[test]
+fn plain_append_returns_sequence_exhausted_without_mutation() {
+    let mut state = GCounter::new(2);
+    let mut log = EventLog::for_crdt(&state);
+    assert_eq!(
+        log.insert_record(&state, record(u64::MAX, 9)),
+        Admission::Accepted
+    );
+    let before_log = log.clone();
+    let before_state = state.clone();
+    let result = log.append(&mut state, 1, record(1, 10).delta);
+    assert_eq!(result, Err(AppendError::SequenceExhausted));
+    assert_eq!(log, before_log);
+    assert_eq!(state, before_state);
+}
+
+#[test]
+fn plain_append_returns_invalid_record_without_mutation() {
+    let mut state = GCounter::new(2);
+    let mut log = EventLog::for_crdt(&state);
+    let before_log = log.clone();
+    let before_state = state.clone();
+    // The record writer must match the counter delta's replica.
+    let result = log.append(&mut state, 0, record(1, 10).delta);
+    assert_eq!(
+        result,
+        Err(AppendError::InvalidRecord(
+            safemesh_crdt::WireError::OwnershipViolation
+        ))
+    );
+    assert_eq!(log, before_log);
+    assert_eq!(state, before_state);
 }

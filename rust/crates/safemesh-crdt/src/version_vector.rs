@@ -46,7 +46,7 @@ use alloc::collections::{BTreeMap, BTreeSet};
 /// }
 ///
 /// let mut peer = EventLog::new();
-/// peer.append(&mut safemesh_crdt::GSet::new(), 7, 42u64);
+/// peer.append(&mut safemesh_crdt::GSet::new(), 7, 42u64).unwrap();
 /// // Carry both collections over the application's transport.
 /// let prefixes = peer.version().entries().clone();
 /// let zeros = peer.version().zero_replicas().clone();

@@ -1,13 +1,15 @@
 // Copyright (C) 2026 Ben Cassie
 // SPDX-License-Identifier: Apache-2.0
+mod exchange;
 use safemesh_crdt::{local::DurableReplica, ownership::WriterConfig, OrSet, OrSetDelta};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, BufRead, Write},
     path::Path,
+    sync::{Arc, Mutex},
 };
 
 type Replica = DurableReplica<OrSet<String, u64>>;
@@ -32,12 +34,79 @@ fn canonical(text: &str) -> Result<(String, String), String> {
         || record.event_id.is_empty()
         || record.inspector.trim().is_empty()
         || !matches!(record.answer.as_str(), "Pass" | "Fail")
-        || !record.observed_event_ids.is_empty()
+        || record
+            .observed_event_ids
+            .windows(2)
+            .any(|ids| ids[0] >= ids[1])
+        || record
+            .observed_event_ids
+            .iter()
+            .any(|id| id == &record.event_id)
     {
         return Err("Unsupported inspection schema or identity".into());
     }
     let bytes = serde_json::to_string(&record).map_err(|e| e.to_string())?;
     Ok((record.event_id, bytes))
+}
+fn validate_submission(bytes: &str, known: &BTreeMap<String, Value>) -> Result<(), String> {
+    let record: Inspection = serde_json::from_str(bytes).map_err(|e| e.to_string())?;
+    if record.observed_event_ids.is_empty() {
+        return Ok(());
+    }
+    let mut differs = false;
+    for id in &record.observed_event_ids {
+        let prior = known.get(id).ok_or("Review cites an unknown event")?;
+        let prior: Inspection =
+            serde_json::from_str(prior["record"].as_str().ok_or("Invalid record")?)
+                .map_err(|e| e.to_string())?;
+        if prior.item_id != record.item_id {
+            return Err("Review cites another item".into());
+        }
+        differs |= prior.answer != record.answer;
+    }
+    if !differs {
+        return Err("Review must explain a differing answer".into());
+    }
+    Ok(())
+}
+fn review_projection(
+    known: &BTreeMap<String, Value>,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let mut by_item: BTreeMap<String, Vec<Inspection>> = BTreeMap::new();
+    for value in known.values() {
+        let record: Inspection =
+            serde_json::from_str(value["record"].as_str().ok_or("Invalid record")?)
+                .map_err(|e| e.to_string())?;
+        by_item
+            .entry(record.item_id.clone())
+            .or_default()
+            .push(record);
+    }
+    let (mut needs_review, mut resolved) = (Vec::new(), Vec::new());
+    for (item, inspections) in by_item {
+        let answers: BTreeSet<_> = inspections.iter().map(|r| r.answer.as_str()).collect();
+        if answers.len() < 2 {
+            continue;
+        }
+        // A reviewer must name every other observation in the current set.
+        // A later unreferenced observation, including another review, reopens it.
+        let complete = inspections.iter().any(|review| {
+            let cited: BTreeSet<_> = review.observed_event_ids.iter().collect();
+            !cited.is_empty()
+                && inspections.iter().all(|other| {
+                    other.event_id == review.event_id || cited.contains(&other.event_id)
+                })
+                && inspections
+                    .iter()
+                    .any(|other| cited.contains(&other.event_id) && other.answer != review.answer)
+        });
+        if complete {
+            resolved.push(item);
+        } else {
+            needs_review.push(item);
+        }
+    }
+    Ok((needs_review, resolved))
 }
 fn records(replica: &Replica) -> Result<BTreeMap<String, Value>, String> {
     let mut result = BTreeMap::new();
@@ -46,7 +115,7 @@ fn records(replica: &Replica) -> Result<BTreeMap<String, Value>, String> {
             return Err("Unexpected removal".into());
         };
         let (id, bytes) = canonical(element)?;
-        if bytes != *element || r.id.replica != 0 {
+        if bytes != *element || r.id.replica > 1 {
             return Err("Unexpected record encoding or writer".into());
         }
         let value = json!({"record": element, "writer": r.id.replica, "sequence": r.id.sequence});
@@ -63,13 +132,21 @@ fn emit(value: Value) {
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args().collect();
     let root = Path::new(args.get(1).ok_or("store path required")?);
-    let config = WriterConfig {
-        writers: 2,
-        writer: 0,
+    let option = |name: &str| {
+        args.iter()
+            .position(|s| s == name)
+            .and_then(|i| args.get(i + 1))
     };
+    let writer = option("--writer")
+        .map_or(Ok(0), |s| s.parse::<u64>())
+        .map_err(|e| e.to_string())?;
+    if writer > 1 || (option("--listen").is_some() && option("--connect").is_some()) {
+        return Err("expected writer 0 or 1 and at most one network role".into());
+    }
+    let config = WriterConfig { writers: 2, writer };
     // Existence means restart, even if the directory is empty or damaged.
     // Only create_dir success permits a fresh identity; never repair by resetting.
-    let mut replica = match fs::create_dir(root) {
+    let replica = match fs::create_dir(root) {
         Ok(()) => {
             fs::File::open(root.parent().unwrap_or(Path::new(".")))
                 .and_then(|f| f.sync_all())
@@ -82,13 +159,31 @@ fn run() -> Result<(), String> {
         Err(e) => return Err(e.to_string()),
     }
     .map_err(|e| format!("{e:?}"))?;
-    let mut known = records(&replica)?;
+    let service = Arc::new(Mutex::new(exchange::Service::open(replica, writer, root)?));
+    exchange::start(
+        service.clone(),
+        option("--listen").map(String::as_str),
+        option("--connect").map(String::as_str),
+    )?;
+    let known = records(&service.lock().map_err(|e| e.to_string())?.replica)?;
+    let (needs_review, resolved) = review_projection(&known)?;
     emit(
         json!({"ready":true, "pid":std::process::id(), "records":known.values().collect::<Vec<_>>(),
+        "needs_review":needs_review,"resolved":resolved,
         "checklist":serde_json::from_str::<Value>(include_str!("../checklist.json")).unwrap()}),
     );
     for line in io::stdin().lock().lines() {
         let line = line.map_err(|e| e.to_string())?;
+        let mut state = service.lock().map_err(|e| e.to_string())?;
+        if line == "{\"command\":\"status\"}" {
+            emit(state.status()?);
+            continue;
+        }
+        if !state.writable() {
+            emit(json!({"storage_error":"restart required"}));
+            continue;
+        }
+        let known = records(&state.replica)?;
         let (id, bytes) = match canonical(&line) {
             Ok(v) => v,
             Err(e) => {
@@ -104,13 +199,19 @@ fn run() -> Result<(), String> {
             }
             continue;
         }
-        match replica.add(replica.ticket(), bytes.clone()) {
+        if let Err(e) = validate_submission(&bytes, &known) {
+            emit(json!({"error":e}));
+            continue;
+        }
+        let ticket = state.replica.ticket();
+        match state.replica.add(ticket, bytes.clone()) {
             Ok(record) => {
                 let value = json!({"record":bytes,"writer":record.id.replica,"sequence":record.id.sequence});
-                known.insert(id, value.clone());
                 // Explicit external journey control: commit is complete; no reply yet.
                 // Remove the barrier to continue, or SIGKILL this PID to lose the reply.
-                if let Some(barrier) = args.get(2) {
+                if let Some(barrier) = option("--reply-barrier")
+                    .or_else(|| args.get(2).filter(|s| !s.starts_with("--")))
+                {
                     fs::write(barrier, b"committed; reply pending\n").map_err(|e| e.to_string())?;
                     while Path::new(barrier).exists() {
                         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -127,5 +228,42 @@ fn main() {
     if let Err(e) = run() {
         emit(json!({"recovery_error":e}));
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(id: &str, answer: &str, refs: &[&str]) -> String {
+        serde_json::to_string(&Inspection {
+            schema_version: 1,
+            checklist_version: 1,
+            item_id: "north-yard/gate-3/latch".into(),
+            event_id: id.into(),
+            inspector: "A".into(),
+            answer: answer.into(),
+            note: id.into(),
+            observed_event_ids: refs.iter().map(|s| (*s).into()).collect(),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn multiple_inspectors_and_conflicting_reviews_remain_visible() {
+        let mut known = BTreeMap::new();
+        for (id, answer) in [("a", "Pass"), ("b", "Fail"), ("c", "Fail")] {
+            known.insert(id.into(), json!({"record":record(id, answer, &[])}));
+        }
+        assert_eq!(review_projection(&known).unwrap().0.len(), 1);
+        let first = record("first-review", "Pass", &["a", "b", "c"]);
+        validate_submission(&first, &known).unwrap();
+        known.insert("first-review".into(), json!({"record":first}));
+        assert_eq!(review_projection(&known).unwrap().1.len(), 1);
+        let second = record("second-review", "Fail", &["a", "b", "c"]);
+        validate_submission(&second, &known).unwrap();
+        known.insert("second-review".into(), json!({"record":second}));
+        assert_eq!(review_projection(&known).unwrap().0.len(), 1);
+        assert_eq!(known.len(), 5);
     }
 }
