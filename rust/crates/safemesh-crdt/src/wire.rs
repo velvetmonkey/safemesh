@@ -246,7 +246,9 @@ impl WireDecode for OrSet<String, u64> {
                 .map_err(|_| WireError::InvalidUtf8)?;
             let element = String::from(element);
             let token = cursor.read_u64()?;
-            set.add(element, token);
+            if !set.adds.insert((element, token)) {
+                return Err(WireError::DuplicateEntry);
+            }
         }
         let mut tombstones = Vec::new();
         for _ in 0..cursor.read_len()? {

@@ -1081,7 +1081,7 @@ fn orset_utf8_state_rejects_duplicate_pairs_without_changing_receiver() {
         if let Ok(state) = &decoded {
             receiver.merge(state);
         }
-        assert!(decoded.is_err(), "duplicate pair was accepted: {entries:?}");
+        assert_eq!(decoded, Err(WireError::DuplicateEntry), "{entries:?}");
         assert_eq!(receiver, before);
     }
 

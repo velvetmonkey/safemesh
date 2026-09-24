@@ -38,6 +38,7 @@ pub enum WireError {
     TrailingBytes,
     LengthOverflow,
     RecordCollision,
+    DuplicateEntry,
     IntegrityMismatch,
     InvalidUtf8,
     /// Legacy frame, or a fixed-domain log constructed without its arity.
@@ -62,6 +63,9 @@ impl core::fmt::Display for WireError {
             Self::TrailingBytes => f.write_str("unexpected trailing bytes after wire value"),
             Self::LengthOverflow => f.write_str("wire length exceeds the representable range"),
             Self::RecordCollision => f.write_str("record identity has conflicting payloads"),
+            Self::DuplicateEntry => {
+                f.write_str("wire OR-set contains a duplicate element and token")
+            }
             Self::IntegrityMismatch => f.write_str("wire frame integrity check failed"),
             Self::InvalidUtf8 => f.write_str("wire string contains invalid UTF-8"),
             Self::MissingShape => f.write_str("wire frame is missing required shape metadata"),
