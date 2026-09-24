@@ -6,7 +6,7 @@ use crate::{
     Admission, Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounterDelta, GSet, LwwMap,
     LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta, PnCounterDelta, Record, Rga,
 };
-use alloc::{string::String, vec::Vec};
+use alloc::{borrow::Cow, string::String, vec::Vec};
 
 pub(super) const TAG_RECORD: u8 = 0x01;
 pub(super) const TAG_EVENT_LOG: u8 = 0x03;
@@ -115,15 +115,16 @@ impl From<WireError> for DecodeError {
 /// External implementations must use a globally unique schema and change it when
 /// the wire interpretation changes. Never reuse a built-in `safemesh/` identity.
 pub trait WireSchema {
-    fn wire_schema() -> Vec<u8>;
+    /// Borrow fixed identities; return owned bytes for composed schemas.
+    fn wire_schema() -> Cow<'static, [u8]>;
     const REQUIRES_ARITY: bool = false;
 }
 
 macro_rules! wire_schema {
     ($ty:ty, $name:literal, $fixed:expr) => {
         impl WireSchema for $ty {
-            fn wire_schema() -> Vec<u8> {
-                $name.as_bytes().to_vec()
+            fn wire_schema() -> Cow<'static, [u8]> {
+                Cow::Borrowed($name.as_bytes())
             }
             const REQUIRES_ARITY: bool = $fixed;
         }
@@ -158,18 +159,18 @@ wire_schema!(LwwMapDelta<u64, u64>, "safemesh/lww-map-delta-u64-u64/v1", false);
 wire_schema!(LwwMap<u64, u64>, "safemesh/lww-map-u64-u64/v1", false);
 
 impl<D: WireSchema> WireSchema for Record<D> {
-    fn wire_schema() -> Vec<u8> {
+    fn wire_schema() -> Cow<'static, [u8]> {
         let mut schema = b"safemesh/record/v1/".to_vec();
-        schema.extend(D::wire_schema());
-        schema
+        schema.extend_from_slice(D::wire_schema().as_ref());
+        Cow::Owned(schema)
     }
 }
 
 impl<D: WireSchema> WireSchema for EventLog<D> {
-    fn wire_schema() -> Vec<u8> {
+    fn wire_schema() -> Cow<'static, [u8]> {
         let mut schema = b"safemesh/event-log/v2/".to_vec();
-        schema.extend(D::wire_schema());
-        schema
+        schema.extend_from_slice(D::wire_schema().as_ref());
+        Cow::Owned(schema)
     }
 }
 
@@ -456,7 +457,7 @@ impl<D: WireEncode + WireSchema> EventLog<D> {
         }
         let mut body = Vec::new();
         write_u32(&mut body, u32::MAX);
-        write_bytes(&mut body, &D::wire_schema())?;
+        write_bytes(&mut body, D::wire_schema().as_ref())?;
         match replica_count {
             Some(count) => {
                 write_u8(&mut body, 1);
@@ -506,7 +507,7 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
             return Err(WireError::MissingShape.into());
         }
         let schema_len = body.read_len()?;
-        if body.read_exact(schema_len)? != D::wire_schema() {
+        if body.read_exact(schema_len)? != D::wire_schema().as_ref() {
             return Err(WireError::DeltaTypeMismatch.into());
         }
         let replica_count = match body.read_u8()? {
