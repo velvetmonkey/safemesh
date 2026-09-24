@@ -22,9 +22,12 @@ and `VersionVectorLimits`: the opt-in author and zero-replica budgets are checke
 **before prefix validation and before either collection is cloned**. `None` is
 unbounded. These budgets do not bound the version message's decoding allocation:
 your decoder must enforce byte and entry limits before constructing either collection.
-The built-in version wire codec can decode with explicit entry budgets. This
-exercise passes the collections directly between objects; it does not use that
-codec.
+The built-in version wire codec defaults to a maximum of 4,096 authors and
+4,096 zero acknowledgements. These are configurable defaults: callers can
+choose tighter or larger entry budgets with
+`VersionVector::from_wire_bytes_with_limits` and should bound encoded bytes
+before decoding. This exercise passes the collections directly between objects;
+it does not use that codec.
 
 <!-- gold:source rust:rust/examples/connect_replicas.rs -->
 ```rust

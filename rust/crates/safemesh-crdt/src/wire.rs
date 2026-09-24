@@ -17,8 +17,8 @@ use super::{
     TAG_ENABLE_WINS_FLAG_U64, TAG_GCOUNTER_DELTA, TAG_GSET_U64, TAG_LWW_MAP_REMOVE_U64,
     TAG_LWW_MAP_SET_U64, TAG_LWW_MAP_U64, TAG_LWW_REGISTER_DELTA_U64, TAG_LWW_REGISTER_U64,
     TAG_ORSET_ADD_STRING, TAG_ORSET_ADD_U64, TAG_ORSET_REMOVE_STRING, TAG_ORSET_REMOVE_U64,
-    TAG_ORSET_U64, TAG_PNCOUNTER_DEC, TAG_PNCOUNTER_INC, TAG_RECORD, TAG_RGA_DELETE_U64,
-    TAG_RGA_INSERT_U64, TAG_RGA_U64, TAG_VERSION_VECTOR,
+    TAG_ORSET_STRING, TAG_ORSET_U64, TAG_PNCOUNTER_DEC, TAG_PNCOUNTER_INC, TAG_RECORD,
+    TAG_RGA_DELETE_U64, TAG_RGA_INSERT_U64, TAG_RGA_U64, TAG_VERSION_VECTOR,
 };
 
 impl WireEncode for VersionVector {
@@ -296,6 +296,45 @@ impl WireDecode for OrSet<u64, u64> {
             let element = cursor.read_u64()?;
             let token = cursor.read_u64()?;
             set.add(element, token);
+        }
+        let mut tombstones = Vec::new();
+        for _ in 0..cursor.read_len()? {
+            tombstones.push(cursor.read_u64()?);
+        }
+        set.apply_remove(tombstones);
+        Ok(set)
+    }
+}
+
+impl WireEncode for OrSet<String, u64> {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        write_u8(out, TAG_ORSET_STRING);
+        write_len(out, self.adds.len())?;
+        for (element, token) in &self.adds {
+            write_bytes(out, element.as_bytes())?;
+            write_u64(out, *token);
+        }
+        write_len(out, self.tombstones.len())?;
+        for token in &self.tombstones {
+            write_u64(out, *token);
+        }
+        Ok(())
+    }
+}
+
+impl WireDecode for OrSet<String, u64> {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        read_tag(cursor, TAG_ORSET_STRING)?;
+        let mut set = OrSet::new();
+        for _ in 0..cursor.read_len()? {
+            let len = cursor.read_len()?;
+            let element = core::str::from_utf8(cursor.read_exact(len)?)
+                .map_err(|_| WireError::InvalidUtf8)?;
+            let element = String::from(element);
+            let token = cursor.read_u64()?;
+            if !set.adds.insert((element, token)) {
+                return Err(WireError::DuplicateEntry);
+            }
         }
         let mut tombstones = Vec::new();
         for _ in 0..cursor.read_len()? {
