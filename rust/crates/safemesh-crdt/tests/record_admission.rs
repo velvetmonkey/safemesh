@@ -876,8 +876,8 @@ fn inherited_types_accept_records_that_replay_subsumes() {
         assert_eq!(raw_log, log);
         (existing, fresh)
     }
-    // GSet and Rga have no delta wire codec, so the loader cannot carry them;
-    // exercise the trait method the loader calls, then replay by hand.
+    // GSet has no delta wire codec; keep the Rga trait-path check here too.
+    // Exercise the trait method the loader calls, then replay by hand.
     fn via_trait<C, D>(carrier: &C, fresh: C, record: Record<D>) -> (C, C)
     where
         C: Crdt<Delta = D> + Clone + Debug + PartialEq,
