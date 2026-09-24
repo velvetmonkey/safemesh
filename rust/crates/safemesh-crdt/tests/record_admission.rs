@@ -1645,3 +1645,37 @@ fn checked_restore_still_refuses_preexisting_sm001_data() {
         Err(WireError::OwnershipViolation)
     );
 }
+
+#[test]
+fn plain_append_returns_sequence_exhausted_without_mutation() {
+    let mut state = GCounter::new(2);
+    let mut log = EventLog::for_crdt(&state);
+    assert_eq!(
+        log.insert_record(&state, record(u64::MAX, 9)),
+        Admission::Accepted
+    );
+    let before_log = log.clone();
+    let before_state = state.clone();
+    let result = log.append(&mut state, 1, record(1, 10).delta);
+    assert_eq!(result, Err(AppendError::SequenceExhausted));
+    assert_eq!(log, before_log);
+    assert_eq!(state, before_state);
+}
+
+#[test]
+fn plain_append_returns_invalid_record_without_mutation() {
+    let mut state = GCounter::new(2);
+    let mut log = EventLog::for_crdt(&state);
+    let before_log = log.clone();
+    let before_state = state.clone();
+    // The record writer must match the counter delta's replica.
+    let result = log.append(&mut state, 0, record(1, 10).delta);
+    assert_eq!(
+        result,
+        Err(AppendError::InvalidRecord(
+            safemesh_crdt::WireError::OwnershipViolation
+        ))
+    );
+    assert_eq!(log, before_log);
+    assert_eq!(state, before_state);
+}

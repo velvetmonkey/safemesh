@@ -66,7 +66,9 @@ mod record;
 pub use record::{Record, RecordId};
 
 mod version_vector;
-pub use version_vector::{VersionVector, VersionVectorError};
+pub use version_vector::{
+    VersionVector, VersionVectorError, VersionVectorLimitError, VersionVectorLimits,
+};
 
 mod event_log;
 pub use event_log::{Admission, AppendError, EventLog};
@@ -397,6 +399,101 @@ mod frame_tests {
 #[cfg(test)]
 mod version_vector_tests {
     #[test]
+    fn planted_peer_collection_budgets_are_enforced_independently() {
+        let entries = BTreeMap::from([(1, 1), (2, u64::MAX), (3, 7)]);
+        let zeros = BTreeSet::from([4, 5]);
+        for (max_authors, max_zero_replicas, expected) in [
+            (
+                Some(2),
+                None,
+                VersionVectorLimitError::AuthorLimitExceeded { max_authors: 2 },
+            ),
+            (
+                None,
+                Some(1),
+                VersionVectorLimitError::ZeroReplicaLimitExceeded {
+                    max_zero_replicas: 1,
+                },
+            ),
+            (
+                Some(2),
+                Some(1),
+                VersionVectorLimitError::AuthorLimitExceeded { max_authors: 2 },
+            ),
+        ] {
+            assert_eq!(
+                VersionVector::from_peer_prefixes_with_limits(
+                    &entries,
+                    &zeros,
+                    VersionVectorLimits {
+                        max_authors,
+                        max_zero_replicas
+                    }
+                ),
+                Err(expected)
+            );
+        }
+        let unbounded = VersionVector::from_peer_prefixes(&entries, &zeros).unwrap();
+        assert_eq!(unbounded.entries(), &entries);
+        assert_eq!(unbounded.zero_replicas(), &zeros);
+        for limits in [
+            VersionVectorLimits::default(),
+            VersionVectorLimits {
+                max_authors: Some(3),
+                max_zero_replicas: Some(2),
+            },
+        ] {
+            assert_eq!(
+                VersionVector::from_peer_prefixes_with_limits(&entries, &zeros, limits),
+                Ok(unbounded.clone())
+            );
+        }
+    }
+
+    #[test]
+    fn peer_budgets_allow_empty_and_precede_prefix_validation() {
+        let no_entries = BTreeMap::new();
+        let no_zeros = BTreeSet::new();
+        let limits = VersionVectorLimits {
+            max_authors: Some(0),
+            max_zero_replicas: Some(0),
+        };
+        assert_eq!(
+            VersionVector::from_peer_prefixes_with_limits(&no_entries, &no_zeros, limits),
+            Ok(VersionVector::new())
+        );
+        let invalid = BTreeMap::from([(7, 0)]);
+        assert_eq!(
+            VersionVector::from_peer_prefixes_with_limits(&invalid, &no_zeros, limits),
+            Err(VersionVectorLimitError::AuthorLimitExceeded { max_authors: 0 })
+        );
+        let zeros = BTreeSet::from([7]);
+        assert_eq!(
+            VersionVector::from_peer_prefixes_with_limits(
+                &invalid,
+                &zeros,
+                VersionVectorLimits {
+                    max_authors: None,
+                    max_zero_replicas: Some(0)
+                }
+            ),
+            Err(VersionVectorLimitError::ZeroReplicaLimitExceeded {
+                max_zero_replicas: 0
+            })
+        );
+        assert_eq!(
+            VersionVector::from_peer_prefixes_with_limits(
+                &invalid,
+                &no_zeros,
+                VersionVectorLimits::default()
+            ),
+            Err(VersionVectorLimitError::Prefix(
+                VersionVectorError::ZeroPrefix { replica: 7 }
+            ))
+        );
+    }
+
+    #[test]
     fn large_peer_prefixes_are_copied_directly() {
         for (authors, prefix) in [
             (1024, 1000),
@@ -454,7 +551,7 @@ mod version_vector_tests {
         let mut log = EventLog::new();
         for sequence in 1..=1_000_001 {
             assert_eq!(
-                log.append(&mut GSet::<u64>::new(), 0, sequence),
+                log.append(&mut GSet::<u64>::new(), 0, sequence).unwrap(),
                 RecordId {
                     replica: 0,
                     sequence
@@ -607,8 +704,8 @@ mod version_vector_tests {
     #[test]
     fn refused_peer_map_leaves_since_on_previous_version_unchanged() {
         let mut local = EventLog::new();
-        let acknowledged = local.append(&mut GSet::<u64>::new(), 7, 10u64);
-        let missing = local.append(&mut GSet::<u64>::new(), 7, 20u64);
+        let acknowledged = local.append(&mut GSet::<u64>::new(), 7, 10u64).unwrap();
+        let missing = local.append(&mut GSet::<u64>::new(), 7, 20u64).unwrap();
         let remote_version =
             VersionVector::from_peer_prefixes(&BTreeMap::from([(7, 1)]), &BTreeSet::new()).unwrap();
         let before = local.since(&remote_version);

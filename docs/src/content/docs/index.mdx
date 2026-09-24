@@ -1,11 +1,12 @@
 ---
 title: SafeMesh — main (unreleased)
-description: Lean-backed CRDT convergence for small, embeddable state sync; try a runnable Rust example.
+description: Build offline apps with SafeMesh from Rust, TypeScript/JavaScript via WASM, Python or C, within each language path’s scope.
 template: splash
 ---
 
 import Hero from '../../components/home/Hero.astro';
 import ConvergenceExplainer from '../../components/home/ConvergenceExplainer.astro';
+import PrimitiveMesh from '../../components/home/PrimitiveMesh.astro';
 import PathGrid from '../../components/home/PathGrid.astro';
 import EvidenceBridge from '../../components/home/EvidenceBridge.astro';
 
@@ -26,6 +27,8 @@ export const labUrl = import.meta.env.LAB_URL || 'http://localhost:4173/';
   <Hero />
   <ConvergenceExplainer labUrl={labUrl} />
 </div>
+
+<PrimitiveMesh />
 
 <PathGrid />
 

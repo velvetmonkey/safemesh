@@ -22,6 +22,22 @@ pub enum CoordinateError {
     },
 }
 
+impl core::fmt::Display for CoordinateError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ReplicaOutOfRange {
+                replica,
+                replica_count,
+            } => write!(
+                f,
+                "replica coordinate {replica} is outside 0..{replica_count}"
+            ),
+        }
+    }
+}
+
+impl core::error::Error for CoordinateError {}
+
 /// A grow-only counter: one tally per replica, join = pointwise max.
 ///
 /// Model: `Crdt.GCounter ι = ι → ℕ` with the Pi join-semilattice. Applying a

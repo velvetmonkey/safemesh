@@ -110,25 +110,27 @@
   /* Hero (index.mdx): what SafeMesh does, plus the primary task routes. */
   .sm-hero {
     display: grid;
-    grid-template-columns: 1.05fr 1fr;
-    gap: 3rem;
-    align-items: center;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    gap: 2.5rem;
+    align-items: start;
     margin: 1.5rem 0 3rem;
   }
-  .sm-hero-eyebrow {
-    font: 0.7rem/1.5 var(--sm-mono);
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: var(--sm-accent);
-    margin: 0 0 0.6rem;
+  .sm-hero > * { min-width: 0; margin-block: 0; }
+  .sm-hero-intro {
+    font-size: 1.1rem;
+    line-height: 1.6;
+    color: var(--sm-text);
+    margin: 0 0 1.25rem;
   }
   .sm-hero-tagline {
-    font-size: clamp(1.5rem, 2.6vw, 2.1rem);
-    line-height: 1.2;
-    letter-spacing: -0.03em;
-    font-weight: 600;
-    margin: 0 0 1rem;
+    font-size: clamp(2.25rem, 4vw, 3.5rem);
+    line-height: 1.08;
+    letter-spacing: -0.045em;
+    font-weight: 650;
+    color: var(--sm-text);
+    margin: 0 0 1.25rem;
   }
+  .sm-hero-tagline span { color: var(--sm-accent); }
   .sm-hero-lead {
     max-width: 32rem;
     font-size: 1.05rem;
@@ -177,99 +179,34 @@
     font-weight: 550;
   }
 
-  /* Convergence explanation: a labeled, keyboard-operable model. Not the Lab. */
-  .sm-mesh {
-    background: var(--sm-panel);
-    border: 1px solid var(--sm-line);
-    border-radius: 0.6rem;
-    overflow: hidden;
-    min-width: 0;
-    margin: 0;
+  /* The complete storyboard is the default, including without JavaScript. */
+  .sm-mesh { background: var(--sm-panel); border: 1px solid var(--sm-line); border-radius: .6rem; overflow: hidden; min-width: 0; margin: 0; }
+  .sm-hero .sm-mesh * { margin-block-start: 0; }
+  .sm-mesh-top { padding: .75rem; display: grid; gap: .2rem; border-bottom: 1px solid var(--sm-line); }
+  .sm-mesh-top strong { font-size: 1rem; line-height: 1.3; }
+  .sm-mesh-top > span { font-size: .75rem; color: var(--sm-muted); }
+  .sm-story-step { padding: .65rem .75rem; }
+  .sm-story-step + .sm-story-step { border-top: 1px solid var(--sm-line); }
+  .sm-mesh .sm-story-step h2 { font: 650 .9rem/1.3 var(--sm-font); margin: 0 0 .2rem; letter-spacing: normal; }
+  .sm-story-step p { font-size: .75rem; line-height: 1.4; margin: 0 0 .5rem; color: var(--sm-muted); }
+  .sm-devices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .35rem; }
+  .sm-devices > div { display: grid; align-content: start; gap: .2rem; border: 1px solid var(--sm-line); border-radius: .35rem; padding: .45rem; font-size: .7rem; line-height: 1.4; }
+  .sm-devices b { font-size: .65rem; color: var(--sm-muted); }
+  .sm-devices-same > div { background: var(--sm-tint); border-color: var(--sm-accent); }
+  .sm-exchange { font-size: .85rem; font-weight: 650; color: var(--sm-accent); }
+  .sm-exchange span { display: block; font-size: .7rem; font-weight: 400; color: var(--sm-text); }
+  @media (prefers-reduced-motion: no-preference) {
+    .sm-mesh[data-presentation='animated'] .sm-story { min-height: 14rem; }
+    .sm-mesh[data-presentation='animated'] .sm-story-step { display: none; border: 0; }
+    .sm-mesh[data-presentation='animated'][data-phase='offline'] [data-story-step='offline'],
+    .sm-mesh[data-presentation='animated'][data-phase='sync'] [data-story-step='sync'],
+    .sm-mesh[data-presentation='animated'][data-phase='replay'] [data-story-step='replay'] { display: block; }
   }
-  .sm-mesh-top {
-    padding: 1rem 1.3rem;
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    border-bottom: 1px solid var(--sm-line);
-    font: 0.65rem/1.5 var(--sm-mono);
-    color: var(--sm-muted);
-  }
-  .sm-mesh-status { color: var(--sm-accent); }
-  .sm-mesh-field {
-    position: relative;
-    isolation: isolate;
-    height: 19rem;
-  }
-  .sm-mesh-wires {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    z-index: -1;
-    color: var(--sm-line);
-  }
-  .sm-mesh-wires path {
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.5;
-    stroke-dasharray: 5 5;
-    vector-effect: non-scaling-stroke;
-  }
-  .sm-mesh[data-phase='sync'] .sm-mesh-wires,
-  .sm-mesh[data-phase='replay'] .sm-mesh-wires {
-    color: var(--sm-accent);
-  }
-  .sm-mesh[data-phase='sync'] .sm-mesh-wires path,
-  .sm-mesh[data-phase='replay'] .sm-mesh-wires path {
-    stroke-dasharray: none;
-  }
-  .sm-replica {
-    position: absolute;
-    width: 6.6rem;
-    text-align: center;
-    transform: translate(-50%, -50%);
-  }
-  .sm-replica-a { left: 50%; top: 24%; }
-  .sm-replica-b { left: 23%; top: 74%; }
-  .sm-replica-c { left: 77%; top: 74%; }
-  .sm-replica-core {
-    width: 4.6rem;
-    height: 4.6rem;
-    margin: auto;
-    display: grid;
-    place-content: center;
-    border-radius: 50%;
-    background: var(--sm-panel);
-    border: 1px solid var(--sm-line);
-    box-shadow: 0 0 0 7px var(--sm-bg);
-  }
-  .sm-replica-label { font: 0.6rem/1.3 var(--sm-mono); color: var(--sm-muted); }
-  .sm-replica-total { font: 550 1.7rem/1.2 var(--sm-font); letter-spacing: -0.06em; }
-  .sm-replica-vector {
-    display: inline-block;
-    margin-top: 0.7rem;
-    background: var(--sm-panel);
-    padding: 0 0.3rem;
-    font: 0.68rem/1.6 var(--sm-mono);
-    color: var(--sm-muted);
-  }
-  .sm-mesh[data-phase='sync'] .sm-replica-core,
-  .sm-mesh[data-phase='replay'] .sm-replica-core {
-    border-color: var(--sm-accent);
-    background: var(--sm-tint);
-  }
-  .sm-mesh-center {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    background: var(--sm-panel);
-    font: 0.63rem/1.5 var(--sm-mono);
-    color: var(--sm-muted);
-    padding: 0.2rem 0.5rem;
-    border-radius: 0.3rem;
-    white-space: nowrap;
+  @media (max-width: 50rem) {
+    /* Put the compact illustration in the first screen; opener text is unchanged. */
+    .sl-markdown-content:has(> .sm-hero) { display: grid; }
+    .sl-markdown-content > .sm-hero { grid-row: 1; margin-top: 0; }
+    .sm-hero > .sm-mesh-wrap { order: -1; }
   }
   .sm-mesh-controls {
     display: flex;
@@ -284,8 +221,7 @@
     background: transparent;
     color: var(--sm-muted);
     border-radius: 0.3rem;
-    font-size: 0.72rem;
-    font: inherit;
+    font: 0.72rem/1.5 var(--sm-font);
     cursor: pointer;
   }
   .sm-mesh-controls button[aria-pressed='true'] {
@@ -298,6 +234,19 @@
     outline: 3px solid var(--sm-blue);
     outline-offset: -3px;
   }
+  .sm-mesh [hidden] { display: none; }
+  .sm-mesh-playback {
+    display: block;
+    margin: 0 .6rem .6rem auto;
+    padding: .3rem .6rem;
+    border: 1px solid var(--sm-line);
+    border-radius: .3rem;
+    background: var(--sm-panel);
+    color: var(--sm-accent);
+    font: .72rem/1.5 var(--sm-font);
+    cursor: pointer;
+  }
+  .sm-mesh-playback:focus-visible { outline: 3px solid var(--sm-blue); }
   .sm-mesh-caption {
     padding: 0 1.3rem 1rem;
     font-size: 0.78rem;
@@ -369,6 +318,14 @@
   }
 
   @media (prefers-reduced-motion: no-preference) {
+    .sm-mesh[data-phase='sync'] .sm-mesh-wires path,
+    .sm-mesh[data-phase='replay'] .sm-mesh-wires path {
+      stroke-dasharray: 5 5;
+      animation: sm-mesh-delivery 1.2s linear infinite;
+      animation-play-state: paused;
+    }
+    .sm-mesh[data-running='true'] .sm-mesh-wires path { animation-play-state: running; }
+    @keyframes sm-mesh-delivery { to { stroke-dashoffset: -20; } }
     .sm-button, .sm-path-card, .sm-replica-core { transition: background-color .18s, border-color .18s; }
   }
 }

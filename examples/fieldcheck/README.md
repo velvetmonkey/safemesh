@@ -1,4 +1,4 @@
-# Fieldcheck · local inspection and two-device exchange (Slices 1–2)
+# Fieldcheck · local inspection, exchange, and review (Slices 1–3)
 
 A Linux CLI and a separate Rust process owning one durable UTF-8 OR-Set.
 The CLI communicates with its service over stdin/stdout pipes. Two services can
@@ -47,8 +47,12 @@ status and durable delivery evidence. It does not rely on the CLI’s cached lis
 
 The draft gets a UUID and is fsynced to `new-store.draft.json` beside the store
 before submission. Keep that file when resolving an uncertain save.
-Record field order is fixed; the observed-event-ID array is empty in these slices
-(and therefore sorted). The returned sequence belongs to SafeMesh, not a clock.
+Record field order is fixed; observed event IDs are sorted. The returned sequence
+belongs to SafeMesh, not a clock. A review is a new inspection whose
+`observed_event_ids` cite existing records for the same item, including at least
+one differing answer. The service rejects unknown cited IDs on local submission.
+It accepts a remote review before its cited observations arrive, so exchange order
+does not discard the review.
 
 The interface displays `Saving…` until the service responds, then
 `Saved on this device` only following successful durable `add`.
@@ -88,7 +92,13 @@ record and sequence; the same ID with different content is refused.
 
 This adapts the create/restart pattern from `../gold-path/rust`, whose sequential
 example has no service/UI scaffold and also demonstrates a second writer.
-These slices add no review policy or browser UI. The forced-kill journey
+The service's `ready` and `status` JSON list `needs_review` and `resolved` item
+IDs, projected from the durable records. A review resolves a disagreement only
+when it cites every other observation currently present for that item. An
+unreferenced later observation or a competing review reopens it. Original records
+remain unchanged. The Python CLI still creates ordinary inspections with an
+empty citation list; review submissions use the service's JSON pipe directly.
+There is no browser UI. The forced-kill journey
 establishes process-crash recovery on the tested Linux filesystem, not arbitrary
 hardware/power-loss guarantees.
 

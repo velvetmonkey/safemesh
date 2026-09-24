@@ -11,7 +11,7 @@ every carrier shown. **Supported** below means selected for v0, within the
 
 ## Put SafeMesh in your program
 
-Start with the [Rust and TypeScript gold paths](/safemesh/getting-started/) to add
+Start with the [Rust and TypeScript gold paths](/safemesh/persist-and-restart/) to add
 the local library/package, make an edit, save it, restart in another process and
 sync a second replica. Those complete, CI-executed consumer fixtures include
 asserted output and ordinary malformed-record errors. The examples below explore
