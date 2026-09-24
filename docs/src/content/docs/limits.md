@@ -47,7 +47,7 @@ Keep three application-owned limits at the receiving boundary; `VersionVector::f
 - **Zero-acknowledgement budget:** cap the zero-author set before reconstruction to bound set cloning; the prefix-entry budget does not cover it.
 - **Encoded-byte budget:** cap the version message before decoding to bound parsing and input allocation, including repeated entries that a map or set would deduplicate.
 
-SafeMesh has no built-in version wire codec or universal numeric budgets for these collections. Choose budgets for your application, and enforce entry budgets during decoding as well as before reconstruction. These limits bound input cost without imposing a writer-lifetime ceiling. Peer versions remain possession claims: reconstruction does not verify that the sender holds the records. Evidence: [`VersionVector`](/safemesh/reference/rust/safemesh_crdt/struct.VersionVector.html).
+SafeMesh has a built-in version wire codec with default ceilings of 4,096 authors and 4,096 zero acknowledgements. Applications can choose their own budgets with `VersionVector::from_wire_bytes_with_limits` and should bound encoded bytes before decoding. The peer-prefix constructors retain their caller-selected budgets. These limits bound input cost without imposing a writer-lifetime ceiling. Peer versions remain possession claims: reconstruction does not verify that the sender holds the records. Evidence: [`VersionVector`](/safemesh/reference/rust/safemesh_crdt/struct.VersionVector.html).
 
 ## You need consensus or leader election
 
