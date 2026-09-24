@@ -1537,7 +1537,7 @@ impl SafeMeshStringOrSetReplica {
         self.state.elements().into_iter().collect()
     }
 
-    /// Every token ever added for `element`, including tombstoned ones.
+    /// Live add tokens for `element`, excluding tombstoned tokens.
     #[wasm_bindgen(js_name = observedTokens)]
     pub fn observed_tokens(&self, element: String) -> Vec<u64> {
         self.state.observed_tokens(&element).into_iter().collect()
