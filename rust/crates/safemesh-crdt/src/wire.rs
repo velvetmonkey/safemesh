@@ -103,82 +103,6 @@ impl WireDecode for VersionVector {
     }
 }
 
-#[cfg(test)]
-mod version_vector_wire_tests {
-    use super::*;
-    use alloc::vec;
-
-    #[test]
-    fn version_vector_round_trip_is_structural_and_deterministic() {
-        let first = VersionVector::from_peer_prefixes(
-            &BTreeMap::from([(9, 3), (2, 7), (5, u64::MAX)]),
-            &BTreeSet::from([9, 1, 5]),
-        )
-        .unwrap();
-        let second = VersionVector::from_peer_prefixes(
-            &[(5, u64::MAX), (9, 3), (2, 7)].into_iter().collect(),
-            &[5, 1, 9].into_iter().collect(),
-        )
-        .unwrap();
-        let bytes = first.to_wire_bytes().unwrap();
-        assert_eq!(bytes, second.to_wire_bytes().unwrap());
-        assert_eq!(VersionVector::from_wire_bytes(&bytes).unwrap(), first);
-    }
-
-    #[test]
-    fn version_vector_claimed_author_count_exceeding_default_is_rejected() {
-        let mut tampered = vec![TAG_VERSION_VECTOR];
-        write_len(
-            &mut tampered,
-            VersionVectorLimits::WIRE_DEFAULT.max_authors.unwrap() + 1,
-        )
-        .unwrap();
-        assert_eq!(
-            VersionVector::from_wire_bytes(&tampered),
-            Err(WireError::VersionAuthorLimitExceeded { max_authors: 4096 })
-        );
-        let valid = VersionVector::from_peer_prefixes(
-            &BTreeMap::from([(1, 2), (3, 4)]),
-            &BTreeSet::from([1]),
-        )
-        .unwrap();
-        assert_eq!(
-            VersionVector::from_wire_bytes(&valid.to_wire_bytes().unwrap()).unwrap(),
-            valid
-        );
-    }
-
-    #[test]
-    fn version_vector_custom_limits_reject_zeros_and_duplicate_authors() {
-        let value =
-            VersionVector::from_peer_prefixes(&BTreeMap::from([(1, 2)]), &BTreeSet::from([1, 2]))
-                .unwrap();
-        assert_eq!(
-            VersionVector::from_wire_bytes_with_limits(
-                &value.to_wire_bytes().unwrap(),
-                VersionVectorLimits {
-                    max_authors: Some(1),
-                    max_zero_replicas: Some(1)
-                },
-            ),
-            Err(WireError::VersionZeroReplicaLimitExceeded {
-                max_zero_replicas: 1
-            })
-        );
-        let mut duplicates = vec![TAG_VERSION_VECTOR];
-        write_len(&mut duplicates, 2).unwrap();
-        write_u64(&mut duplicates, 7);
-        write_u64(&mut duplicates, 1);
-        write_u64(&mut duplicates, 7);
-        write_u64(&mut duplicates, 2);
-        write_len(&mut duplicates, 0).unwrap();
-        assert_eq!(
-            VersionVector::from_wire_bytes(&duplicates),
-            Err(WireError::NonCanonicalVersionVector)
-        );
-    }
-}
-
 impl WireEncode for GCounterDelta {
     fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
         write_u8(out, TAG_GCOUNTER_DELTA);
@@ -666,5 +590,91 @@ impl WireDecode for LwwMap<u64, u64> {
             map.remove(cursor.read_u64()?, cursor.read_u64()?, cursor.read_u64()?);
         }
         Ok(map)
+    }
+}
+
+#[cfg(test)]
+mod version_vector_wire_tests {
+    use super::*;
+    use alloc::vec;
+
+    #[test]
+    fn test_module_follows_wire_implementations() {
+        let source = include_str!("wire.rs");
+        let test_module = source
+            .find("\n#[cfg(test)]\nmod version_vector_wire_tests")
+            .unwrap();
+        let last_impl = source.rfind("\nimpl ").unwrap();
+        assert!(last_impl < test_module);
+    }
+
+    #[test]
+    fn version_vector_round_trip_is_structural_and_deterministic() {
+        let first = VersionVector::from_peer_prefixes(
+            &BTreeMap::from([(9, 3), (2, 7), (5, u64::MAX)]),
+            &BTreeSet::from([9, 1, 5]),
+        )
+        .unwrap();
+        let second = VersionVector::from_peer_prefixes(
+            &[(5, u64::MAX), (9, 3), (2, 7)].into_iter().collect(),
+            &[5, 1, 9].into_iter().collect(),
+        )
+        .unwrap();
+        let bytes = first.to_wire_bytes().unwrap();
+        assert_eq!(bytes, second.to_wire_bytes().unwrap());
+        assert_eq!(VersionVector::from_wire_bytes(&bytes).unwrap(), first);
+    }
+
+    #[test]
+    fn version_vector_claimed_author_count_exceeding_default_is_rejected() {
+        let mut tampered = vec![TAG_VERSION_VECTOR];
+        write_len(
+            &mut tampered,
+            VersionVectorLimits::WIRE_DEFAULT.max_authors.unwrap() + 1,
+        )
+        .unwrap();
+        assert_eq!(
+            VersionVector::from_wire_bytes(&tampered),
+            Err(WireError::VersionAuthorLimitExceeded { max_authors: 4096 })
+        );
+        let valid = VersionVector::from_peer_prefixes(
+            &BTreeMap::from([(1, 2), (3, 4)]),
+            &BTreeSet::from([1]),
+        )
+        .unwrap();
+        assert_eq!(
+            VersionVector::from_wire_bytes(&valid.to_wire_bytes().unwrap()).unwrap(),
+            valid
+        );
+    }
+
+    #[test]
+    fn version_vector_custom_limits_reject_zeros_and_duplicate_authors() {
+        let value =
+            VersionVector::from_peer_prefixes(&BTreeMap::from([(1, 2)]), &BTreeSet::from([1, 2]))
+                .unwrap();
+        assert_eq!(
+            VersionVector::from_wire_bytes_with_limits(
+                &value.to_wire_bytes().unwrap(),
+                VersionVectorLimits {
+                    max_authors: Some(1),
+                    max_zero_replicas: Some(1)
+                },
+            ),
+            Err(WireError::VersionZeroReplicaLimitExceeded {
+                max_zero_replicas: 1
+            })
+        );
+        let mut duplicates = vec![TAG_VERSION_VECTOR];
+        write_len(&mut duplicates, 2).unwrap();
+        write_u64(&mut duplicates, 7);
+        write_u64(&mut duplicates, 1);
+        write_u64(&mut duplicates, 7);
+        write_u64(&mut duplicates, 2);
+        write_len(&mut duplicates, 0).unwrap();
+        assert_eq!(
+            VersionVector::from_wire_bytes(&duplicates),
+            Err(WireError::NonCanonicalVersionVector)
+        );
     }
 }
