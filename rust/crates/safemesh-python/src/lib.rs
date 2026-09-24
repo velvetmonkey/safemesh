@@ -1122,6 +1122,17 @@ mod py_gset_python {
             self.inner.elements().iter().copied().collect()
         }
 
+        pub fn to_wire_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+            encode_bytes(py, self.inner.to_wire_bytes(), "failed to encode G-Set")
+        }
+
+        #[staticmethod]
+        pub fn from_wire_bytes(bytes: &[u8]) -> PyResult<Self> {
+            GSet::<u64>::from_wire_bytes(bytes)
+                .map(|inner| Self { inner })
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(format!("{error:?}")))
+        }
+
         /// Merge full state; self-merge is an identity operation.
         #[pyo3(name = "merge")]
         pub fn merge_py(slf: &Bound<'_, Self>, other: &Bound<'_, Self>) -> PyResult<()> {
@@ -1174,6 +1185,17 @@ mod py_rga_python {
         }
         pub fn read_positions(&self) -> Vec<u64> {
             self.inner.read_positions()
+        }
+
+        pub fn to_wire_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+            encode_bytes(py, self.inner.to_wire_bytes(), "failed to encode RGA")
+        }
+
+        #[staticmethod]
+        pub fn from_wire_bytes(bytes: &[u8]) -> PyResult<Self> {
+            Rga::<u64, u64>::from_wire_bytes(bytes)
+                .map(|inner| Self { inner })
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(format!("{error:?}")))
         }
 
         /// Merge full state; self-merge is an identity operation.
@@ -1291,6 +1313,86 @@ mod tests {
                 None,
             )
             .unwrap();
+        });
+    }
+
+    #[test]
+    fn python_collection_wire_matches_core() {
+        with_python(|py| {
+            let module = PyModule::new_bound(py, "safemesh_python").unwrap();
+            safemesh_python(&module).unwrap();
+            let globals = pyo3::types::PyDict::new_bound(py);
+            globals.set_item("sm", module).unwrap();
+
+            for elements in [vec![], vec![913827640125], vec![7, 913827640125, u64::MAX]] {
+                let mut rust = GSet::<u64>::new();
+                for element in &elements {
+                    rust.insert(*element);
+                }
+                let rust_bytes = rust.to_wire_bytes().unwrap();
+                globals.set_item("elements", &elements).unwrap();
+                globals
+                    .set_item("rust_bytes", PyBytes::new_bound(py, &rust_bytes))
+                    .unwrap();
+                py.run_bound(
+                    "value = sm.GSet()\nfor element in elements: value.insert(element)\nassert value.to_wire_bytes() == rust_bytes\nassert sm.GSet.from_wire_bytes(rust_bytes).elements() == elements",
+                    Some(&globals), None,
+                ).unwrap();
+                let python_bytes: Vec<u8> = globals
+                    .get_item("value")
+                    .unwrap()
+                    .unwrap()
+                    .call_method0("to_wire_bytes")
+                    .unwrap()
+                    .extract()
+                    .unwrap();
+                assert_eq!(
+                    GSet::<u64>::from_wire_bytes(&python_bytes)
+                        .unwrap()
+                        .elements(),
+                    rust.elements()
+                );
+            }
+
+            for (placed, deleted) in [
+                (vec![], vec![]),
+                (vec![(913827640125, 17)], vec![]),
+                (vec![(2, 20), (913827640125, 17), (3, 30)], vec![2, 99]),
+            ] {
+                let mut rust = Rga::<u64, u64>::new();
+                for (position, value) in &placed {
+                    rust.insert(*position, *value);
+                }
+                for position in &deleted {
+                    rust.delete(*position);
+                }
+                let rust_bytes = rust.to_wire_bytes().unwrap();
+                let mut expected_placed = placed.clone();
+                expected_placed.sort_unstable();
+                globals.set_item("placed", &placed).unwrap();
+                globals
+                    .set_item("expected_placed", &expected_placed)
+                    .unwrap();
+                globals.set_item("deleted", &deleted).unwrap();
+                globals
+                    .set_item("rust_bytes", PyBytes::new_bound(py, &rust_bytes))
+                    .unwrap();
+                py.run_bound(
+                    "value = sm.Rga()\nfor position, item in placed: value.insert(position, item)\nfor position in deleted: value.delete(position)\nassert value.to_wire_bytes() == rust_bytes\nassert sm.Rga.from_wire_bytes(rust_bytes).placed() == expected_placed\nassert sm.Rga.from_wire_bytes(rust_bytes).tombstones() == deleted",
+                    Some(&globals), None,
+                ).unwrap();
+                let python_bytes: Vec<u8> = globals
+                    .get_item("value")
+                    .unwrap()
+                    .unwrap()
+                    .call_method0("to_wire_bytes")
+                    .unwrap()
+                    .extract()
+                    .unwrap();
+                let decoded = Rga::<u64, u64>::from_wire_bytes(&python_bytes).unwrap();
+                assert_eq!(decoded.placed(), rust.placed());
+                assert_eq!(decoded.tombstones(), rust.tombstones());
+            }
         });
     }
 

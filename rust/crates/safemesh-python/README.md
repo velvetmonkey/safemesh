@@ -153,3 +153,6 @@ positions or implement text editing.
 
 These three classes have no durable `Replica` companion: the Rust core does not
 expose public `DurableReplica` construction and restart for these types.
+`GSet` and `Rga` expose the Rust core's canonical full-state bytes through
+`to_wire_bytes()` and `from_wire_bytes(bytes)`; malformed input raises `ValueError`.
+Full-state `PnCounter` has no canonical wire form in this version.

@@ -107,3 +107,15 @@ for bad in [True, False, 0.5, float('nan'), float('inf'), -1, 1 << 64]:
     assert gset.elements() == []
     assert rga.placed() == rga.tombstones() == []
     assert counter.p_state() == counter.n_state() == [0, 0]
+
+# Core decoding rejects incomplete payloads, impossible claimed lengths, and
+# another CRDT's tag before constructing a Python value.
+gset_bytes = sm.GSet().to_wire_bytes()
+rga_bytes = sm.Rga().to_wire_bytes()
+for cls, payload in [(sm.GSet, gset_bytes), (sm.Rga, rga_bytes)]:
+    assert cls.from_wire_bytes(payload).to_wire_bytes() == payload
+    raises(ValueError, lambda: cls.from_wire_bytes(payload[:-1]))
+    raises(ValueError, lambda: cls.from_wire_bytes(payload[:1] + b'\xff\xff\xff\xff'))
+raises(ValueError, lambda: sm.GSet.from_wire_bytes(rga_bytes))
+assert not hasattr(sm.PnCounter, 'to_wire_bytes')
+assert not hasattr(sm.PnCounter, 'from_wire_bytes')
