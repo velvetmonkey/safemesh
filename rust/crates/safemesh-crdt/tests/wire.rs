@@ -1043,6 +1043,46 @@ fn orset_utf8_state_rejects_corruption_and_other_tags() {
     );
 }
 
+#[test]
+fn orset_utf8_state_rejects_duplicate_pairs_without_changing_receiver() {
+    fn frame(entries: &[(&str, u64)]) -> Vec<u8> {
+        let mut bytes = vec![0x35];
+        bytes.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        for (element, token) in entries {
+            bytes.extend_from_slice(&(element.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(element.as_bytes());
+            bytes.extend_from_slice(&token.to_le_bytes());
+        }
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes
+    }
+
+    let mut receiver = OrSet::<String, u64>::new();
+    receiver.add("preserved".into(), 41);
+    let before = receiver.clone();
+    for entries in [
+        vec![("repeat", 7), ("repeat", 7)],
+        vec![("repeat", 7), ("other", 9), ("repeat", 7)],
+        vec![("🦀", u64::MAX), ("🦀", u64::MAX)],
+    ] {
+        let decoded = OrSet::<String, u64>::from_wire_bytes(&frame(&entries));
+        if let Ok(state) = &decoded {
+            receiver.merge(state);
+        }
+        assert!(decoded.is_err(), "duplicate pair was accepted: {entries:?}");
+        assert_eq!(receiver, before);
+    }
+
+    for entries in [
+        vec![("same", 1), ("same", 2)],
+        vec![("first", 1), ("second", 1)],
+    ] {
+        let decoded = OrSet::<String, u64>::from_wire_bytes(&frame(&entries)).unwrap();
+        assert_eq!(decoded.adds().len(), 2);
+        assert_eq!(decoded.to_wire_bytes().unwrap(), frame(&entries));
+    }
+}
+
 proptest::proptest! {
     #[test]
     fn orset_utf8_state_preserves_arbitrary_strings(
