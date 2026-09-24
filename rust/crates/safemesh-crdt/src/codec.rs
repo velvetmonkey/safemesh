@@ -60,6 +60,9 @@ pub enum WireError {
     VersionZeroReplicaLimitExceeded {
         max_zero_replicas: usize,
     },
+    CollectionElementLimitExceeded {
+        max_elements: usize,
+    },
     NonCanonicalVersionVector,
 }
 
@@ -99,12 +102,29 @@ impl core::fmt::Display for WireError {
                     "wire version exceeds zero-acknowledgement limit {max_zero_replicas}"
                 )
             }
+            Self::CollectionElementLimitExceeded { max_elements } => {
+                write!(f, "wire collection exceeds element limit {max_elements}")
+            }
             Self::NonCanonicalVersionVector => f.write_str("noncanonical wire version vector"),
         }
     }
 }
 
 impl core::error::Error for WireError {}
+
+/// Optional count budget for G-Set elements and each RGA collection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CollectionLimits {
+    /// Maximum declared count per collection. `None` removes the ceiling.
+    pub max_elements: Option<usize>,
+}
+
+impl CollectionLimits {
+    /// Default G-Set and RGA wire ceiling; callers may explicitly raise it.
+    pub const WIRE_DEFAULT: Self = Self {
+        max_elements: Some(4096),
+    };
+}
 
 /// Optional limits for [`EventLog::from_wire_bytes_with_limits`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

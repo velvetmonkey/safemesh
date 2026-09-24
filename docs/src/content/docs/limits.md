@@ -37,6 +37,25 @@ you can own the application work; convergence alone does not close these gaps.
 
 SafeMesh's convergence claim is conditional on missing deltas eventually being recovered. It does not prove network or radio delivery. A partition-and-heal example exercises modeled delivery faults; it cannot establish that your real transport will repair every gap. [Evidence: `CLAIMS.md`](https://github.com/velvetmonkey/safemesh/blob/main/CLAIMS.md) and [example scope](/safemesh/examples/).
 
+## You decode G-Set or RGA state from untrusted input
+
+Core G-Set and RGA wire decoding each default to a **4,096-entry ceiling**.
+G-Set checks its element count; RGA checks its placement count and tombstone
+count separately. A declared count of 4,097 is rejected before decoding or
+allocating those entries. Rust callers with larger trusted states can use
+`GSet::<u64>::from_wire_bytes_with_limits` or
+`Rga::<u64, u64>::from_wire_bytes_with_limits` with `CollectionLimits {
+max_elements: Some(n) }`. `None` removes the ceiling. These controls change
+decoding only; canonical encoded bytes are unchanged. Cap input bytes as well,
+since the element ceiling does not bound the size of the input buffer.
+
+An `EventLog<GSet<u64>>` or `EventLog<Rga<u64, u64>>` whose record payload
+exceeds the default now fails to decode before replay; `DecodeLimits` controls
+only the top-level record count and cannot raise a nested collection ceiling.
+Applications retaining such logs need a migration or a custom, explicitly
+budgeted payload decoder before replay. The supplied durable Rust adapters use
+G-Counter and OR-Set logs, so their ordinary restart paths are unaffected.
+
 ## You exchange peer versions from untrusted input
 
 `VersionVector::from_peer_prefixes` accepts positive prefixes through `u64::MAX`, including 1,000,001. It copies the prefix map and independent sequence-zero acknowledgements directly, taking O(r + z) time and additional space for r prefix entries and z zero acknowledgements. Prefix magnitude does not determine reconstruction work. A zero-valued prefix remains noncanonical; carry sequence-zero possession in `zero_replicas`.
