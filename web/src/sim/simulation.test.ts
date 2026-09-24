@@ -484,8 +484,8 @@ describe('Lab numeric boundary regressions', () => {
     })
   }
   it.each([-1, 0.5, NaN, Number.MAX_SAFE_INTEGER])('refuses invalid or exhausted local tally %s', (localTally) => {
-    const sim = createSimulation(2)
-    sim.peers[0] = { ...sim.peers[0], localTally }
+    const base = createSimulation(2)
+    const sim = { ...base, peers: base.peers.map((peer, id) => id === 0 ? { ...peer, localTally } : peer) }
     expect(() => bumpCounter(sim, 0)).toThrow(RangeError)
   })
   for (const [name, operation] of [

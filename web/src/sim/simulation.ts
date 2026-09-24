@@ -48,7 +48,7 @@ export type LogEntry = {
 }
 
 export type Simulation = {
-  peers: Peer[]
+  peers: readonly Peer[]
   queue: Packet[]
   partitioned: boolean
   latencyMs: number
@@ -289,8 +289,8 @@ export function convergence(sim: Simulation): {
 
 // Peer arrays and their carriers are immutable. Clock and queue changes reuse them;
 // delivery replaces the array, invalidating comparisons on the same tick.
-const carrierComparisons = new WeakMap<Peer[], Omit<ReturnType<typeof convergence>, 'converged'>>()
-const repairComplete = new WeakSet<Peer[]>()
+const carrierComparisons = new WeakMap<readonly Peer[], Omit<ReturnType<typeof convergence>, 'converged'>>()
+const repairComplete = new WeakSet<readonly Peer[]>()
 
 export function runAntiEntropyNow(sim: Simulation): Simulation {
   return runAntiEntropy(sim)

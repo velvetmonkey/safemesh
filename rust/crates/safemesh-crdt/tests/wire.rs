@@ -843,8 +843,8 @@ std::thread_local! {
 struct BudgetPayload(u64);
 
 impl safemesh_crdt::WireSchema for BudgetPayload {
-    fn wire_schema() -> Vec<u8> {
-        b"test/decode-budget/v1".to_vec()
+    fn wire_schema() -> std::borrow::Cow<'static, [u8]> {
+        std::borrow::Cow::Borrowed(b"test/decode-budget/v1")
     }
 }
 
