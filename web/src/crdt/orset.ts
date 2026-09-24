@@ -83,7 +83,19 @@ export function readORSet(state: ORSetState): ORSetElement[] {
       visible.add(element)
     }
   }
-  return [...visible].sort(compareCodePoints)
+  return [...visible].sort(compareUtf8Bytes)
+}
+
+const utf8 = new TextEncoder()
+
+function compareUtf8Bytes(a: string, b: string): number {
+  const left = utf8.encode(a)
+  const right = utf8.encode(b)
+  const length = Math.min(left.length, right.length)
+  for (let i = 0; i < length; i++) {
+    if (left[i] !== right[i]) return left[i] - right[i]
+  }
+  return left.length - right.length
 }
 
 export function observedTokens(state: ORSetState, element: ORSetElement): ORSetToken[] {

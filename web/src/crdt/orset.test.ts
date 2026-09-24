@@ -2,6 +2,15 @@ import { describe, expect, it, vi } from 'vitest'
 import { addDelta, applyORSetDelta, bottomORSet, mergeORSet, observedTokens, readORSet, removeDelta, sameORSet } from './orset'
 
 describe('OR-Set mirror', () => {
+  it('orders private-use and supplementary elements by UTF-8 bytes', () => {
+    const state = [addDelta('\u{10000}', 'p0-1'), addDelta('\uE000', 'p0-2')].reduce(
+      applyORSetDelta,
+      bottomORSet(),
+    )
+    expect(readORSet(state)).toEqual(['\uE000', '\u{10000}'])
+    expect(JSON.stringify(readORSet(state))).toBe('["\uE000","\u{10000}"]')
+  })
+
   it('keeps a concurrent fresh add visible after an observed-token remove', () => {
     const first = addDelta('radio', 'p0-1')
     const concurrent = addDelta('radio', 'p1-2')
