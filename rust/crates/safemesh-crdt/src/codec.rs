@@ -5,6 +5,7 @@
 use crate::{
     Admission, Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounterDelta, GSet, LwwMap,
     LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta, PnCounterDelta, Record, Rga,
+    RgaDelta,
 };
 use alloc::{borrow::Cow, string::String, vec::Vec};
 
@@ -15,11 +16,14 @@ pub(super) const TAG_PNCOUNTER_INC: u8 = 0x11;
 pub(super) const TAG_PNCOUNTER_DEC: u8 = 0x12;
 pub(super) const TAG_GSET_U64: u8 = 0x20;
 pub(super) const TAG_ORSET_U64: u8 = 0x30;
+pub(super) const TAG_ORSET_STRING: u8 = 0x35;
 pub(super) const TAG_ORSET_ADD_U64: u8 = 0x31;
 pub(super) const TAG_ORSET_REMOVE_U64: u8 = 0x32;
 pub(super) const TAG_ORSET_ADD_STRING: u8 = 0x33;
 pub(super) const TAG_ORSET_REMOVE_STRING: u8 = 0x34;
 pub(super) const TAG_RGA_U64: u8 = 0x40;
+pub(super) const TAG_RGA_INSERT_U64: u8 = 0x41;
+pub(super) const TAG_RGA_DELETE_U64: u8 = 0x42;
 pub(super) const TAG_LWW_REGISTER_DELTA_U64: u8 = 0x50;
 pub(super) const TAG_LWW_REGISTER_U64: u8 = 0x51;
 pub(super) const TAG_ENABLE_WINS_FLAG_ENABLE_U64: u8 = 0x60;
@@ -37,6 +41,7 @@ pub enum WireError {
     TrailingBytes,
     LengthOverflow,
     RecordCollision,
+    DuplicateEntry,
     IntegrityMismatch,
     InvalidUtf8,
     /// Legacy frame, or a fixed-domain log constructed without its arity.
@@ -61,6 +66,9 @@ impl core::fmt::Display for WireError {
             Self::TrailingBytes => f.write_str("unexpected trailing bytes after wire value"),
             Self::LengthOverflow => f.write_str("wire length exceeds the representable range"),
             Self::RecordCollision => f.write_str("record identity has conflicting payloads"),
+            Self::DuplicateEntry => {
+                f.write_str("wire OR-set contains a duplicate element and token")
+            }
             Self::IntegrityMismatch => f.write_str("wire frame integrity check failed"),
             Self::InvalidUtf8 => f.write_str("wire string contains invalid UTF-8"),
             Self::MissingShape => f.write_str("wire frame is missing required shape metadata"),
@@ -132,7 +140,9 @@ wire_schema!(GSet<u64>, "safemesh/gset-u64/v1", false);
 wire_schema!(OrSetDelta<u64, u64>, "safemesh/orset-delta-u64-u64/v1", false);
 wire_schema!(OrSetDelta<String, u64>, "safemesh/orset-delta-utf8-u64/v1", false);
 wire_schema!(OrSet<u64, u64>, "safemesh/orset-u64-u64/v1", false);
+wire_schema!(OrSet<String, u64>, "safemesh/orset-utf8-u64/v1", false);
 wire_schema!(Rga<u64, u64>, "safemesh/rga-u64-u64/v1", false);
+wire_schema!(RgaDelta<u64, u64>, "safemesh/rga-delta-u64-u64/v1", false);
 wire_schema!(
     LwwRegisterDelta<u64>,
     "safemesh/lww-register-delta-u64/v1",

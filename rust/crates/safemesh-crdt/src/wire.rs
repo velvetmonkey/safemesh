@@ -10,12 +10,13 @@ use alloc::vec::Vec;
 use super::{
     read_tag, write_bytes, write_len, write_u64, write_u8, EnableWinsFlag, EnableWinsFlagDelta,
     EventLog, GCounterDelta, GSet, LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet,
-    OrSetDelta, PnCounterDelta, Record, RecordId, Rga, WireCursor, WireDecode, WireEncode,
-    WireError, WireSchema, TAG_ENABLE_WINS_FLAG_DISABLE_U64, TAG_ENABLE_WINS_FLAG_ENABLE_U64,
-    TAG_ENABLE_WINS_FLAG_U64, TAG_GCOUNTER_DELTA, TAG_GSET_U64, TAG_LWW_MAP_REMOVE_U64,
-    TAG_LWW_MAP_SET_U64, TAG_LWW_MAP_U64, TAG_LWW_REGISTER_DELTA_U64, TAG_LWW_REGISTER_U64,
-    TAG_ORSET_ADD_STRING, TAG_ORSET_ADD_U64, TAG_ORSET_REMOVE_STRING, TAG_ORSET_REMOVE_U64,
-    TAG_ORSET_U64, TAG_PNCOUNTER_DEC, TAG_PNCOUNTER_INC, TAG_RECORD, TAG_RGA_U64,
+    OrSetDelta, PnCounterDelta, Record, RecordId, Rga, RgaDelta, WireCursor, WireDecode,
+    WireEncode, WireError, WireSchema, TAG_ENABLE_WINS_FLAG_DISABLE_U64,
+    TAG_ENABLE_WINS_FLAG_ENABLE_U64, TAG_ENABLE_WINS_FLAG_U64, TAG_GCOUNTER_DELTA, TAG_GSET_U64,
+    TAG_LWW_MAP_REMOVE_U64, TAG_LWW_MAP_SET_U64, TAG_LWW_MAP_U64, TAG_LWW_REGISTER_DELTA_U64,
+    TAG_LWW_REGISTER_U64, TAG_ORSET_ADD_STRING, TAG_ORSET_ADD_U64, TAG_ORSET_REMOVE_STRING,
+    TAG_ORSET_REMOVE_U64, TAG_ORSET_STRING, TAG_ORSET_U64, TAG_PNCOUNTER_DEC, TAG_PNCOUNTER_INC,
+    TAG_RECORD, TAG_RGA_DELETE_U64, TAG_RGA_INSERT_U64, TAG_RGA_U64,
 };
 
 impl WireEncode for GCounterDelta {
@@ -217,6 +218,77 @@ impl WireDecode for OrSet<u64, u64> {
         }
         set.apply_remove(tombstones);
         Ok(set)
+    }
+}
+
+impl WireEncode for OrSet<String, u64> {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        write_u8(out, TAG_ORSET_STRING);
+        write_len(out, self.adds.len())?;
+        for (element, token) in &self.adds {
+            write_bytes(out, element.as_bytes())?;
+            write_u64(out, *token);
+        }
+        write_len(out, self.tombstones.len())?;
+        for token in &self.tombstones {
+            write_u64(out, *token);
+        }
+        Ok(())
+    }
+}
+
+impl WireDecode for OrSet<String, u64> {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        read_tag(cursor, TAG_ORSET_STRING)?;
+        let mut set = OrSet::new();
+        for _ in 0..cursor.read_len()? {
+            let len = cursor.read_len()?;
+            let element = core::str::from_utf8(cursor.read_exact(len)?)
+                .map_err(|_| WireError::InvalidUtf8)?;
+            let element = String::from(element);
+            let token = cursor.read_u64()?;
+            if !set.adds.insert((element, token)) {
+                return Err(WireError::DuplicateEntry);
+            }
+        }
+        let mut tombstones = Vec::new();
+        for _ in 0..cursor.read_len()? {
+            tombstones.push(cursor.read_u64()?);
+        }
+        set.apply_remove(tombstones);
+        Ok(set)
+    }
+}
+
+impl WireEncode for RgaDelta<u64, u64> {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        match self {
+            RgaDelta::Insert { position, value } => {
+                write_u8(out, TAG_RGA_INSERT_U64);
+                write_u64(out, *position);
+                write_u64(out, *value);
+            }
+            RgaDelta::Delete { position } => {
+                write_u8(out, TAG_RGA_DELETE_U64);
+                write_u64(out, *position);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl WireDecode for RgaDelta<u64, u64> {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        match cursor.read_u8()? {
+            TAG_RGA_INSERT_U64 => Ok(RgaDelta::Insert {
+                position: cursor.read_u64()?,
+                value: cursor.read_u64()?,
+            }),
+            TAG_RGA_DELETE_U64 => Ok(RgaDelta::Delete {
+                position: cursor.read_u64()?,
+            }),
+            _ => Err(WireError::InvalidTag),
+        }
     }
 }
 
