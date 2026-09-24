@@ -109,7 +109,8 @@ fn event_log_roundtrips_and_preserves_deduped_records() {
             replica: 1,
             tally: 5,
         },
-    );
+    )
+    .unwrap();
     log.append(
         &mut safemesh_crdt::PnCounter::new(2),
         1,
@@ -117,7 +118,8 @@ fn event_log_roundtrips_and_preserves_deduped_records() {
             replica: 1,
             tally: 2,
         },
-    );
+    )
+    .unwrap();
 
     let bytes = log.to_wire_bytes().unwrap();
     let decoded = EventLog::<PnCounterDelta>::from_wire_bytes(&bytes).unwrap();
@@ -413,7 +415,9 @@ fn orset_delta_rejects_trailing_bytes_and_oversized_counts() {
 fn orset_delta_roundtrips_in_record_and_event_log() {
     let mut log = EventLog::new();
     for delta in orset_delta_cases() {
-        let id = log.append(&mut safemesh_crdt::OrSet::new(), 1, delta.clone());
+        let id = log
+            .append(&mut safemesh_crdt::OrSet::new(), 1, delta.clone())
+            .unwrap();
         roundtrip(Record { id, delta });
     }
     let bytes = log.to_wire_bytes().unwrap();
@@ -561,7 +565,9 @@ fn orset_utf8_wire_shape_and_record_roundtrips() {
     );
     let mut log = EventLog::new();
     for delta in orset_utf8_cases() {
-        let id = log.append(&mut safemesh_crdt::OrSet::new(), 1, delta.clone());
+        let id = log
+            .append(&mut safemesh_crdt::OrSet::new(), 1, delta.clone())
+            .unwrap();
         roundtrip(Record { id, delta });
     }
     let bytes = log.to_wire_bytes().unwrap();
@@ -581,7 +587,8 @@ fn event_log_refuses_every_single_byte_change() {
             element: "café☕".to_owned(),
             token: 42u64,
         },
-    );
+    )
+    .unwrap();
     let bytes = log.to_wire_bytes().unwrap();
     roundtrip(log.clone());
     let mut refused = 0;
@@ -633,7 +640,8 @@ fn event_log_empty_and_embedded_frames_roundtrip_and_reject_truncation() {
             replica: 1,
             tally: 7,
         },
-    );
+    )
+    .unwrap();
     let mut records = log.records().to_vec();
     records.push(Record {
         id: safemesh_crdt::RecordId {
@@ -697,14 +705,16 @@ fn event_log_shape_rejects_wrong_type_even_when_empty_or_nested() {
     for populated in [false, true] {
         let mut source = EventLog::for_crdt(&GCounter::new(2));
         if populated {
-            source.append(
-                &mut GCounter::new(2),
-                0,
-                GCounterDelta {
-                    replica: 0,
-                    tally: 7,
-                },
-            );
+            source
+                .append(
+                    &mut GCounter::new(2),
+                    0,
+                    GCounterDelta {
+                        replica: 0,
+                        tally: 7,
+                    },
+                )
+                .unwrap();
         }
         let bytes = source.to_wire_bytes().unwrap();
         assert_eq!(
@@ -731,11 +741,13 @@ fn event_log_shape_rejects_wrong_type_even_when_empty_or_nested() {
     }
     // Remove payloads have identical fields, but distinct element schemas.
     let mut source = EventLog::new();
-    source.append(
-        &mut safemesh_crdt::OrSet::new(),
-        0,
-        OrSetDelta::<u64, u64>::Remove { tokens: vec![7] },
-    );
+    source
+        .append(
+            &mut safemesh_crdt::OrSet::new(),
+            0,
+            OrSetDelta::<u64, u64>::Remove { tokens: vec![7] },
+        )
+        .unwrap();
     assert_eq!(
         EventLog::<OrSetDelta<String, u64>>::from_wire_bytes(&source.to_wire_bytes().unwrap()),
         Err(WireError::DeltaTypeMismatch)
@@ -831,8 +843,8 @@ std::thread_local! {
 struct BudgetPayload(u64);
 
 impl safemesh_crdt::WireSchema for BudgetPayload {
-    fn wire_schema() -> Vec<u8> {
-        b"test/decode-budget/v1".to_vec()
+    fn wire_schema() -> std::borrow::Cow<'static, [u8]> {
+        std::borrow::Cow::Borrowed(b"test/decode-budget/v1")
     }
 }
 

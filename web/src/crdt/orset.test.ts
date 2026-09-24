@@ -1,26 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { addDelta, applyORSetDelta, bottomORSet, mergeORSet, observedTokens, readORSet, removeDelta } from './orset'
+import { addDelta, applyORSetDelta, bottomORSet, mergeORSet, observedTokens, readORSet, removeDelta, sameORSet } from './orset'
 
 describe('OR-Set mirror', () => {
-  it.each(['de', 'sv'])('reads visible elements in ordinal order under %s collation', (locale) => {
-    const state = [addDelta('ä', 'p0-1'), addDelta('z', 'p0-2')].reduce(
-      applyORSetDelta,
-      bottomORSet(),
-    )
-    const collator = new Intl.Collator(locale)
-    expect(collator.resolvedOptions().locale).toBe(locale)
-    // German puts ä before z; Swedish puts it after z. Emulate each default locale.
-    expect(Math.sign(collator.compare('ä', 'z'))).toBe(locale === 'de' ? -1 : 1)
-    const comparison = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(function (this: string, other) {
-      return collator.compare(String(this), other)
-    })
-    try {
-      expect(readORSet(state)).toEqual(['z', 'ä'])
-    } finally {
-      comparison.mockRestore()
-    }
-  })
-
   it('keeps a concurrent fresh add visible after an observed-token remove', () => {
     const first = addDelta('radio', 'p0-1')
     const concurrent = addDelta('radio', 'p1-2')
@@ -73,4 +54,47 @@ it.each(['token', '__proto__'])('refuses conflicting values for token %s in eith
   expect(mergeORSet(fresh, radio)).toEqual(merged)
   expect(mergeORSet(merged, fresh)).toEqual(merged)
   expect(readORSet(merged)).toEqual(['radio', 'water'])
+})
+
+// Explicit collators reproduce different runtime locales without depending on host ICU defaults.
+it.each(['en', 'sv'])('uses Rust string ordering under %s collation', (locale) => {
+  const collator = new Intl.Collator(locale)
+  const localeCompare = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(function (this: string, other) {
+    return collator.compare(String(this), other)
+  })
+  try {
+    const elements = ['z', 'ä', 'A', 'a', '\u{10000}', '\uE000', '', 'aa', 'é', 'e\u0301']
+    const state = elements.reduce((state, element) => applyORSetDelta(state, addDelta(element, element)), bottomORSet())
+    expect(readORSet(state)).toEqual(['', 'A', 'a', 'aa', 'e\u0301', 'z', 'ä', 'é', '\uE000', '\u{10000}'])
+    const reversed = {
+      adds: Object.fromEntries(Object.entries(state.adds).reverse()),
+      tombstones: Object.fromEntries(['é', 'e\u0301'].map(token => [token, true as const])),
+    }
+    expect(sameORSet(state, { ...reversed, tombstones: {} })).toBe(true)
+    expect(sameORSet({ ...state, tombstones: { 'e\u0301': true, 'é': true } }, reversed)).toBe(true)
+    expect(localeCompare).not.toHaveBeenCalled()
+  } finally {
+    localeCompare.mockRestore()
+  }
+})
+
+const fullwidthTildeGrinningFaceTokens = {
+  input: ['peer-\u{1F600}-1', 'peer-\uFF5E-1'],
+  expected: ['peer-\uFF5E-1', 'peer-\u{1F600}-1'],
+}
+
+it('removeDelta orders U+FF5E FULLWIDTH TILDE before U+1F600 GRINNING FACE tokens', () => {
+  const { input, expected } = fullwidthTildeGrinningFaceTokens
+  expect(removeDelta([...input, input[0]])).toEqual({ kind: 'orset.remove', tokens: expected })
+})
+
+it('observedTokens orders U+FF5E FULLWIDTH TILDE before U+1F600 GRINNING FACE tokens', () => {
+  const { input, expected } = fullwidthTildeGrinningFaceTokens
+  const state = [
+    ...input.map(token => addDelta('radio', token)),
+    addDelta('radio', 'removed'),
+    addDelta('water', 'other-element'),
+    removeDelta(['removed']),
+  ].reduce(applyORSetDelta, bottomORSet())
+  expect(observedTokens(state, 'radio')).toEqual(expected)
 })
