@@ -5,7 +5,7 @@
 use crate::{
     Admission, Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounterDelta, GSet, LwwMap,
     LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta, PnCounterDelta, Record, Rga,
-    VersionVector,
+    RgaDelta, VersionVector,
 };
 use alloc::{borrow::Cow, string::String, vec::Vec};
 
@@ -22,6 +22,8 @@ pub(super) const TAG_ORSET_REMOVE_U64: u8 = 0x32;
 pub(super) const TAG_ORSET_ADD_STRING: u8 = 0x33;
 pub(super) const TAG_ORSET_REMOVE_STRING: u8 = 0x34;
 pub(super) const TAG_RGA_U64: u8 = 0x40;
+pub(super) const TAG_RGA_INSERT_U64: u8 = 0x41;
+pub(super) const TAG_RGA_DELETE_U64: u8 = 0x42;
 pub(super) const TAG_LWW_REGISTER_DELTA_U64: u8 = 0x50;
 pub(super) const TAG_LWW_REGISTER_U64: u8 = 0x51;
 pub(super) const TAG_ENABLE_WINS_FLAG_ENABLE_U64: u8 = 0x60;
@@ -152,6 +154,7 @@ wire_schema!(OrSetDelta<u64, u64>, "safemesh/orset-delta-u64-u64/v1", false);
 wire_schema!(OrSetDelta<String, u64>, "safemesh/orset-delta-utf8-u64/v1", false);
 wire_schema!(OrSet<u64, u64>, "safemesh/orset-u64-u64/v1", false);
 wire_schema!(Rga<u64, u64>, "safemesh/rga-u64-u64/v1", false);
+wire_schema!(RgaDelta<u64, u64>, "safemesh/rga-delta-u64-u64/v1", false);
 wire_schema!(VersionVector, "safemesh/version-vector/v1", false);
 wire_schema!(
     LwwRegisterDelta<u64>,
