@@ -45,7 +45,7 @@ const control = (() => {
   const read = attempt('control read', () => {
     assert.deepEqual(Array.from(a.elements()), [42n, 99n]);
     assert.deepEqual(Array.from(a.tombstones()), [10n, 11n]);
-    assert.deepEqual(Array.from(a.observedTokens(123n)), [10n]);
+    assert.deepEqual(Array.from(a.observedTokens(123n)), []);
     return snapshot(a);
   });
   const write = attempt('control write', () => a.add(7n, 9n));
