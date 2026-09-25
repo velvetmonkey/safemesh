@@ -87,7 +87,14 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       // Only installation may populate the offline shell. Even BASE can now be a
       // different deployment, a redirect or a soft 404; navigation never writes it.
-      fetch(request).catch(() => caches.match(BASE, { cacheName: CACHE_NAME })),
+      fetch(request).catch(async () => {
+        if (url.origin === self.location.origin && !url.search && APP_SHELL.includes(url.pathname)) {
+          const cached = await caches.match(url.pathname, { cacheName: CACHE_NAME })
+          const contentType = cached?.headers.get('content-type')
+          if (contentType && !contentType.toLowerCase().includes('text/html')) return cached
+        }
+        return caches.match(BASE, { cacheName: CACHE_NAME })
+      }),
     )
     return
   }
