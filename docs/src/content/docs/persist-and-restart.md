@@ -95,7 +95,10 @@ cleaned exercise stores
 
 `DurableReplica::counter` / `utf8_set` create the stores. Each successful edit
 commits its own transaction; `restart_counter` / `restart_utf8_set` validate and
-replay the existing store while reacquiring the writer. Their collection budget
+replay the existing store while reacquiring the writer. For an existing counter,
+`restart_counter_from_store(root, writer)` reads the committed count under that
+writer's lock and runs the same checked replay, while explicit `restart_counter`
+still rejects a mismatched count. Their collection budget
 comes from the locally stored transaction length, so an existing OR-Set store
 with a Remove of more than 4,096 tokens still uses ordinary `restart_utf8_set`.
 Peer wire decoding keeps the 4,096-element default. A copied store file has no
