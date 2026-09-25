@@ -17,6 +17,13 @@ def say(text):
     print(text, flush=True)
 
 
+def say_review_status(value):
+    for item in value["needs_review"]:
+        say(f"Needs review: {item}")
+    for item in value["resolved"]:
+        say(f"Resolved: {item}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("store", type=Path)
@@ -88,6 +95,7 @@ def main():
                     say(f'Local service PID {value["pid"]}')
                     for record in records:
                         say(json.dumps(record, ensure_ascii=False))
+                    say_review_status(value)
                     if draft:
                         match = next((r for r in records if json.loads(r["record"])["event_id"] == draft["event_id"]), None)
                         if match:
@@ -104,6 +112,7 @@ def main():
                     say(value["delivery"])
                     say(json.dumps({"records": records, "draft": draft,
                                     "peer_confirmed": value["peer_confirmed"]}, ensure_ascii=False))
+                    say_review_status(value)
                 elif "saved" in value:
                     saving = False
                     saved = value["saved"]
