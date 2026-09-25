@@ -1,7 +1,8 @@
 // Real Astro regressions, adapted from the supplied tooling review probes.
 // All source mutations and builds happen in a disposable clone.
 import fs from 'node:fs';
-import { resolve, join, dirname } from 'node:path';
+import { resolve, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
@@ -9,16 +10,50 @@ import { test, after } from 'node:test';
 import { parse, serialize } from 'parse5';
 const live = fileURLToPath(new URL('../', import.meta.url));
 // Astro resolves symlinked dependencies against the fixture root during builds.
-const scratch = fs.mkdtempSync(join(dirname(live), 'assurance-'));
-const cleanup = () => fs.rmSync(scratch, { recursive: true, force: true });
+const runs = join(live, '.assurance-runs');
+fs.mkdirSync(runs, { recursive: true });
+// Write ownership before creating the clone. A later invocation can recover a
+// run even if both this worker and its detached watcher are killed.
+function processStart(pid) {
+  if (process.platform !== 'linux') return null;
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+  } catch { return null; }
+}
+function sweep() {
+  for (const entry of fs.readdirSync(runs)) {
+    if (!/^[0-9a-f-]{36}\.owner$/.test(entry)) continue;
+    const ownerFile = join(runs, entry);
+    let owner;
+    try { owner = JSON.parse(fs.readFileSync(ownerFile, 'utf8')); } catch { continue; }
+    if (owner?.kind !== 'safemesh-docs-assurance' || owner.id + '.owner' !== entry) continue;
+    try {
+      process.kill(owner.pid, 0);
+      if (owner.start === processStart(owner.pid)) continue;
+    } catch (error) { if (error.code !== 'ESRCH') continue; }
+    fs.rmSync(join(runs, owner.id), { recursive: true, force: true });
+    fs.rmSync(ownerFile, { force: true });
+  }
+}
+sweep();
+const id = randomUUID();
+const scratch = join(runs, id);
+const ownerFile = join(runs, `${id}.owner`);
+fs.writeFileSync(ownerFile, JSON.stringify({ kind: 'safemesh-docs-assurance', id, pid: process.pid, start: processStart(process.pid) }), { flag: 'wx' });
+fs.mkdirSync(scratch);
+const cleanup = () => {
+  fs.rmSync(scratch, { recursive: true, force: true });
+  fs.rmSync(ownerFile, { force: true });
+};
 // node --test can outlive npm on SIGINT, leaving its worker in a separate
 // process group. Watch the runner as well as the worker's pipe.
 const watcherScript = `
 const fs = require('node:fs');
-const [scratch, done, runnerPid, workerPid] = process.argv.slice(1);
+const [scratch, ownerFile, runnerPid, workerPid] = process.argv.slice(1);
 function finish() {
-  if (fs.existsSync(done)) fs.rmSync(done);
-  else fs.rmSync(scratch, { recursive: true, force: true });
+  fs.rmSync(scratch, { recursive: true, force: true });
+  fs.rmSync(ownerFile, { force: true });
   process.exit();
 }
 process.stdin.resume();
@@ -33,7 +68,7 @@ setInterval(() => {
 }, 10);
 `;
 const watcher = spawn(process.execPath, ['-e', watcherScript,
-  scratch, `${scratch}.cleaned`, String(process.ppid), String(process.pid)],
+  scratch, ownerFile, String(process.ppid), String(process.pid)],
   { detached: true, stdio: ['pipe', 'ignore', 'ignore'] });
 watcher.stdin.unref();
 watcher.unref();
@@ -70,8 +105,6 @@ after(() => {
     console.log(`Assurance matrix complete: ${started}/${expectedCases}`);
   } finally {
     cleanup();
-    // Tell the watcher the after hook handled normal completion.
-    fs.writeFileSync(`${scratch}.cleaned`, '');
   }
 });
 for (const [route, source] of Object.entries(pages)) {

@@ -75,7 +75,14 @@ jobs:
             printf '%s\n' "$output"
             exit 1
           fi
-          [[ "$output" == *"Assurance matrix complete:"* ]]
+          # Node's TAP reporter emits these structural lines. Test-file output is
+          # escaped as comments, so printing the marker cannot forge 18 cases.
+          [[ "$output" == *"Assurance matrix complete: 18/18"* ]]
+          [[ $(grep -Ec '^ok [0-9]+ - ' <<< "$output") -eq 18 ]]
+          grep -qx '1..18' <<< "$output"
+          grep -qx '# tests 18' <<< "$output"
+          grep -qx '# pass 18' <<< "$output"
+          grep -qx '# fail 0' <<< "$output"
       - name: Run Rust and compiled TypeScript first-use fixtures and check documentation drift
         run: python3 scripts/check-gold-paths.py
       - name: Build documentation, search and the Lab at the deployment address
