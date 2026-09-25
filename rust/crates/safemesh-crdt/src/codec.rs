@@ -135,8 +135,8 @@ impl CollectionLimits {
 /// Optional limits for [`EventLog::from_wire_bytes_with_limits`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DecodeLimits {
-    /// Maximum top-level record occurrences decoded, including duplicates.
-    /// `None` is unbounded; `Some(0)` admits only empty logs.
+    /// Maximum record occurrences in each EventLog frame, including nested
+    /// frames and duplicates. `None` is unbounded; `Some(0)` admits only empty logs.
     /// This does not bound bytes or collection entries in a payload.
     pub max_records: Option<usize>,
     /// Maximum elements in each nested built-in collection. `None` uses
