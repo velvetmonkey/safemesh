@@ -571,11 +571,16 @@ where
     ) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
         let root = root.canonicalize()?;
+        let fence = Self::lock_restart_fence(&root, config.writer)?;
+        Self::restart_locked(&root, fence, config, state, limits)
+    }
+
+    fn lock_restart_fence(root: &Path, writer: u64) -> Result<RestartFence, LocalError> {
         // Opening without create is deliberate: missing ownership is not a new store.
         let fence = OpenOptions::new()
             .read(true)
             .write(true)
-            .open(root.join(format!("writer-{}.fence", config.writer)))?;
+            .open(root.join(format!("writer-{writer}.fence")))?;
         match fence.try_lock() {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => return Err(LocalError::Refused),
@@ -588,7 +593,16 @@ where
             }
             Ok::<(), io::Error>(())
         })?;
-        let mut fence = RestartFence(Some(fence));
+        Ok(RestartFence(Some(fence)))
+    }
+
+    fn restart_locked(
+        root: &Path,
+        mut fence: RestartFence,
+        config: WriterConfig,
+        state: C,
+        limits: crate::CollectionLimits,
+    ) -> Result<Self, LocalError> {
         let mut bytes = Vec::new();
         fence.file().read_to_end(&mut bytes)?;
         if bytes.len() != 24 {
@@ -660,6 +674,38 @@ impl DurableReplica<GCounter> {
         config.validate().map_err(|_| LocalError::Configuration)?;
         let n = usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?;
         Self::restart(root, config, GCounter::new(n))
+    }
+    /// Reacquire the writer, read its committed writer count, then run checked replay.
+    /// The root must already contain a durable counter store for this writer.
+    pub fn restart_counter_from_store(root: &Path, writer: u64) -> Result<Self, LocalError> {
+        let root = root.canonicalize()?;
+        let fence = Self::lock_restart_fence(&root, writer)?;
+        // The writer lock covers the metadata read and the same checked replay
+        // used by restart_counter. A missing or truncated transaction is not fresh.
+        let bytes = fs::read(root.join(format!("writer-{writer}.transaction")))?;
+        if bytes.len() < 24 {
+            return Err(LocalError::RecoveryRequired);
+        }
+        let writers = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+        let stored_writer = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+        WriterConfig {
+            writers,
+            writer: stored_writer,
+        }
+        .validate()
+        .map_err(|_| LocalError::Configuration)?;
+        let config = WriterConfig { writers, writer };
+        if stored_writer != writer {
+            return Err(LocalError::Configuration);
+        }
+        let n = usize::try_from(writers).map_err(|_| LocalError::Configuration)?;
+        Self::restart_locked(
+            &root,
+            fence,
+            config,
+            GCounter::new(n),
+            crate::CollectionLimits { max_elements: None },
+        )
     }
     pub fn counter(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
@@ -974,6 +1020,90 @@ mod durable_tests {
             writers: 2,
             writer: 0,
         }
+    }
+    #[test]
+    fn restart_counter_from_store_replays_without_writer_count() {
+        let root = root();
+        let mut replica = DurableReplica::counter(&root, config()).unwrap();
+        replica.bump(replica.ticket(), 5).unwrap();
+        drop(replica);
+
+        let replica = DurableReplica::restart_counter_from_store(&root, 0).unwrap();
+        assert_eq!(replica.state().value(), 5);
+        assert_eq!(replica.allocation_bytes()[..8], 2u64.to_le_bytes());
+    }
+    #[test]
+    fn restart_counter_from_store_rejects_missing_and_invalid_metadata() {
+        let root = root();
+        assert!(matches!(
+            DurableReplica::restart_counter_from_store(&root, 0),
+            Err(LocalError::Io(_))
+        ));
+        let replica = DurableReplica::counter(&root, config()).unwrap();
+        drop(replica);
+        let path = transaction_path(&root, config());
+        let original = fs::read(&path).unwrap();
+
+        fs::remove_file(&path).unwrap();
+        assert!(matches!(
+            DurableReplica::restart_counter_from_store(&root, 0),
+            Err(LocalError::Io(_))
+        ));
+        fs::write(&path, &original[..8]).unwrap();
+        assert!(matches!(
+            DurableReplica::restart_counter_from_store(&root, 0),
+            Err(LocalError::RecoveryRequired)
+        ));
+
+        let mut invalid = original.clone();
+        invalid[..8].copy_from_slice(&1u64.to_le_bytes());
+        invalid[8..16].copy_from_slice(&1u64.to_le_bytes());
+        fs::write(&path, invalid).unwrap();
+        assert!(matches!(
+            DurableReplica::restart_counter_from_store(&root, 0),
+            Err(LocalError::Configuration)
+        ));
+        fs::write(&path, original).unwrap();
+        assert!(DurableReplica::restart_counter_from_store(&root, 0).is_ok());
+    }
+    #[test]
+    fn restart_counter_from_store_checks_writer_and_live_lease() {
+        let root = root();
+        let replica = DurableReplica::counter(&root, config()).unwrap();
+        assert!(matches!(
+            DurableReplica::restart_counter_from_store(&root, 0),
+            Err(LocalError::Refused)
+        ));
+        drop(replica);
+
+        fs::copy(root.join("writer-0.fence"), root.join("writer-1.fence")).unwrap();
+        fs::copy(
+            root.join("writer-0.transaction"),
+            root.join("writer-1.transaction"),
+        )
+        .unwrap();
+        assert!(matches!(
+            DurableReplica::restart_counter_from_store(&root, 1),
+            Err(LocalError::Configuration)
+        ));
+        assert!(DurableReplica::restart_counter_from_store(&root, 0).is_ok());
+    }
+    #[test]
+    fn restart_counter_from_archived_store() {
+        // These committed files were generated by the archived 3a9179b library.
+        let root = root();
+        fs::write(
+            root.join("writer-0.fence"),
+            include_bytes!("../tests/fixtures/bootstrap/counter.fence"),
+        )
+        .unwrap();
+        fs::write(
+            root.join("writer-0.transaction"),
+            include_bytes!("../tests/fixtures/bootstrap/counter.transaction"),
+        )
+        .unwrap();
+        let replica = DurableReplica::restart_counter_from_store(&root, 0).unwrap();
+        assert_eq!(replica.state().state(), &[5, 7]);
     }
     #[test]
     fn fresh_durable_counter_creates_missing_root() {
