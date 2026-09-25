@@ -259,6 +259,27 @@ jobs:
           python rust/crates/safemesh-python/examples/data_mule_demo.py
           python demos/two-app-inventory/test_sync.py
 
+      - name: Accept two-app installed-wheel journey
+        run: |
+          python demos/two-app-inventory/journey.py \
+            --wheels "$RUNNER_TEMP/wheels" \
+            --run-dir "$RUNNER_TEMP/inventory-journey-positive" \
+            --rounds 3 --interval 0
+
+      - name: Reject planted dropped delivery
+        run: |
+          set +e
+          python demos/two-app-inventory/journey.py \
+            --wheels "$RUNNER_TEMP/wheels" \
+            --run-dir "$RUNNER_TEMP/inventory-journey-negative" \
+            --rounds 3 --interval 0 --leave-divergent \
+            > "$RUNNER_TEMP/inventory-journey-negative.log" 2>&1
+          printf '%s\n' "$?" > "$RUNNER_TEMP/inventory-journey-negative.exit"
+          set -e
+          cat "$RUNNER_TEMP/inventory-journey-negative.log"
+          test "$(cat "$RUNNER_TEMP/inventory-journey-negative.exit")" -ne 0
+          grep -q 'AssertionError: divergent state:' "$RUNNER_TEMP/inventory-journey-negative.log"
+
   msrv:
     runs-on: ubuntu-latest
     steps:
