@@ -1537,7 +1537,7 @@ impl SafeMeshStringOrSetReplica {
         self.state.elements().into_iter().collect()
     }
 
-    /// Every token ever added for `element`, including tombstoned ones.
+    /// Live add tokens for `element`, excluding tombstoned tokens.
     #[wasm_bindgen(js_name = observedTokens)]
     pub fn observed_tokens(&self, element: String) -> Vec<u64> {
         self.state.observed_tokens(&element).into_iter().collect()
@@ -2760,7 +2760,7 @@ mod tests {
         assert!(replica.elements().is_empty());
         assert!(core.elements().is_empty());
 
-        // (b) Observed tokens survive removal; the mirror returned [].
+        // (b) Observed tokens exclude removals, while tombstones retain history.
         let mut replica = SafeMeshStringOrSetReplica::new(1);
         replica.append_add("a".to_string(), 7).unwrap();
         let remove = replica.append_remove_observed("a".to_string()).unwrap();
@@ -2774,7 +2774,7 @@ mod tests {
             replica.elements(),
             replica.tombstones()
         );
-        assert_eq!(replica.observed_tokens("a".to_string()), vec![7]);
+        assert_eq!(replica.observed_tokens("a".to_string()), Vec::<u64>::new());
         assert_eq!(
             replica.observed_tokens("a".to_string()),
             core.observed_tokens(&"a".to_string())
