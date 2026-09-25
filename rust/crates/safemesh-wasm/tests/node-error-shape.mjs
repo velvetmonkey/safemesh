@@ -35,7 +35,7 @@ assertSafeMeshError(
 assertSafeMeshError(
   () => replica.mergeRecordBytes(new Uint8Array([0])),
   1,
-  "failed to decode record",
+  "failed to decode record: unexpected wire tag",
 );
 
 function replaceRecordInLog(log, original, replacement) {

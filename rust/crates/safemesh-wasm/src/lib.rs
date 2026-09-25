@@ -118,6 +118,17 @@ fn wire_decode_error(error: WireError, context: &str) -> JsValue {
     }
 }
 
+// Each decode path keeps one stable prefix and names the core `WireError` as
+// its cause, so the same malformed bytes read the same on either path.
+fn record_decode_js_error(error: WireError) -> JsValue {
+    match error {
+        WireError::CollectionElementLimitExceeded { .. } => {
+            wire_decode_error(error, "failed to decode record")
+        }
+        cause => safe_mesh_error(1, &format!("failed to decode record: {cause}")),
+    }
+}
+
 fn decode_limits(value: Option<u32>) -> DecodeLimits {
     DecodeLimits {
         max_collection_elements: value.map(|value| value as usize),
@@ -145,7 +156,10 @@ fn event_log_decode_js_error(error: DecodeError) -> JsValue {
             safe_mesh_error(1, "delta type mismatch")
         }
         DecodeError::Wire(WireError::MissingShape) => safe_mesh_error(1, "event log missing shape"),
-        _ => safe_mesh_error(1, "failed to decode event log"),
+        DecodeError::RecordLimitExceeded { .. } => safe_mesh_error(1, "failed to decode event log"),
+        DecodeError::Wire(cause) => {
+            safe_mesh_error(1, &format!("failed to decode event log: {cause}"))
+        }
     }
 }
 
@@ -561,7 +575,7 @@ impl SafeMeshGCounterReplica {
             bytes,
             collection_limits(max_collection_elements),
         )
-        .map_err(|error| wire_decode_error(error, "failed to decode record"))?;
+        .map_err(record_decode_js_error)?;
         if safemesh_crdt::ownership::check_counter_record(
             self.state.len(),
             record.id,
@@ -721,7 +735,7 @@ impl SafeMeshEnableWinsFlagReplica {
             bytes,
             collection_limits(max_collection_elements),
         )
-        .map_err(|error| wire_decode_error(error, "failed to decode record"))?;
+        .map_err(record_decode_js_error)?;
         if self
             .log
             .admit_with(&mut self.state, record, |state, delta| {
@@ -857,7 +871,7 @@ impl SafeMeshLwwMapReplica {
             bytes,
             collection_limits(max_collection_elements),
         )
-        .map_err(|error| wire_decode_error(error, "failed to decode record"))?;
+        .map_err(record_decode_js_error)?;
         if self
             .log
             .admit_with(&mut self.state, record, |state, delta| {
@@ -991,7 +1005,7 @@ impl SafeMeshLwwRegisterReplica {
             bytes,
             collection_limits(max_collection_elements),
         )
-        .map_err(|error| wire_decode_error(error, "failed to decode record"))?;
+        .map_err(record_decode_js_error)?;
         if self
             .log
             .admit_with(&mut self.state, record, |state, delta| {
@@ -1186,7 +1200,7 @@ fn event_log_decode_error(error: safemesh_crdt::WireError) -> BindingError {
             }
             safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch".to_string(),
             safemesh_crdt::WireError::MissingShape => "event log missing shape".to_string(),
-            other => format!("failed to decode event log: {other:?}"),
+            other => format!("failed to decode event log: {other}"),
         },
     )
 }
@@ -1505,7 +1519,7 @@ impl SafeMeshStringOrSetReplica {
                 3,
                 format!("maxCollectionElements limit exceeded: {max_elements}"),
             ),
-            other => binding_error(1, format!("failed to decode record: {other:?}")),
+            other => binding_error(1, format!("failed to decode record: {other}")),
         })
     }
 
@@ -2828,7 +2842,10 @@ mod tests {
         let mut reader = SafeMeshStringOrSetReplica::new(2);
         let error = reader.try_merge_record_bytes(&planted).unwrap_err();
         println!("C3 planted bad byte 0 (record tag): {}", error.message);
-        assert_eq!(error.message, "failed to decode record: InvalidTag");
+        assert_eq!(
+            error.message,
+            "failed to decode record: unexpected wire tag"
+        );
         assert!(reader.elements().is_empty());
         assert_eq!(reader.log.records().len(), 0);
 
@@ -3028,7 +3045,7 @@ mod tests {
             SafeMeshStringOrSetReplica::try_inspect_record_bytes(&bad)
                 .unwrap_err()
                 .message,
-            "failed to decode record: InvalidTag"
+            "failed to decode record: unexpected wire tag"
         );
     }
 }
@@ -3084,7 +3101,7 @@ impl SafeMeshPnCounterReplica {
             bytes,
             collection_limits(max_collection_elements),
         )
-        .map_err(|error| wire_decode_error(error, "failed to decode record"))?;
+        .map_err(record_decode_js_error)?;
         if safemesh_crdt::ownership::check_counter_record(
             self.state.p_state().len(),
             record.id,

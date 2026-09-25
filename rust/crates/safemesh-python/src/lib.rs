@@ -59,6 +59,27 @@ fn encode_bytes<'py>(
         .map_err(|_| pyo3::exceptions::PyValueError::new_err(message))
 }
 
+// Each decode path keeps one stable prefix and names the core `WireError` as
+// its cause, so the same malformed bytes read the same on either path.
+fn record_decode_error(error: safemesh_crdt::WireError) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(format!("failed to decode record: {error}"))
+}
+
+fn event_log_decode_error(error: safemesh_crdt::WireError) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(match error {
+        safemesh_crdt::WireError::RecordCollision => "record ID collision".to_owned(),
+        safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
+            "replica count mismatch".to_owned()
+        }
+        safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch".to_owned(),
+        safemesh_crdt::WireError::MissingShape => "event log missing shape".to_owned(),
+        safemesh_crdt::WireError::OwnershipViolation => {
+            "counter coordinate out of range or not owned by record author".to_owned()
+        }
+        cause => format!("failed to decode event log: {cause}"),
+    })
+}
+
 fn admission_name(admission: safemesh_crdt::Admission) -> String {
     match admission {
         safemesh_crdt::Admission::Accepted => "accepted",
@@ -481,8 +502,8 @@ mod py_g_counter_replica_python {
         }
 
         pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
-            let record = Record::<GCounterDelta>::from_wire_bytes(bytes)
-                .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode record"))?;
+            let record =
+                Record::<GCounterDelta>::from_wire_bytes(bytes).map_err(record_decode_error)?;
             if safemesh_crdt::ownership::check_counter_record(
                 self.state.len(),
                 record.id,
@@ -511,20 +532,7 @@ mod py_g_counter_replica_python {
         /// Return one core admission verdict for every decoded input record.
         pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
             let log = EventLog::<GCounterDelta>::records_from_wire_bytes_for(bytes, &self.state)
-                .map_err(|error| {
-                    pyo3::exceptions::PyValueError::new_err(match error {
-                        safemesh_crdt::WireError::OwnershipViolation => {
-                            "counter coordinate out of range or not owned by record author"
-                        }
-                        safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                        safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
-                            "replica count mismatch"
-                        }
-                        safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
-                        safemesh_crdt::WireError::MissingShape => "event log missing shape",
-                        _ => "failed to decode event log",
-                    })
-                })?;
+                .map_err(event_log_decode_error)?;
             if log.iter().any(|r| {
                 safemesh_crdt::ownership::check_counter_record(self.state.len(), r.id, &r.delta)
                     .is_err()
@@ -644,7 +652,7 @@ mod py_enable_wins_flag_replica_python {
 
         pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
             let record = Record::<EnableWinsFlagDelta<u64>>::from_wire_bytes(bytes)
-                .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode record"))?;
+                .map_err(record_decode_error)?;
             if self
                 .log
                 .admit_with(&mut self.state, record, |state, delta| {
@@ -665,17 +673,7 @@ mod py_enable_wins_flag_replica_python {
                 bytes,
                 &self.state,
             )
-            .map_err(|error| {
-                pyo3::exceptions::PyValueError::new_err(match error {
-                    safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                    safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
-                        "replica count mismatch"
-                    }
-                    safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
-                    safemesh_crdt::WireError::MissingShape => "event log missing shape",
-                    _ => "failed to decode event log",
-                })
-            })?;
+            .map_err(event_log_decode_error)?;
             Ok(log
                 .iter()
                 .cloned()
@@ -803,7 +801,7 @@ mod py_lww_map_replica_python {
 
         pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
             let record = Record::<LwwMapDelta<u64, u64>>::from_wire_bytes(bytes)
-                .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode record"))?;
+                .map_err(record_decode_error)?;
             if self
                 .log
                 .admit_with(&mut self.state, record, |state, delta| {
@@ -822,17 +820,7 @@ mod py_lww_map_replica_python {
         pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
             let log =
                 EventLog::<LwwMapDelta<u64, u64>>::records_from_wire_bytes_for(bytes, &self.state)
-                    .map_err(|error| {
-                        pyo3::exceptions::PyValueError::new_err(match error {
-                            safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                            safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
-                                "replica count mismatch"
-                            }
-                            safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
-                            safemesh_crdt::WireError::MissingShape => "event log missing shape",
-                            _ => "failed to decode event log",
-                        })
-                    })?;
+                    .map_err(event_log_decode_error)?;
             Ok(log
                 .iter()
                 .cloned()
@@ -938,7 +926,7 @@ mod py_lww_register_replica_python {
 
         pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
             let record = Record::<LwwRegisterDelta<u64>>::from_wire_bytes(bytes)
-                .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to decode record"))?;
+                .map_err(record_decode_error)?;
             if self
                 .log
                 .admit_with(&mut self.state, record, |state, delta| {
@@ -957,17 +945,7 @@ mod py_lww_register_replica_python {
         pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
             let log =
                 EventLog::<LwwRegisterDelta<u64>>::records_from_wire_bytes_for(bytes, &self.state)
-                    .map_err(|error| {
-                        pyo3::exceptions::PyValueError::new_err(match error {
-                            safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                            safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
-                                "replica count mismatch"
-                            }
-                            safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
-                            safemesh_crdt::WireError::MissingShape => "event log missing shape",
-                            _ => "failed to decode event log",
-                        })
-                    })?;
+                    .map_err(event_log_decode_error)?;
             Ok(log
                 .iter()
                 .cloned()
@@ -2030,7 +2008,7 @@ for make, append in [
 #[cfg(test)]
 mod admission_tests {
     use super::*;
-    use safemesh_crdt::RecordId;
+    use safemesh_crdt::{RecordId, WireError};
 
     #[test]
     fn all_replica_bindings_reject_conflicting_records_and_report_log_collisions() {
@@ -2136,6 +2114,114 @@ mod admission_tests {
                     replica: 1
                 },
                 "../tests/fixtures/map-collision.bin"
+            );
+        });
+    }
+
+    /// Both decode paths name the core `WireError` for the same malformed input.
+    /// Truncation and trailing bytes are applied to each path's own frame: a record
+    /// frame handed to the log decoder is only ever an unexpected tag.
+    #[test]
+    fn record_and_log_paths_name_the_same_core_wire_error() {
+        pyo3::prepare_freethreaded_python();
+
+        fn cause(message: &str, prefix: &str) -> Option<String> {
+            message
+                .strip_prefix("ValueError: ")?
+                .strip_prefix(prefix)?
+                .strip_prefix(": ")
+                .map(str::to_owned)
+        }
+
+        macro_rules! check {
+            ($name:literal, $replica:expr, $delta:expr) => {{
+                let replica = $replica;
+                let record = Record {
+                    id: RecordId {
+                        replica: 1,
+                        sequence: 1,
+                    },
+                    delta: $delta,
+                };
+                let record_bytes = record.to_wire_bytes().unwrap();
+                let mut log = EventLog::for_crdt(&replica.state);
+                assert_eq!(
+                    log.insert_record(&replica.state, record),
+                    safemesh_crdt::Admission::Accepted
+                );
+                let log_bytes = log.to_wire_bytes().unwrap();
+                let truncate = |bytes: &[u8]| bytes[..bytes.len() - 1].to_vec();
+                let trail = |bytes: &[u8]| [bytes, &[0][..]].concat();
+                let cases = [
+                    ("empty_bytes", vec![], vec![], WireError::UnexpectedEof),
+                    (
+                        "truncated_frame",
+                        truncate(&record_bytes),
+                        truncate(&log_bytes),
+                        WireError::UnexpectedEof,
+                    ),
+                    (
+                        "trailing_bytes",
+                        trail(&record_bytes),
+                        trail(&log_bytes),
+                        WireError::TrailingBytes,
+                    ),
+                    ("undecodable_bytes", vec![0], vec![0], WireError::InvalidTag),
+                ];
+                for (case, record_input, log_input, expected) in cases {
+                    let mut target = $replica;
+                    let single = target
+                        .merge_record_bytes(&record_input)
+                        .unwrap_err()
+                        .to_string();
+                    let batch = target.merge_log_bytes(&log_input).unwrap_err().to_string();
+                    println!("Python {} {case}: record={single:?} log={batch:?}", $name);
+                    let single = cause(&single, "failed to decode record");
+                    let batch = cause(&batch, "failed to decode event log");
+                    assert_eq!(single, batch, "{} {case}: causes differ by path", $name);
+                    assert_eq!(
+                        single,
+                        Some(expected.to_string()),
+                        "{} {case}: not the core error",
+                        $name
+                    );
+                    assert!(target.log.records().is_empty());
+                }
+            }};
+        }
+
+        Python::with_gil(|_| {
+            check!(
+                "GCounterReplica",
+                PyGCounterReplica::new(2, 2),
+                GCounterDelta {
+                    replica: 1,
+                    tally: 5
+                }
+            );
+            check!(
+                "EnableWinsFlagReplica",
+                PyEnableWinsFlagReplica::new(2),
+                EnableWinsFlagDelta::Enable { token: 5 }
+            );
+            check!(
+                "LwwRegisterReplica",
+                PyLwwRegisterReplica::new(2),
+                LwwRegisterDelta {
+                    timestamp: 1,
+                    replica: 1,
+                    value: 5
+                }
+            );
+            check!(
+                "LwwMapReplica",
+                PyLwwMapReplica::new(2),
+                LwwMapDelta::Set {
+                    key: 1,
+                    timestamp: 1,
+                    replica: 1,
+                    value: 5
+                }
             );
         });
     }

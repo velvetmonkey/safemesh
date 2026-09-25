@@ -335,7 +335,7 @@ Build tools print progress separately. The two `node` commands' stdout is exactl
 saved counter=3 members=[compass]
 restored counter=3 members=[compass]
 synced counter=6 members=[compass,map,rope] records=3+3
-malformed record: SafeMeshError: failed to decode record
+malformed record: SafeMeshError: failed to decode record: unexpected end of wire input
 saved latest identity members=[compass,map,rope] local-sequence=2
 cleaned exercise stores
 ```
@@ -368,9 +368,9 @@ also applies. The legacy caller-token API is an alternative for applications
 that intentionally own token allocation; it is not this recommended path.
 
 The fixture passes an empty `Uint8Array` to `mergeRecordBytes`, catches the real
-`SafeMeshError: failed to decode record`, and asserts no log mutation. Reject the
-malformed input and check your record framing. Every WASM handle is freed in
-`finally`. Read the [complete TypeScript source and project configuration](/safemesh/using-safemesh/#wasm--typescript).
+`SafeMeshError: failed to decode record: unexpected end of wire input`, and
+asserts no log mutation. Reject the malformed input and check your record
+framing. Every WASM handle is freed in `finally`. Read the [complete TypeScript source and project configuration](/safemesh/using-safemesh/#wasm--typescript).
 
 
 Continue to [Connect replicas](/safemesh/connect-replicas/), or review the
