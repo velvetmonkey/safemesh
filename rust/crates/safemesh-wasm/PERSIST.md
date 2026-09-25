@@ -426,7 +426,7 @@ restore: fresh process, replicas rebuilt from the stored files alone
 Stderr (`console.error`):
 
 ```text
-RESTORE FAILED file=logs/left-set.identity error=SafeMeshError: failed to decode event log: IntegrityMismatch
+RESTORE FAILED file=logs/left-set.identity error=SafeMeshError: failed to decode event log: wire frame integrity check failed
 ```
 
 The program exits 2. The identity import refuses the integrity-invalid file.
@@ -500,9 +500,9 @@ node errors.mjs ./pkg
 ```text
 SafeMeshGCounter(2).tryApplyBump(2, 1n): threw SafeMeshError code=2 message="replica out of range"
 SafeMeshGCounterReplica(1n, 3).appendBump(2, 1n): threw SafeMeshError code=2 message="counter coordinate out of range or not owned by record author"
-SafeMeshGCounterReplica.mergeRecordBytes(Uint8Array [0]): threw SafeMeshError code=1 message="failed to decode record"
-SafeMeshStringOrSetReplica.mergeRecordBytes(logBytes()): threw SafeMeshError code=1 message="failed to decode record: InvalidTag"
-SafeMeshStringOrSetReplica.mergeLogBytes(<record bytes>): threw SafeMeshError code=1 message="failed to decode event log: InvalidTag"
+SafeMeshGCounterReplica.mergeRecordBytes(Uint8Array [0]): threw SafeMeshError code=1 message="failed to decode record: unexpected wire tag"
+SafeMeshStringOrSetReplica.mergeRecordBytes(logBytes()): threw SafeMeshError code=1 message="failed to decode record: unexpected wire tag"
+SafeMeshStringOrSetReplica.mergeLogBytes(<record bytes>): threw SafeMeshError code=1 message="failed to decode event log: unexpected wire tag"
 first mergeRecordBytes of one record: returned "accepted"
 second mergeRecordBytes of the same record: returned "duplicate"
 width-2 replica .mergeLogBytes(logs/left-counter.log written at width 3): threw SafeMeshError code=1 message="replica count mismatch"
@@ -512,7 +512,8 @@ SafeMeshStringOrSetReplica.mergeLogBytes(logs/left-counter.log): threw SafeMeshE
 `mergeRecordBytes` takes one record, as returned by `appendBump`, `appendAdd` or
 `appendRemoveObserved`. `mergeLogBytes` takes a whole log, as returned by
 `logBytes`. Handing one to the other is the most likely way to see
-`failed to decode record: InvalidTag` or `failed to decode event log: InvalidTag`.
+`failed to decode record: unexpected wire tag` or
+`failed to decode event log: unexpected wire tag`.
 A G-Counter log only restores into a replica built with the same width; a
 different width throws `replica count mismatch`. A counter log will not restore
 into a set replica or the reverse; that throws `delta type mismatch`.

@@ -175,6 +175,8 @@ node "$repo_root/rust/crates/safemesh-wasm/examples/node-convergence.mjs" \
   "$tmp_dir/wasm-node-pkg"
 node "$repo_root/rust/crates/safemesh-wasm/tests/node-error-shape.mjs" \
   "$tmp_dir/wasm-node-pkg"
+node "$repo_root/rust/crates/safemesh-wasm/tests/node-decode-error-parity.mjs" \
+  "$tmp_dir/wasm-node-pkg"
 node "$repo_root/rust/crates/safemesh-wasm/tests/safemesh-wasm-boundary-repros.mjs" \
   "$tmp_dir/wasm-node-pkg"
 
