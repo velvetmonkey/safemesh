@@ -7,7 +7,9 @@
   },
   "scripts": {
     "dev": "astro dev --host localhost --port 4321",
-    "build": "npm run check:images && astro build && node check-assurance.mjs && python3 generate-reference.py && pagefind --site dist",
+    "build": "npm run build:docs && npm run index:search",
+    "build:docs": "npm run check:images && astro build && node check-assurance.mjs && python3 generate-reference.py",
+    "index:search": "pagefind --site dist",
     "preview": "astro preview --host localhost --port 4320",
     "build:site": "node build-site.mjs",
     "test": "node --test assurance.test.mjs",

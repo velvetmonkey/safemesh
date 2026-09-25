@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Build the complete published site at one address: documentation, search index, then the Lab.
+// Build the complete published site at one address: documentation, the Lab, then search index.
 //
 // SITE_URL (see site-url.mjs) is the only input. The Lab's public address and base path derive
 // from it, and that address is passed to the documentation build as LAB_URL, so the header's
@@ -20,7 +20,7 @@ const labDir = fileURLToPath(new URL(`./dist/${LAB_MOUNT}`, import.meta.url));
 const run = (args, options) => execFileSync('npm', args, { stdio: 'inherit', ...options });
 
 console.log(`Site ${site.href}\nLab  ${lab.href} (base path ${lab.pathname})`);
-// Search indexes the documentation before the Lab shell exists under dist/.
-run(['run', 'build'], { cwd: docs, env: { ...process.env, LAB_URL: lab.href } });
+run(['run', 'build:docs'], { cwd: docs, env: { ...process.env, LAB_URL: lab.href } });
 run(['run', 'build', '--', '--base', lab.pathname, '--outDir', labDir, '--emptyOutDir'], { cwd: web });
 console.log(`Lab built into ${labDir} for ${lab.href}`);
+run(['run', 'index:search'], { cwd: docs });
