@@ -123,6 +123,12 @@ On a second `persist`, an existing store returns `RecoveryRequired` (Display:
 run: if it did, keep that store and run `restart` with its original writer
 configuration, or use a fresh checkout for a separate exercise.
 
+`Refused` on `restart` (Display: `local writer operation refused by ownership or
+lease checks`) means another process still holds this writer's fence lock. Stop
+that owner and wait for it to release the lock, then retry `restart` with the
+same store and writer configuration. Keep the fence file in place; deleting it
+does not release the other owner's lock or restore ownership safely.
+
 A truncated writer fence on `restart` returns the same `RecoveryRequired` and
 `local store requires recovery`. If the store was already present and this was
 a `restart`, inspect its `writer-0.fence` files: each must be 24 bytes. Retain a
@@ -132,9 +138,11 @@ writer's fence/history.
 
 `Configuration` on `restart` (Display: `invalid or mismatched local writer
 configuration`) means the requested writer configuration disagrees with stored
-identity or allocation metadata. Check the writer flag and writer count used at
-restart against those used when the store was created, then retry with the
-original settings. If the stored fence or transaction metadata itself differs,
+identity or allocation metadata. In your own application, check the `writer` and
+`writers` fields of the `WriterConfig` passed to restart against the values used
+when the store was created, then retry with the original values. This gold-path
+example fixes them at `writer: 0` and `writers: 2`; its commands do not take a
+writer flag. If the stored fence or transaction metadata itself differs,
 retain the store for inspection and recover only from a known consistent copy
 with its original writer identity and allocation metadata. Do not initialize
 over the affected store.
