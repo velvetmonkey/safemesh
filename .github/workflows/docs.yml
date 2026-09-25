@@ -83,6 +83,8 @@ jobs:
           grep -qx '# tests 18' <<< "$output"
           grep -qx '# pass 18' <<< "$output"
           grep -qx '# fail 0' <<< "$output"
+          printf '%s\n' "$output" > "$RUNNER_TEMP/docs-assurance.tap"
+          node docs/check-assurance-tap.mjs "$RUNNER_TEMP/docs-assurance.tap"
       - name: Run Rust and compiled TypeScript first-use fixtures and check documentation drift
         run: python3 scripts/check-gold-paths.py
       - name: Build documentation, search and the Lab at the deployment address

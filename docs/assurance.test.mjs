@@ -8,6 +8,26 @@ import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { test, after } from 'node:test';
 import { parse, serialize } from 'parse5';
+import { pages as livePages } from './assurance.mjs';
+const matrix = {
+  platforms: ['POSIX', 'Windows'],
+  names: ['unchanged', 'references', 'image', 'gfm', 'html', 'whitespace'],
+};
+const standalone = [
+  'unrelated pages pass through, misplaced source markers fail loudly',
+  'nested source resources resolve against their canonical directory',
+];
+const separatorName = (route, separator) => `D01 ${route} separator ${JSON.stringify(separator)}`;
+const matrixName = (platform, name) => `${platform} ${name}`;
+const caseNames = [
+  ...Object.keys(livePages).flatMap(route => ['/', String.fromCharCode(92)].map(separator => separatorName(route, separator))),
+  ...standalone,
+  ...matrix.platforms.flatMap(platform => matrix.names.map(name => matrixName(platform, name))),
+];
+if (process.argv.includes('--manifest')) {
+  console.log(JSON.stringify(caseNames));
+  process.exit(0);
+}
 const live = fileURLToPath(new URL('../', import.meta.url));
 // Astro resolves symlinked dependencies against the fixture root during builds.
 const runs = join(live, '.assurance-runs');
@@ -109,20 +129,20 @@ after(() => {
 });
 for (const [route, source] of Object.entries(pages)) {
   for (const separator of ['/', String.fromCharCode(92)]) {
-    caseTest(`D01 ${route} separator ${JSON.stringify(separator)}`, () => {
+    caseTest(separatorName(route, separator), () => {
       const tree = {type:'root', children:[{type:'html',value:`<!-- assurance-source: ${source} -->`}]};
       assurance()(tree, {path: `/checkout/docs/src/content/docs/${route}.md`.replaceAll('/', separator)});
       assert.ok(tree.children.some(n => n.value?.includes('data-assurance-source=')), 'canonical article must replace marker');
     });
   }
 }
-caseTest('unrelated pages pass through, misplaced source markers fail loudly', () => {
+caseTest(standalone[0], () => {
   const tree = {type:'root',children:[{type:'paragraph',children:[]}]};
   assurance()(tree, {path:'/checkout/docs/src/content/docs/concepts.md'});
   assert.equal(tree.children.length, 1);
   assert.throws(() => assurance()({type:'root',children:[{type:'html',value:'<!-- assurance-source: CLAIMS.md -->'}]}, {path:'/wrong/claims.md'}), /assurance/);
 });
-caseTest('nested source resources resolve against their canonical directory', () => {
+caseTest(standalone[1], () => {
   const relative = 'docs/resource-probe.md';
   fs.writeFileSync(join(root, relative), '# Resources\n\n[link][shared] ![image][shared]\n\n[shared]: ../assets/safemesh-logo.png\n\n[fragment](#keep) [external](https://example.com/a)\n');
   const tree = sourceTree(relative, revision());
@@ -141,16 +161,12 @@ const cases={
  html:'\n\n<details><summary>Review explanation</summary><p>Details probe visible words.</p></details>\n',
  whitespace:'\n\n```python\nif True:\n    print(42)\n```\n',
 };
-const matrix = {
-  platforms: ['POSIX', 'Windows'],
-  names: ['unchanged', 'references', 'image', 'gfm', 'html', 'whitespace'],
-};
 assert.deepEqual(Object.keys(cases), matrix.names.slice(1), 'assurance mutation definitions must be complete');
-expectedCases = Object.keys(pages).length * 2 + 2 + matrix.platforms.length * matrix.names.length;
+expectedCases = caseNames.length;
 for (const platform of matrix.platforms) {
  for (const name of matrix.names) {
   const extra = name === 'unchanged' ? '' : cases[name];
-  caseTest(`${platform} ${name}`, () => {
+  caseTest(matrixName(platform, name), () => {
   try {
     // Feed Windows paths into the actual plugin during a full Astro build.
     // Do not normalize them in the harness: the product must do that itself.
