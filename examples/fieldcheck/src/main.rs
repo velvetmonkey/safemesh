@@ -1,7 +1,11 @@
 // Copyright (C) 2026 Ben Cassie
 // SPDX-License-Identifier: Apache-2.0
 mod exchange;
-use safemesh_crdt::{local::DurableReplica, ownership::WriterConfig, OrSet, OrSetDelta};
+use safemesh_crdt::{
+    local::{DurableReplica, LocalError},
+    ownership::WriterConfig,
+    OrSet, OrSetDelta,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -129,9 +133,18 @@ fn emit(value: Value) {
     println!("{value}");
     io::stdout().flush().expect("client pipe");
 }
-fn run() -> Result<(), String> {
+enum RunError {
+    Recovery { kind: &'static str, reason: String },
+    Other(String),
+}
+impl From<String> for RunError {
+    fn from(reason: String) -> Self {
+        Self::Other(reason)
+    }
+}
+fn run() -> Result<(), RunError> {
     let args: Vec<_> = std::env::args().collect();
-    let root = Path::new(args.get(1).ok_or("store path required")?);
+    let root = Path::new(args.get(1).ok_or("store path required".to_string())?);
     let option = |name: &str| {
         args.iter()
             .position(|s| s == name)
@@ -141,7 +154,9 @@ fn run() -> Result<(), String> {
         .map_or(Ok(0), |s| s.parse::<u64>())
         .map_err(|e| e.to_string())?;
     if writer > 1 || (option("--listen").is_some() && option("--connect").is_some()) {
-        return Err("expected writer 0 or 1 and at most one network role".into());
+        return Err(RunError::Other(
+            "expected writer 0 or 1 and at most one network role".into(),
+        ));
     }
     let config = WriterConfig { writers: 2, writer };
     // Existence means restart, even if the directory is empty or damaged.
@@ -150,23 +165,63 @@ fn run() -> Result<(), String> {
         Ok(()) => {
             fs::File::open(root.parent().unwrap_or(Path::new(".")))
                 .and_then(|f| f.sync_all())
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| RunError::Recovery {
+                    kind: "storage",
+                    reason: e.to_string(),
+                })?;
             Replica::utf8_set(root, config)
         }
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
             Replica::restart_utf8_set(root, config)
         }
-        Err(e) => return Err(e.to_string()),
+        Err(e) => {
+            return Err(RunError::Recovery {
+                kind: if e.kind() == io::ErrorKind::NotFound {
+                    "missing_parent"
+                } else {
+                    "storage"
+                },
+                reason: e.to_string(),
+            })
+        }
     }
-    .map_err(|e| format!("{e:?}"))?;
-    let service = Arc::new(Mutex::new(exchange::Service::open(replica, writer, root)?));
+    .map_err(|e| {
+        let kind = match e {
+            LocalError::Refused => "owned",
+            LocalError::Io(_) => "storage",
+            LocalError::Configuration => "configuration",
+            LocalError::Exhausted => "storage",
+            LocalError::RecoveryRequired | LocalError::History(_) | LocalError::InvalidHistory => {
+                "replay"
+            }
+        };
+        RunError::Recovery {
+            kind,
+            reason: e.to_string(),
+        }
+    })?;
+    let service = Arc::new(Mutex::new(
+        exchange::Service::open(replica, writer, root).map_err(|reason| RunError::Recovery {
+            kind: "startup",
+            reason,
+        })?,
+    ));
     exchange::start(
         service.clone(),
         option("--listen").map(String::as_str),
         option("--connect").map(String::as_str),
     )?;
-    let known = records(&service.lock().map_err(|e| e.to_string())?.replica)?;
-    let (needs_review, resolved) = review_projection(&known)?;
+    let known = records(&service.lock().map_err(|e| e.to_string())?.replica).map_err(|reason| {
+        RunError::Recovery {
+            kind: "replay",
+            reason,
+        }
+    })?;
+    let (needs_review, resolved) =
+        review_projection(&known).map_err(|reason| RunError::Recovery {
+            kind: "replay",
+            reason,
+        })?;
     emit(
         json!({"ready":true, "pid":std::process::id(), "records":known.values().collect::<Vec<_>>(),
         "needs_review":needs_review,"resolved":resolved,
@@ -219,14 +274,19 @@ fn run() -> Result<(), String> {
                 }
                 emit(json!({"saved":value}));
             }
-            Err(e) => emit(json!({"storage_error":format!("{e:?}")})),
+            Err(e) => emit(json!({"storage_error":e.to_string()})),
         }
     }
     Ok(())
 }
 fn main() {
     if let Err(e) = run() {
-        emit(json!({"recovery_error":e}));
+        match e {
+            RunError::Recovery { kind, reason } => {
+                emit(json!({"recovery_error":reason, "recovery_kind":kind}))
+            }
+            RunError::Other(reason) => emit(json!({"error":reason})),
+        }
         std::process::exit(1);
     }
 }

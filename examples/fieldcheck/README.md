@@ -71,9 +71,13 @@ does not discard the review.
 
 The interface displays `Saving…` until the service responds, then
 `Saved on this device` only following successful durable `add`.
-A real write error displays `Not saved — local storage error` and retains the
-draft. SafeMesh revokes further writes after persistence failure; restart the
-service after addressing the storage problem.
+A real write error displays `Not saved — local storage error; fix the storage
+problem, then reopen` followed by the plain OS reason, and retains the draft.
+SafeMesh revokes further writes after persistence failure. After addressing the
+storage problem, enter `reopen` in the same CLI session. This closes the running
+service through its stdin, waits for it to release the store, and starts a fresh
+service with the retained draft. Enter `save` to persist that draft. `reopen`
+also restarts a healthy service; wait for a pending save to finish first.
 
 ## Force-kill journey
 
@@ -97,13 +101,16 @@ record. Alternatively, remove the marker to release a live paused response.
 For a reproducible real write failure in a disposable store, create a directory
 named `writer-0.tmp` inside it after startup but before saving. File creation
 then fails with EISDIR; the interface retains the draft. Remove that empty
-directory and kill/reopen the service to retry.
+directory, enter `reopen`, then `save` to retry in the same CLI session.
 
-`Could not recover this checklist` means replay or application validation
-failed. The application never substitutes an empty checklist for a damaged
-store. Unsupported schemas, removals, unexpected writers and event-ID
-collisions are rejected. Resubmitting exactly the same event returns its original
-record and sequence; the same ID with different content is refused.
+`Store parent directory does not exist; create the parent and reopen` identifies
+a missing parent path. `Another Fieldcheck process owns this store; close it and
+reopen` identifies a live owner. `Could not recover this checklist; inspect the
+damaged store before reopening` means replay or application validation failed.
+The application never substitutes an empty checklist for a damaged store.
+Unsupported schemas, removals, unexpected writers and event-ID collisions are
+rejected. Resubmitting exactly the same event returns its original record and
+sequence; the same ID with different content is refused.
 
 This adapts the create/restart pattern from `../gold-path/rust`, whose sequential
 example has no service/UI scaffold and also demonstrates a second writer.
