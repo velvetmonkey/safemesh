@@ -49,10 +49,18 @@ def main():
         events.put(("stopped", process, None))
 
     def reopen():
-        nonlocal child, loaded, records
+        nonlocal child, loaded, records, saving
         if child is not None and child.poll() is None:
-            say("Service already running")
-            return
+            if saving:
+                say("Saving…")
+                return
+            # EOF lets the service finish its stdin loop and release its writer
+            # lease before a replacement tries to open the same store.
+            child.stdin.close()
+            child.wait()
+        elif saving:
+            say("Save status unknown — reopen to check")
+        saving = False
         loaded = False
         records = []
         command = [str(args.service.resolve()), str(args.store.resolve())]
