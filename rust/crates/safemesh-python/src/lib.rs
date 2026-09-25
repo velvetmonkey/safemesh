@@ -90,6 +90,17 @@ fn admission_name(admission: safemesh_crdt::Admission) -> String {
     .to_owned()
 }
 
+// A single record reports the verdict `merge_log_bytes` reports for it: a
+// duplicate or collision is a verdict, not an error. An invalid record raises.
+fn record_verdict(admission: safemesh_crdt::Admission) -> PyResult<String> {
+    match admission {
+        safemesh_crdt::Admission::Invalid(_) => {
+            Err(pyo3::exceptions::PyValueError::new_err("invalid record"))
+        }
+        admission => Ok(admission_name(admission)),
+    }
+}
+
 #[pyclass(name = "GCounter")]
 pub struct PyGCounter {
     inner: GCounter,
@@ -501,7 +512,9 @@ mod py_g_counter_replica_python {
             )
         }
 
-        pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
+        /// Return the core admission verdict for the decoded input record, as
+        /// `merge_log_bytes` does per record. Only "accepted" changes state.
+        pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<String> {
             let record =
                 Record::<GCounterDelta>::from_wire_bytes(bytes).map_err(record_decode_error)?;
             if safemesh_crdt::ownership::check_counter_record(
@@ -515,18 +528,12 @@ mod py_g_counter_replica_python {
                     "counter coordinate out of range or not owned by record author",
                 ));
             }
-            if self
-                .log
-                .admit_with(&mut self.state, record, |state, delta| {
-                    state.apply_delta(delta.clone());
-                })
-                == safemesh_crdt::Admission::Collision
-            {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "record ID collision",
-                ));
-            }
-            Ok(())
+            record_verdict(
+                self.log
+                    .admit_with(&mut self.state, record, |state, delta| {
+                        state.apply_delta(delta.clone());
+                    }),
+            )
         }
 
         /// Return one core admission verdict for every decoded input record.
@@ -650,21 +657,17 @@ mod py_enable_wins_flag_replica_python {
             )
         }
 
-        pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
+        /// Return the core admission verdict for the decoded input record, as
+        /// `merge_log_bytes` does per record. Only "accepted" changes state.
+        pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<String> {
             let record = Record::<EnableWinsFlagDelta<u64>>::from_wire_bytes(bytes)
                 .map_err(record_decode_error)?;
-            if self
-                .log
-                .admit_with(&mut self.state, record, |state, delta| {
-                    state.apply_delta(delta.clone());
-                })
-                == safemesh_crdt::Admission::Collision
-            {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "record ID collision",
-                ));
-            }
-            Ok(())
+            record_verdict(
+                self.log
+                    .admit_with(&mut self.state, record, |state, delta| {
+                        state.apply_delta(delta.clone());
+                    }),
+            )
         }
 
         /// Return one core admission verdict for every decoded input record.
@@ -799,21 +802,17 @@ mod py_lww_map_replica_python {
             )
         }
 
-        pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
+        /// Return the core admission verdict for the decoded input record, as
+        /// `merge_log_bytes` does per record. Only "accepted" changes state.
+        pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<String> {
             let record = Record::<LwwMapDelta<u64, u64>>::from_wire_bytes(bytes)
                 .map_err(record_decode_error)?;
-            if self
-                .log
-                .admit_with(&mut self.state, record, |state, delta| {
-                    state.apply_delta(delta.clone());
-                })
-                == safemesh_crdt::Admission::Collision
-            {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "record ID collision",
-                ));
-            }
-            Ok(())
+            record_verdict(
+                self.log
+                    .admit_with(&mut self.state, record, |state, delta| {
+                        state.apply_delta(delta.clone());
+                    }),
+            )
         }
 
         /// Return one core admission verdict for every decoded input record.
@@ -924,21 +923,17 @@ mod py_lww_register_replica_python {
             )
         }
 
-        pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<()> {
+        /// Return the core admission verdict for the decoded input record, as
+        /// `merge_log_bytes` does per record. Only "accepted" changes state.
+        pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<String> {
             let record = Record::<LwwRegisterDelta<u64>>::from_wire_bytes(bytes)
                 .map_err(record_decode_error)?;
-            if self
-                .log
-                .admit_with(&mut self.state, record, |state, delta| {
-                    state.apply_delta(delta.clone());
-                })
-                == safemesh_crdt::Admission::Collision
-            {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "record ID collision",
-                ));
-            }
-            Ok(())
+            record_verdict(
+                self.log
+                    .admit_with(&mut self.state, record, |state, delta| {
+                        state.apply_delta(delta.clone());
+                    }),
+            )
         }
 
         /// Return one core admission verdict for every decoded input record.
@@ -2027,33 +2022,40 @@ mod admission_tests {
                         id: first.id,
                         delta: $second,
                     };
-                    let a = first.to_wire_bytes().unwrap();
-                    let b = second.to_wire_bytes().unwrap();
                     let mut replica = $replica;
-                    replica.merge_record_bytes(&a).unwrap();
-                    let state = replica.state.clone();
-                    let log = replica.log.clone();
-                    replica.merge_record_bytes(&a).unwrap();
-                    assert!(replica
-                        .merge_record_bytes(&b)
-                        .unwrap_err()
-                        .to_string()
-                        .contains("record ID collision"));
-                    assert_eq!(replica.state, state);
-                    assert_eq!(replica.log, log);
-                    let mut incoming = EventLog::for_crdt(&replica.state);
-                    assert_eq!(
-                        incoming.insert_record(&replica.state, second),
-                        safemesh_crdt::Admission::Accepted
-                    );
                     assert_eq!(
                         replica
-                            .merge_log_bytes(&incoming.to_wire_bytes().unwrap())
+                            .merge_record_bytes(&first.to_wire_bytes().unwrap())
                             .unwrap(),
-                        vec!["collision"]
+                        "accepted"
                     );
-                    assert_eq!(replica.state, state);
-                    assert_eq!(replica.log, log);
+                    let state = replica.state.clone();
+                    let log = replica.log.clone();
+                    // Both paths name the same core verdict for the same record. A
+                    // redelivery or a conflicting payload never raises or moves state.
+                    for (record, verdict) in [(first, "duplicate"), (second, "collision")] {
+                        assert_eq!(
+                            replica
+                                .merge_record_bytes(&record.to_wire_bytes().unwrap())
+                                .unwrap(),
+                            verdict
+                        );
+                        assert_eq!(replica.state, state);
+                        assert_eq!(replica.log, log);
+                        let mut incoming = EventLog::for_crdt(&replica.state);
+                        assert_eq!(
+                            incoming.insert_record(&replica.state, record),
+                            safemesh_crdt::Admission::Accepted
+                        );
+                        assert_eq!(
+                            replica
+                                .merge_log_bytes(&incoming.to_wire_bytes().unwrap())
+                                .unwrap(),
+                            vec![verdict]
+                        );
+                        assert_eq!(replica.state, state);
+                        assert_eq!(replica.log, log);
+                    }
                     // Conflicting entries inside a single wire log must not be silently deduped.
                     // Generated by safemesh-crdt's product EventLog encoder.
                     let bytes = include_bytes!($fixture);
@@ -2280,9 +2282,12 @@ mod admission_tests {
         };
 
         let mut target = PyGCounterReplica::new(0, 2);
-        target
-            .merge_record_bytes(&existing.to_wire_bytes().unwrap())
-            .unwrap();
+        assert_eq!(
+            target
+                .merge_record_bytes(&existing.to_wire_bytes().unwrap())
+                .unwrap(),
+            "accepted"
+        );
         assert_eq!(
             target.merge_log_bytes(&wire([])).unwrap(),
             Vec::<String>::new()
@@ -2296,17 +2301,35 @@ mod admission_tests {
         );
         assert_eq!(one.state(), vec![0, 7]);
 
+        // The single-record path reports the collision the batch reports.
         let before = target.state();
+        assert_eq!(
+            target
+                .merge_record_bytes(&collision.to_wire_bytes().unwrap())
+                .unwrap(),
+            "collision"
+        );
         assert_eq!(
             target.merge_log_bytes(&wire([collision.clone()])).unwrap(),
             vec!["collision"]
         );
         assert_eq!(target.state(), before);
 
-        target
-            .merge_record_bytes(&accepted.to_wire_bytes().unwrap())
-            .unwrap();
+        assert_eq!(
+            target
+                .merge_record_bytes(&accepted.to_wire_bytes().unwrap())
+                .unwrap(),
+            "accepted"
+        );
         let before = target.state();
+        for record in [&existing, &accepted] {
+            assert_eq!(
+                target
+                    .merge_record_bytes(&record.to_wire_bytes().unwrap())
+                    .unwrap(),
+                "duplicate"
+            );
+        }
         assert_eq!(
             target
                 .merge_log_bytes(&wire([existing.clone(), accepted.clone()]))
@@ -2316,8 +2339,11 @@ mod admission_tests {
         assert_eq!(target.state(), before);
 
         let mut late = PyGCounterReplica::new(0, 2);
-        late.merge_record_bytes(&existing.to_wire_bytes().unwrap())
-            .unwrap();
+        assert_eq!(
+            late.merge_record_bytes(&existing.to_wire_bytes().unwrap())
+                .unwrap(),
+            "accepted"
+        );
         let before = late.state();
         let admissions = late
             .merge_log_bytes(&wire([accepted, collision, after_collision]))
@@ -2327,6 +2353,70 @@ mod admission_tests {
         assert_eq!(admissions, vec!["accepted", "collision", "accepted"]);
         assert_eq!(before, vec![5, 0]);
         assert_eq!(after, vec![5, 8]);
+    }
+
+    #[test]
+    fn python_record_and_log_paths_name_the_same_verdict() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let module = PyModule::new_bound(py, "safemesh_python").unwrap();
+            safemesh_python(&module).unwrap();
+            let globals = pyo3::types::PyDict::new_bound(py);
+            globals.set_item("sm", module).unwrap();
+            py.run_bound(
+                r#"
+# Two writers reusing record ID (1, 1) with different payloads force a collision.
+cases = [
+    ('GCounterReplica', lambda: sm.GCounterReplica(1, 2), lambda: sm.GCounterReplica(0, 2),
+     lambda r: r.append_bump(1, 5), lambda r: r.append_bump(1, 9), lambda r: r.state()),
+    ('EnableWinsFlagReplica', lambda: sm.EnableWinsFlagReplica(1), lambda: sm.EnableWinsFlagReplica(0),
+     lambda r: r.append_enable(5), lambda r: r.append_enable(9),
+     lambda r: (r.enabled_tokens(), r.tombstone_tokens())),
+    ('LwwMapReplica', lambda: sm.LwwMapReplica(1), lambda: sm.LwwMapReplica(0),
+     lambda r: r.append_set(1, 1, 1, 5), lambda r: r.append_remove(1, 2, 1),
+     lambda r: (r.visible_keys(), r.entry_keys(), r.removal_keys(), r.value_or(1, 0))),
+    ('LwwRegisterReplica', lambda: sm.LwwRegisterReplica(1), lambda: sm.LwwRegisterReplica(0),
+     lambda r: r.append_set(1, 1, 5), lambda r: r.append_set(2, 1, 9),
+     lambda r: (r.value_or(0), r.timestamp_or(0), r.writer_replica_or(0))),
+]
+verdicts = 0
+for name, writer, reader, write, forge, read in cases:
+    author, forger, receiver = writer(), writer(), reader()
+    record, forged = write(author), forge(forger)
+    assert receiver.merge_record_bytes(record) == 'accepted', name
+    before = (receiver.log_bytes(), read(receiver))
+    for single, batch, verdict in [(record, author.log_bytes(), 'duplicate'),
+                                   (forged, forger.log_bytes(), 'collision')]:
+        result = receiver.merge_record_bytes(single)
+        assert type(result) is str and result == verdict, (name, result)
+        assert receiver.merge_log_bytes(batch) == [result], name
+        assert (receiver.log_bytes(), read(receiver)) == before, name
+        verdicts += 1
+    for bad in [b'', record + b'\x00']:
+        try:
+            receiver.merge_record_bytes(bad)
+        except ValueError as error:
+            assert 'failed to decode record' in str(error), (name, error)
+        else:
+            raise AssertionError((name, 'accepted undecodable record bytes'))
+        assert (receiver.log_bytes(), read(receiver)) == before, name
+
+# Ownership is still an error: coordinate 2 is outside a width-2 counter.
+receiver = sm.GCounterReplica(0, 2)
+try:
+    receiver.merge_record_bytes(sm.GCounterReplica(2, 3).append_bump(2, 5))
+except ValueError as error:
+    assert 'not owned by record author' in str(error), error
+else:
+    raise AssertionError('accepted an out-of-range counter coordinate')
+assert receiver.state() == [0, 0] and receiver.version_for(2) == 0
+print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
+"#,
+                Some(&globals),
+                None,
+            )
+            .unwrap();
+        });
     }
 
     #[test]

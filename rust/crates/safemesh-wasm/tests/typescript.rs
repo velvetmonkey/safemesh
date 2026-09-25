@@ -35,7 +35,14 @@ fn typescript_surface_lists_the_public_binding() {
     assert!(DTS.contains("exportIdentity(): Uint8Array"));
     assert!(DTS.contains("static importIdentity(bytes: Uint8Array): SafeMeshStringOrSetReplica"));
     assert!(DTS.contains("appendRemoveObserved(element: string): Uint8Array"));
-    assert!(DTS.contains("mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): \"accepted\" | \"duplicate\""));
+    // Every replica's single-record merge names the verdicts its log merge names.
+    assert_eq!(
+        DTS.matches(
+            "mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): \"accepted\" | \"duplicate\" | \"collision\";"
+        )
+        .count(),
+        6
+    );
     assert!(DTS.contains("elements(): string[]"));
     assert!(DTS.contains("observedTokens(element: string): BigUint64Array"));
     assert!(DTS.contains("addEntries(): SafeMeshStringOrSetAddEntry[]"));
@@ -55,7 +62,7 @@ fn typescript_surface_lists_the_public_binding() {
     ));
     assert!(DTS.contains("appendEnable(token: bigint): Uint8Array"));
     assert!(DTS.contains("appendDisableObserved(): Uint8Array"));
-    assert!(DTS.contains(
+    assert!(!DTS.contains(
         "mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): void"
     ));
     assert_eq!(

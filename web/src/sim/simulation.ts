@@ -473,7 +473,7 @@ function applyDeltaToPeer(peer: Peer, delta: MeshDelta): Peer {
   if (delta.kind === 'gcounter.bump') {
     const counter = replicaFor(peer, peer.gcounter.length)
     try {
-      if (delta.payload === 'record') counter.mergeRecordBytes(delta.bytes)
+      if (delta.payload === 'record') mergeRecordBytes(counter, delta.bytes)
       else mergeLogBytes(counter, delta.bytes)
       return snapshotGCounterPeer(peer, counter)
     } finally {
@@ -482,7 +482,7 @@ function applyDeltaToPeer(peer: Peer, delta: MeshDelta): Peer {
   }
   const replica = orsetReplicaFor(peer)
   try {
-    if (delta.payload === 'record') replica.mergeRecordBytes(delta.bytes)
+    if (delta.payload === 'record') mergeRecordBytes(replica, delta.bytes)
     else mergeLogBytes(replica, delta.bytes)
     return { ...peer, orset: replica.logBytes() }
   } finally {
@@ -685,6 +685,15 @@ function replicaFor(peer: Peer, replicas: number): SafeMeshGCounterReplica {
   } catch (error) {
     replica.free()
     throw error
+  }
+}
+
+function mergeRecordBytes(
+  replica: { mergeRecordBytes(bytes: Uint8Array): 'accepted' | 'duplicate' | 'collision' },
+  bytes: Uint8Array,
+): void {
+  if (replica.mergeRecordBytes(bytes) === 'collision') {
+    throw new Error('record ID collision')
   }
 }
 

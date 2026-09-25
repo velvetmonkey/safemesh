@@ -76,16 +76,23 @@ import safemesh_python as sm
 left = sm.GCounterReplica(1, 3)
 right = sm.GCounterReplica(2, 3)
 
-right.merge_record_bytes(left.append_bump(1, 5))
+assert right.merge_record_bytes(left.append_bump(1, 5)) == "accepted"
 admissions = left.merge_log_bytes(right.log_bytes())
 assert admissions == ["duplicate"]
 
 print(left.value(), right.value())
 ```
 
-`merge_log_bytes` returns one `"accepted"`, `"duplicate"`, or `"collision"`
-verdict per input record, in order. Decode and whole-batch validation errors
-raise before any record is applied.
+`merge_record_bytes` returns one `"accepted"`, `"duplicate"`, or `"collision"`
+verdict for its record, and `merge_log_bytes` returns one per input record, in
+order. Neither raises for a duplicate or a collision, and neither changes state
+for one, so check the verdicts for `"collision"`. Decode, ownership, and
+whole-batch validation errors raise before any record is applied.
+
+On main (unreleased), `merge_record_bytes` returns this verdict on every replica
+class. It previously returned `None` for both accepted and duplicate records and
+raised `ValueError: record ID collision` for a collision; code that caught that
+exception must check for `"collision"` instead.
 
 ## Demo
 

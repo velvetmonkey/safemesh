@@ -39,7 +39,7 @@ left = sm.GCounterReplica(1, 3)
 right = sm.GCounterReplica(2, 3)
 record = left.append_bump(1, 5)
 assert isinstance(record, bytes)
-right.merge_record_bytes(record)
+assert right.merge_record_bytes(record) == "accepted"
 assert left.merge_log_bytes(right.log_bytes()) == ["duplicate"]
 assert left.value() == right.value() == 5
 
@@ -47,7 +47,7 @@ reg_left = sm.LwwRegisterReplica(1)
 reg_right = sm.LwwRegisterReplica(2)
 reg_record = reg_left.append_set(10, 1, 100)
 assert isinstance(reg_record, bytes)
-reg_right.merge_record_bytes(reg_record)
+assert reg_right.merge_record_bytes(reg_record) == "accepted"
 reg_right.append_set(10, 2, 200)
 assert reg_left.merge_log_bytes(reg_right.log_bytes()) == ["duplicate", "accepted"]
 assert reg_left.value_or(0) == reg_right.value_or(0) == 200
@@ -56,10 +56,10 @@ flag_left = sm.EnableWinsFlagReplica(1)
 flag_right = sm.EnableWinsFlagReplica(2)
 flag_record = flag_left.append_enable(10)
 assert isinstance(flag_record, bytes)
-flag_right.merge_record_bytes(flag_record)
+assert flag_right.merge_record_bytes(flag_record) == "accepted"
 flag_remove = flag_right.append_disable_observed()
 flag_left.append_enable(11)
-flag_left.merge_record_bytes(flag_remove)
+assert flag_left.merge_record_bytes(flag_remove) == "accepted"
 assert flag_right.merge_log_bytes(flag_left.log_bytes()) == ["duplicate", "accepted", "duplicate"]
 assert flag_left.value() == flag_right.value() is True
 
@@ -67,10 +67,10 @@ map_left = sm.LwwMapReplica(1)
 map_right = sm.LwwMapReplica(2)
 map_record = map_left.append_set(7, 10, 1, 100)
 assert isinstance(map_record, bytes)
-map_right.merge_record_bytes(map_record)
+assert map_right.merge_record_bytes(map_record) == "accepted"
 map_remove = map_right.append_remove(7, 11, 2)
 map_left.append_set(7, 12, 1, 300)
-map_left.merge_record_bytes(map_remove)
+assert map_left.merge_record_bytes(map_remove) == "accepted"
 assert map_right.merge_log_bytes(map_left.log_bytes()) == ["duplicate", "accepted", "duplicate"]
 assert map_left.value_or(7, 0) == map_right.value_or(7, 0) == 300
 
@@ -151,7 +151,7 @@ import { SafeMeshGCounterReplica } from "safemesh-wasm";
 
 const left = new SafeMeshGCounterReplica(1n, 3);
 const right = new SafeMeshGCounterReplica(2n, 3);
-right.mergeRecordBytes(left.appendBump(1, 5n));
+assert.equal(right.mergeRecordBytes(left.appendBump(1, 5n)), "accepted");
 assert.deepEqual(left.mergeLogBytes(right.logBytes()), ["duplicate"]);
 assert.equal(left.value(), 5n);
 assert.equal(right.value(), 5n);
