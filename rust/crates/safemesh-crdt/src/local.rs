@@ -617,7 +617,7 @@ where
             return Err(LocalError::RecoveryRequired);
         }
         // The lock covers reading, checking and replaying the complete transaction.
-        let transaction = CommittedTransaction::read(&root, config)?;
+        let transaction = CommittedTransaction::read(root, config)?;
         // This is the locally committed transaction, whose bytes are already in
         // memory. Every wire collection element occupies at least one byte, so
         // its length bounds any count without imposing a new writer-lifetime
@@ -662,7 +662,7 @@ where
         inner.renew(inner.ticket())?;
         Ok(Self {
             inner,
-            path: transaction_path(&root, config),
+            path: transaction_path(root, config),
         })
     }
 }
