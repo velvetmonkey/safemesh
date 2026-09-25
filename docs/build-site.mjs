@@ -24,3 +24,4 @@ run(['run', 'build:docs'], { cwd: docs, env: { ...process.env, LAB_URL: lab.href
 run(['run', 'build', '--', '--base', lab.pathname, '--outDir', labDir, '--emptyOutDir'], { cwd: web });
 console.log(`Lab built into ${labDir} for ${lab.href}`);
 run(['run', 'index:search'], { cwd: docs });
+run(['run', 'check:lab-index'], { cwd: docs });
