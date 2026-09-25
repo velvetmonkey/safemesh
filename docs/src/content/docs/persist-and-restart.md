@@ -202,7 +202,8 @@ migrate once with EventLog::migrate_legacy_wire_bytes_for(bytes, &destination)
 its CRC or its shape header. The bytes are intact and nothing was applied. Keep
 the file, then run the explicit migration once with the original replica count,
 reload the result, and replace the file:
-[Migrating a legacy EventLog](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md#migrating-a-legacy-eventlog).
+see "Migrating a legacy EventLog" in the
+[safemesh-crdt README](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md).
 Loaders never migrate on open. Durable stores postdate the shape header, so
 `restart` meets this only for a hand-edited transaction.
 See the [recovery evidence](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md).
