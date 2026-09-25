@@ -3,13 +3,43 @@
 import fs from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { spawnSync, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { test, after } from 'node:test';
 import { parse, serialize } from 'parse5';
 const live = fileURLToPath(new URL('../', import.meta.url));
 // Astro resolves symlinked dependencies against the fixture root during builds.
 const scratch = fs.mkdtempSync(join(dirname(live), 'assurance-'));
+const cleanup = () => fs.rmSync(scratch, { recursive: true, force: true });
+// node --test can outlive npm on SIGINT, leaving its worker in a separate
+// process group. Watch the runner as well as the worker's pipe.
+const watcherScript = `
+const fs = require('node:fs');
+const [scratch, done, runnerPid, workerPid] = process.argv.slice(1);
+function finish() {
+  if (fs.existsSync(done)) fs.rmSync(done);
+  else fs.rmSync(scratch, { recursive: true, force: true });
+  process.exit();
+}
+process.stdin.resume();
+process.stdin.on('end', finish);
+setInterval(() => {
+  try { process.kill(Number(runnerPid), 0); }
+  catch (error) {
+    if (error.code !== 'ESRCH') return;
+    try { process.kill(Number(workerPid), 'SIGTERM'); } catch {}
+    finish();
+  }
+}, 10);
+`;
+const watcher = spawn(process.execPath, ['-e', watcherScript,
+  scratch, `${scratch}.cleaned`, String(process.ppid), String(process.pid)],
+  { detached: true, stdio: ['pipe', 'ignore', 'ignore'] });
+watcher.stdin.unref();
+watcher.unref();
+process.once('SIGINT', () => { cleanup(); process.exit(130); });
+// node --test may forward an interrupt to its worker as SIGTERM.
+process.once('SIGTERM', () => { cleanup(); process.exit(143); });
 const root = join(scratch, 'repo'), out = join(scratch, 'results');
 execFileSync('git', ['clone', '--quiet', '--shared', live, root]);
 const docs = join(root, 'docs');
@@ -28,23 +58,38 @@ const run=args=>spawnSync(process.execPath,args,{cwd:docs,env,encoding:'utf8',ma
 function nodes(n,fn,result=[]){if(fn(n))result.push(n);for(const c of n.childNodes??[])nodes(c,fn,result);return result;}
 function attr(n,k){return n.attrs?.find(a=>a.name===k)?.value;}
 const result=[];
-after(() => console.log(`Results: ${JSON.stringify(result)}`));
+let started = 0;
+const caseTest = (name, body) => test(name, () => { started++; return body(); });
+// Each route has two separator probes, plus two standalone probes and the
+// Cartesian product of the platform and mutation definitions below.
+let expectedCases;
+after(() => {
+  try {
+    console.log(`Results: ${JSON.stringify(result)}`);
+    assert.equal(started, expectedCases, `assurance cases run: ${started}/${expectedCases}`);
+    console.log(`Assurance matrix complete: ${started}/${expectedCases}`);
+  } finally {
+    cleanup();
+    // Tell the watcher the after hook handled normal completion.
+    fs.writeFileSync(`${scratch}.cleaned`, '');
+  }
+});
 for (const [route, source] of Object.entries(pages)) {
   for (const separator of ['/', String.fromCharCode(92)]) {
-    test(`D01 ${route} separator ${JSON.stringify(separator)}`, () => {
+    caseTest(`D01 ${route} separator ${JSON.stringify(separator)}`, () => {
       const tree = {type:'root', children:[{type:'html',value:`<!-- assurance-source: ${source} -->`}]};
       assurance()(tree, {path: `/checkout/docs/src/content/docs/${route}.md`.replaceAll('/', separator)});
       assert.ok(tree.children.some(n => n.value?.includes('data-assurance-source=')), 'canonical article must replace marker');
     });
   }
 }
-test('unrelated pages pass through, misplaced source markers fail loudly', () => {
+caseTest('unrelated pages pass through, misplaced source markers fail loudly', () => {
   const tree = {type:'root',children:[{type:'paragraph',children:[]}]};
   assurance()(tree, {path:'/checkout/docs/src/content/docs/concepts.md'});
   assert.equal(tree.children.length, 1);
   assert.throws(() => assurance()({type:'root',children:[{type:'html',value:'<!-- assurance-source: CLAIMS.md -->'}]}, {path:'/wrong/claims.md'}), /assurance/);
 });
-test('nested source resources resolve against their canonical directory', () => {
+caseTest('nested source resources resolve against their canonical directory', () => {
   const relative = 'docs/resource-probe.md';
   fs.writeFileSync(join(root, relative), '# Resources\n\n[link][shared] ![image][shared]\n\n[shared]: ../assets/safemesh-logo.png\n\n[fragment](#keep) [external](https://example.com/a)\n');
   const tree = sourceTree(relative, revision());
@@ -63,9 +108,16 @@ const cases={
  html:'\n\n<details><summary>Review explanation</summary><p>Details probe visible words.</p></details>\n',
  whitespace:'\n\n```python\nif True:\n    print(42)\n```\n',
 };
-for (const platform of ['POSIX', 'Windows']) {
- for (const [name, extra] of Object.entries({ unchanged: '', ...cases })) {
-  test(`${platform} ${name}`, () => {
+const matrix = {
+  platforms: ['POSIX', 'Windows'],
+  names: ['unchanged', 'references', 'image', 'gfm', 'html', 'whitespace'],
+};
+assert.deepEqual(Object.keys(cases), matrix.names.slice(1), 'assurance mutation definitions must be complete');
+expectedCases = Object.keys(pages).length * 2 + 2 + matrix.platforms.length * matrix.names.length;
+for (const platform of matrix.platforms) {
+ for (const name of matrix.names) {
+  const extra = name === 'unchanged' ? '' : cases[name];
+  caseTest(`${platform} ${name}`, () => {
   try {
     // Feed Windows paths into the actual plugin during a full Astro build.
     // Do not normalize them in the harness: the product must do that itself.
