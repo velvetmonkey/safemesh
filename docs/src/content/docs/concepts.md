@@ -44,17 +44,17 @@ This illustrates existing behavior, not a new proof. [Code: `VersionVector`, `Ev
 
 ## Five Lean-backed carriers
 
-| Type | State and merge | Use the semantics deliberately |
-| --- | --- | --- |
-| **G-Set** (`GSet`) | A grow-only set; merge takes the union. | Insert members; this type has no removal operation. |
-| **G-Counter** (`GCounter`) | Per-replica tallies; merge takes each coordinate's maximum. | Read the sum; deltas carry cumulative tallies. |
-| **PN-Counter** (`PnCounter`) | Two G-Counters, for increments and decrements. | Read the increment total minus the decrement total. |
-| **OR-Set** (`OrSet`) | Tagged adds plus removed-token tombstones; merge unions both. | A remove names observed tokens; a concurrent add with a fresh token survives. |
-| **RGA/Text** (`Rga`) | Positioned elements plus deleted-position tombstones. | Read live positions in sorted order; the caller supplies position identifiers. |
+| Type | In plain words | State and merge | Use the semantics deliberately |
+| --- | --- | --- | --- |
+| **G-Set** (`GSet`) | A list that only gains items. | A grow-only set; merge takes the union. | Insert members; this type has no removal operation. |
+| **G-Counter** (`GCounter`) | A total that can only rise. | Per-replica tallies; merge takes each coordinate's maximum. | Read the sum; deltas carry cumulative tallies. |
+| **PN-Counter** (`PnCounter`) | A total that can rise and fall. | Two G-Counters, for increments and decrements. | Read the increment total minus the decrement total. |
+| **OR-Set** (`OrSet`) | A list that allows additions and removals; a new simultaneous add survives a remove. | Tagged adds plus removed-token tombstones; merge unions both. | A remove names observed tokens; a concurrent add with a fresh token survives. |
+| **RGA/Text** (`Rga`) | An ordered list whose entries can be deleted. | Positioned elements plus deleted-position tombstones. | Read live positions in sorted order; the caller supplies position identifiers. |
 
 Evidence: [Rust carrier implementations](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/lib.rs), [OR-Set model](https://github.com/velvetmonkey/safemesh/blob/main/lean/SafeMesh/DeltaORSet.lean), [RGA model](https://github.com/velvetmonkey/safemesh/blob/main/lean/SafeMesh/DeltaRGA.lean), and [the differential test](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/tests/conformance.rs).
 
-A **tombstone** records a removal while retaining information needed when older adds arrive later. OR-Set tokens are global to the set: reusing a token can affect every element carrying it. The numeric bindings do not allocate tokens for you. [Evidence: binding token contract](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-ffi/README.md#checked-coordinates-and-or-set).
+A **tombstone** is a record that an item was removed, so an older copy of that item does not come back when copies merge. It records a removal while retaining information needed when older adds arrive later. OR-Set tokens are global to the set: reusing a token can affect every element carrying it. The numeric bindings do not allocate tokens for you. [Evidence: binding token contract](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-ffi/README.md#checked-coordinates-and-or-set).
 
 ## Other types have a different assurance label
 
