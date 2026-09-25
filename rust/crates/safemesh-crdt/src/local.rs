@@ -524,6 +524,20 @@ where
     C::Delta: OwnedDelta + Clone + PartialEq + WireEncode + WireDecode + WireSchema,
 {
     fn restart(root: &Path, config: WriterConfig, state: C) -> Result<Self, LocalError> {
+        Self::restart_with_collection_limits(
+            root,
+            config,
+            state,
+            crate::CollectionLimits::WIRE_DEFAULT,
+        )
+    }
+
+    fn restart_with_collection_limits(
+        root: &Path,
+        config: WriterConfig,
+        state: C,
+        limits: crate::CollectionLimits,
+    ) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
         let root = root.canonicalize()?;
         // Opening without create is deliberate: missing ownership is not a new store.
@@ -551,8 +565,18 @@ where
         }
         // The lock covers reading, checking and replaying the complete transaction.
         let transaction = CommittedTransaction::read(&root, config)?;
-        let log = EventLog::<C::Delta>::from_wire_bytes_for(&transaction.log_bytes, &state)
-            .map_err(LocalError::History)?;
+        let log = EventLog::<C::Delta>::from_wire_bytes_for_with_limits(
+            &transaction.log_bytes,
+            &state,
+            crate::DecodeLimits {
+                max_records: None,
+                max_collection_elements: limits.max_elements,
+            },
+        )
+        .map_err(|error| match error {
+            crate::DecodeError::Wire(error) => LocalError::History(error),
+            crate::DecodeError::RecordLimitExceeded { .. } => unreachable!("no record limit"),
+        })?;
         let mut inner = LocalReplica {
             config,
             fence,
@@ -610,6 +634,21 @@ impl DurableReplica<OrSet<String, u64>> {
     /// Checked ordinary restart, including tombstones and token allocation.
     pub fn restart_utf8_set(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
         Self::restart(root, config, OrSet::new())
+    }
+    /// Restart a stored set whose historical remove deltas exceed the default token ceiling.
+    pub fn restart_utf8_set_with_max_collection_elements(
+        root: &Path,
+        config: WriterConfig,
+        max_elements: usize,
+    ) -> Result<Self, LocalError> {
+        Self::restart_with_collection_limits(
+            root,
+            config,
+            OrSet::new(),
+            crate::CollectionLimits {
+                max_elements: Some(max_elements),
+            },
+        )
     }
     pub fn utf8_set(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
         Self::fresh(root, config, OrSet::new())
@@ -883,6 +922,27 @@ mod durable_tests {
             writers: 2,
             writer: 0,
         }
+    }
+    #[test]
+    #[ignore = "cross-revision durable migration exercise; run with SM_COLLECTION_DURABLE_ROOT"]
+    fn oversized_stored_orset_restarts_and_has_raise_path() {
+        let root = PathBuf::from(std::env::var("SM_COLLECTION_DURABLE_ROOT").unwrap());
+        let mut replica = DurableReplica::restart_utf8_set(&root, config()).unwrap();
+        let element = "bulk".to_string();
+        assert_eq!(replica.state().observed_tokens(&element).len(), 4097);
+        replica.remove(replica.ticket(), &element).unwrap();
+        drop(replica);
+        assert!(matches!(
+            DurableReplica::restart_utf8_set(&root, config()),
+            Err(LocalError::History(
+                crate::WireError::CollectionElementLimitExceeded { max_elements: 4096 }
+            ))
+        ));
+        let restored =
+            DurableReplica::restart_utf8_set_with_max_collection_elements(&root, config(), 4097)
+                .unwrap();
+        assert_eq!(restored.state().observed_tokens(&element).len(), 0);
+        assert_eq!(restored.state().tombstones().len(), 4097);
     }
     #[test]
     fn duplicate_and_replay_do_not_clone_history() {
