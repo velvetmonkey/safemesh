@@ -11,10 +11,11 @@ use alloc::collections::{BTreeMap, BTreeSet};
 /// Later records that arrive before earlier records must not advance this
 /// prefix, otherwise `since` could hide gaps. Sequence zero is acknowledged
 /// independently by `zero_replicas`; it is not implied by a positive prefix.
-/// There is no built-in version wire codec. Custom version exchanges must carry
-/// both [`Self::entries`] and [`Self::zero_replicas`]. A receiver can rebuild
-/// the vector with [`Self::from_peer_prefixes`] after checking application-owned
-/// author and zero-acknowledgement budgets, as below; record payloads are not required.
+/// The built-in wire codec carries both [`Self::entries`] and
+/// [`Self::zero_replicas`]. Custom version exchanges must carry both too. A
+/// receiver can rebuild the vector with [`Self::from_peer_prefixes`] after
+/// checking application-owned author and zero-acknowledgement budgets, as below;
+/// record payloads are not required.
 /// Legacy prefix-only exchanges cannot acknowledge zeros and will keep receiving
 /// them until upgraded.
 ///
@@ -69,6 +70,15 @@ pub struct VersionVectorLimits {
     /// Maximum sequence-zero acknowledgements, independently of prefix entries.
     /// `None` is unbounded; `Some(0)` requires none.
     pub max_zero_replicas: Option<usize>,
+}
+
+impl VersionVectorLimits {
+    /// Default wire entry ceilings. Callers can supply tighter or larger budgets
+    /// with [`VersionVector::from_wire_bytes_with_limits`].
+    pub const WIRE_DEFAULT: Self = Self {
+        max_authors: Some(4096),
+        max_zero_replicas: Some(4096),
+    };
 }
 
 /// Failure from opt-in bounded peer-version reconstruction.
@@ -146,7 +156,8 @@ impl VersionVector {
     /// - encoded byte size, enforced before decoding, bounds input allocation
     ///   and parsing (including duplicate entries before collection deduplication).
     ///
-    /// No built-in version wire codec or universal application budget is imposed.
+    /// The built-in wire decoder has default entry ceilings; callers can choose
+    /// their own limits. This constructor imposes no universal application budget.
     /// Reconstruction takes O(entries.len() + zero_replicas.len()) time and space.
     pub fn from_peer_prefixes(
         entries: &BTreeMap<u64, u64>,

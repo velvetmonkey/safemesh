@@ -155,7 +155,7 @@ function fetchWorker() {
     Object.defineProperty(response, 'url', { value: request.url })
     return response
   }
-  const build = { cacheName: CURRENT, assets: ['/lab/', '/lab/assets/a.js', '/lab/README.md'] }
+  const build = { cacheName: CURRENT, assets: ['/lab/', '/lab/assets/a.js', '/lab/README.md', '/lab/pwa-icon.svg'] }
   new Function('self', 'caches', 'fetch', `const BUILD = ${JSON.stringify(build)};\n${source}`)(self, caches, fetch)
   return {
     caches, requests, writes,
@@ -197,6 +197,19 @@ describe('service worker fetch ownership', () => {
     w.offline()
     expect.soft(await w.dispatch('/lab/').response).toBeUndefined()
     expect(await w.dispatch('/lab/data.json', 'cors').response).toBeUndefined()
+  })
+  it('serves installed non-HTML navigations offline without replacing the shell', async () => {
+    const w = fetchWorker(), cache = await w.caches.open(CURRENT)
+    await cache.put('/lab/', new Response('build A', { headers: { 'content-type': 'text/html' } }))
+    await cache.put('/lab/README.md', new Response('# docs', { headers: { 'content-type': 'text/markdown' } }))
+    await cache.put('/lab/pwa-icon.svg', new Response('<svg/>', { headers: { 'content-type': 'image/svg+xml' } }))
+    w.offline()
+    expect(await (await w.dispatch('/lab/README.md').response)!.text()).toBe('# docs')
+    expect(await (await w.dispatch('/lab/pwa-icon.svg').response)!.text()).toBe('<svg/>')
+    expect(await (await w.dispatch('/lab/README.md?version=1').response)!.text()).toBe('build A')
+    expect(await (await w.dispatch('/lab/missing').response)!.text()).toBe('build A')
+    expect(await (await w.dispatch('/lab/').response)!.text()).toBe('build A')
+    expect(await (await cache.match('/lab/'))!.text()).toBe('build A')
   })
   it('defect 4: every runtime write is covered by the fetch event lifetime', async () => {
     const w = fetchWorker(), release = w.block()
@@ -255,7 +268,7 @@ describe('service worker fetch ownership', () => {
 describe('service worker runtime entry bound', () => {
   it('bounds concurrent runtime writes and preserves every installed shell entry', async () => {
     const w = fetchWorker(), cache = await w.caches.open(CURRENT)
-    const shell = ['/lab/', '/lab/assets/a.js', '/lab/README.md']
+    const shell = ['/lab/', '/lab/assets/a.js', '/lab/README.md', '/lab/pwa-icon.svg']
     for (const path of shell) await cache.put(path, new Response('installed A'))
     await Promise.all(Array.from({ length: 80 }, (_, i) => w.dispatch(`/lab/extra-${i}`, 'cors').finish()))
     const paths = (await cache.keys()).map((entry) => new URL(entry.url).pathname)

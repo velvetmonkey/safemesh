@@ -37,6 +37,43 @@ you can own the application work; convergence alone does not close these gaps.
 
 SafeMesh's convergence claim is conditional on missing deltas eventually being recovered. It does not prove network or radio delivery. A partition-and-heal example exercises modeled delivery faults; it cannot establish that your real transport will repair every gap. [Evidence: `CLAIMS.md`](https://github.com/velvetmonkey/safemesh/blob/main/CLAIMS.md) and [example scope](/safemesh/examples/).
 
+## You decode G-Set or RGA state from untrusted input
+
+Core G-Set and RGA wire decoding each default to a **4,096-entry ceiling**.
+G-Set checks its element count; RGA checks its placement count and tombstone
+count separately. A declared count of 4,097 is rejected before decoding or
+allocating those entries. Rust callers with larger trusted states can use
+`GSet::<u64>::from_wire_bytes_with_limits` or
+`Rga::<u64, u64>::from_wire_bytes_with_limits` with `CollectionLimits {
+max_elements: Some(n) }`. `None` removes the ceiling. These controls change
+decoding only; canonical encoded bytes are unchanged. Cap input bytes as well,
+since the element ceiling does not bound the size of the input buffer.
+
+An `EventLog<GSet<u64>>` or `EventLog<Rga<u64, u64>>` whose record payload
+exceeds the default fails to decode before replay. Rust callers can use
+`EventLog::from_wire_bytes_with_limits` with `DecodeLimits::max_collection_elements`
+to raise the nested ceiling. The record budget remains independent:
+
+```rust
+use safemesh_crdt::{DecodeLimits, EventLog, GSet, Record, RecordId};
+let records = [Record {
+    id: RecordId { replica: 0, sequence: 1 },
+    delta: GSet::<u64>::new(),
+}];
+let mut bytes = Vec::new();
+EventLog::encode_records(None, &records, &mut bytes).unwrap();
+let log = EventLog::<GSet<u64>>::from_wire_bytes_with_limits(
+    &bytes,
+    DecodeLimits { max_records: Some(1), max_collection_elements: Some(5_000) },
+).unwrap();
+assert_eq!(log.records().len(), 1);
+```
+
+For a destination CRDT, use `EventLog::from_wire_bytes_for_with_limits`
+to validate its shape before replay. `None` for `max_collection_elements`
+retains the 4,096 default. The supplied durable Rust adapters use
+G-Counter and OR-Set logs, so their ordinary restart paths are unaffected.
+
 ## You exchange peer versions from untrusted input
 
 `VersionVector::from_peer_prefixes` accepts positive prefixes through `u64::MAX`, including 1,000,001. It copies the prefix map and independent sequence-zero acknowledgements directly, taking O(r + z) time and additional space for r prefix entries and z zero acknowledgements. Prefix magnitude does not determine reconstruction work. A zero-valued prefix remains noncanonical; carry sequence-zero possession in `zero_replicas`.
@@ -47,7 +84,7 @@ Keep three application-owned limits at the receiving boundary; `VersionVector::f
 - **Zero-acknowledgement budget:** cap the zero-author set before reconstruction to bound set cloning; the prefix-entry budget does not cover it.
 - **Encoded-byte budget:** cap the version message before decoding to bound parsing and input allocation, including repeated entries that a map or set would deduplicate.
 
-SafeMesh has no built-in version wire codec or universal numeric budgets for these collections. Choose budgets for your application, and enforce entry budgets during decoding as well as before reconstruction. These limits bound input cost without imposing a writer-lifetime ceiling. Peer versions remain possession claims: reconstruction does not verify that the sender holds the records. Evidence: [`VersionVector`](/safemesh/reference/rust/safemesh_crdt/struct.VersionVector.html).
+SafeMesh has a built-in version wire codec with default ceilings of 4,096 authors and 4,096 zero acknowledgements. Applications can choose their own budgets with `VersionVector::from_wire_bytes_with_limits` and should bound encoded bytes before decoding. The peer-prefix constructors retain their caller-selected budgets. These limits bound input cost without imposing a writer-lifetime ceiling. Peer versions remain possession claims: reconstruction does not verify that the sender holds the records. Evidence: [`VersionVector`](/safemesh/reference/rust/safemesh_crdt/struct.VersionVector.html).
 
 ## You need consensus or leader election
 
