@@ -84,9 +84,6 @@ fn main() {
     let counter_dir = root.join("counter");
     let members_dir = root.join("members");
     if step == "persist" {
-        fs::create_dir(root).expect("use a fresh directory; never reset an existing writer");
-        fs::create_dir(&counter_dir).unwrap();
-        fs::create_dir(&members_dir).unwrap();
         let mut counter = Counter::counter(&counter_dir, config).unwrap();
         let mut members = Members::utf8_set(&members_dir, config).unwrap();
         // Each call commits its own transaction before returning.
