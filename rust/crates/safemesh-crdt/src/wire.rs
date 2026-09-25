@@ -567,7 +567,8 @@ impl<D: WireDecode> WireDecode for Record<D> {
 
 // Shape-bearing frame: tag, body length, complemented length,
 // body (shape marker, schema, arity, record count and length-prefixed records),
-// CRC of length fields + body. Old unshaped frames return MissingShape.
+// CRC of length fields + body. Tag 0x02 and unshaped 0x03 frames return
+// LegacyEventLogFrame; EventLog::migrate_legacy_wire_bytes_for re-encodes them.
 // u32::MAX cannot be the count of a valid old body within a u32 frame length.
 // Frame lengths, count and CRC are little-endian u32. Check the length pair before trusting it,
 // then verify the CRC before decoding any record or invoking a payload decoder.

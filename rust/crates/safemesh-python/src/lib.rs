@@ -59,6 +59,12 @@ fn encode_bytes<'py>(
         .map_err(|_| pyo3::exceptions::PyValueError::new_err(message))
 }
 
+// A legacy frame's core text names the frame found, the frame expected and the
+// migration step; surface it intact rather than as a generic decode failure.
+fn legacy_event_log_error(error: safemesh_crdt::WireError) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(format!("failed to decode event log: {error}"))
+}
+
 fn admission_name(admission: safemesh_crdt::Admission) -> String {
     match admission {
         safemesh_crdt::Admission::Accepted => "accepted",
@@ -522,6 +528,9 @@ mod py_g_counter_replica_python {
                         }
                         safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
                         safemesh_crdt::WireError::MissingShape => "event log missing shape",
+                        safemesh_crdt::WireError::LegacyEventLogFrame { .. } => {
+                            return legacy_event_log_error(error)
+                        }
                         _ => "failed to decode event log",
                     })
                 })?;
@@ -673,6 +682,9 @@ mod py_enable_wins_flag_replica_python {
                     }
                     safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
                     safemesh_crdt::WireError::MissingShape => "event log missing shape",
+                    safemesh_crdt::WireError::LegacyEventLogFrame { .. } => {
+                        return legacy_event_log_error(error)
+                    }
                     _ => "failed to decode event log",
                 })
             })?;
@@ -830,6 +842,9 @@ mod py_lww_map_replica_python {
                             }
                             safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
                             safemesh_crdt::WireError::MissingShape => "event log missing shape",
+                            safemesh_crdt::WireError::LegacyEventLogFrame { .. } => {
+                                return legacy_event_log_error(error)
+                            }
                             _ => "failed to decode event log",
                         })
                     })?;
@@ -965,6 +980,9 @@ mod py_lww_register_replica_python {
                             }
                             safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
                             safemesh_crdt::WireError::MissingShape => "event log missing shape",
+                            safemesh_crdt::WireError::LegacyEventLogFrame { .. } => {
+                                return legacy_event_log_error(error)
+                            }
                             _ => "failed to decode event log",
                         })
                     })?;
@@ -2023,6 +2041,69 @@ for make, append in [
             left.merge_log_bytes(&log_bytes).unwrap();
             assert_eq!(left.value_or(0), right.value_or(0));
             assert_eq!(left.writer_replica_or(0), 2);
+        });
+    }
+    #[test]
+    fn legacy_event_log_fixtures_raise_the_named_core_error() {
+        use safemesh_crdt::{LegacyFrame, WireError};
+        macro_rules! fixture {
+            ($frame:literal, $name:literal) => {
+                include_bytes!(concat!(
+                    "../../safemesh-crdt/tests/fixtures/legacy-event-log/",
+                    $frame,
+                    "/",
+                    $name
+                ))
+                .as_slice()
+            };
+        }
+        with_python(|py| {
+            let cases = [
+                (
+                    "tag02",
+                    LegacyFrame::Tag02,
+                    [
+                        fixture!("tag02", "gcounter.log"),
+                        fixture!("tag02", "enable-wins-flag-u64.log"),
+                        fixture!("tag02", "lww-map-u64.log"),
+                        fixture!("tag02", "lww-register-u64.log"),
+                    ],
+                ),
+                (
+                    "tag03-unshaped",
+                    LegacyFrame::Tag03Unshaped,
+                    [
+                        fixture!("tag03-unshaped", "gcounter.log"),
+                        fixture!("tag03-unshaped", "enable-wins-flag-u64.log"),
+                        fixture!("tag03-unshaped", "lww-map-u64.log"),
+                        fixture!("tag03-unshaped", "lww-register-u64.log"),
+                    ],
+                ),
+            ];
+            for (frame, found, [counter, flag, map, register]) in cases {
+                let core = WireError::LegacyEventLogFrame { found }.to_string();
+                let expected = format!("ValueError: failed to decode event log: {core}");
+                let mut c = PyGCounterReplica::new(0, 2);
+                let mut f = PyEnableWinsFlagReplica::new(0);
+                let mut m = PyLwwMapReplica::new(0);
+                let mut r = PyLwwRegisterReplica::new(0);
+                let errors = [
+                    c.merge_log_bytes(counter).unwrap_err(),
+                    f.merge_log_bytes(flag).unwrap_err(),
+                    m.merge_log_bytes(map).unwrap_err(),
+                    r.merge_log_bytes(register).unwrap_err(),
+                ];
+                for error in errors {
+                    assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
+                    assert_eq!(error.to_string(), expected, "{frame}");
+                }
+                println!("Python {frame}: {expected}");
+                assert_eq!(c.value(), 0);
+                assert!(c.log.records().is_empty());
+                assert!(f.log.records().is_empty());
+                assert!(m.log.records().is_empty());
+                assert!(r.log.records().is_empty());
+            }
         });
     }
 }
