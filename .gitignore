@@ -4,3 +4,4 @@
 **/.lake/
 # misc
 .DS_Store
+.assurance-runs/

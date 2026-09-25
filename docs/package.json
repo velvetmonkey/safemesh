@@ -13,7 +13,7 @@
     "check:lab-index": "node check-lab-index.mjs",
     "preview": "astro preview --host localhost --port 4320",
     "build:site": "node build-site.mjs",
-    "test": "node --test assurance.test.mjs",
+    "test": "node --test --test-reporter=tap assurance.test.mjs",
     "derive:images": "node derive-images.mjs",
     "check:images": "node derive-images.mjs --check"
   },
