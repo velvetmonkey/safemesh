@@ -130,6 +130,43 @@ damaged store for inspection and recover only from a known consistent copy with
 its original writer identity and allocation metadata. Never reset an existing
 writer's fence/history.
 
+`Configuration` on `restart` (Display: `invalid or mismatched local writer
+configuration`) means the requested writer configuration disagrees with stored
+identity or allocation metadata. Check the writer flag and writer count used at
+restart against those used when the store was created, then retry with the
+original settings. If the stored fence or transaction metadata itself differs,
+retain the store for inspection and recover only from a known consistent copy
+with its original writer identity and allocation metadata. Do not initialize
+over the affected store.
+
+`Io(Os { code: 20, kind: NotADirectory, message: "Not a directory" })` on
+`restart` (Display: `local store I/O failed: Not a directory (os error 20)`)
+can mean an expected store directory is a file on Linux. Check that the store
+path is a directory. Retain the affected path for inspection and recover the
+directory only from a known consistent copy with its original writer identity
+and allocation metadata; then retry `restart`. Do not initialize over it.
+
+`Io(Os { code: 2, kind: NotFound, message: "No such file or directory" })`
+on `restart` (Display: `local store I/O failed: No such file or directory
+(os error 2)`) can mean a stored writer transaction is missing. Check that
+both the writer fence and transaction are present in each store. Retain what
+remains for inspection and recover the missing file only from a known consistent
+copy with its original writer identity and allocation metadata; then retry
+`restart`. Do not initialize over the store.
+
+`InvalidHistory` on `restart` (Display: `local history failed replay or
+sequence validation`) can mean the transaction's stored sequence does not
+match its replayed history. Retain the store for inspection; recover only from
+a known consistent copy with its original writer identity and allocation
+metadata, then retry `restart`. Do not initialize over the store.
+
+`Exhausted` on `restart` (Display: `local writer sequence, generation, or token
+allocation exhausted`) can mean the stored fence generation cannot advance.
+Retain the store for inspection and check its generation and allocation
+metadata. Recover only from a known consistent copy with its original writer
+identity and allocation metadata, then retry `restart`; do not reset the fence
+or initialize over the store.
+
 `History(UnexpectedEof)` on `restart` (Display: `local history wire validation
 failed: unexpected end of wire input`) means the stored transaction is truncated
 or incomplete. `History(IntegrityMismatch)` (Display: `local history wire
