@@ -139,6 +139,16 @@ inspection; restart does not salvage a torn or corrupted record. Investigate
 the failed write or transfer, and recover only from a known consistent history
 with its original identity and allocation metadata. Do not initialize over the
 damaged store. These are tested engineering outcomes, not proofs of crash safety.
+`History(TrailingBytes)` (Display: `local history wire validation failed:
+unexpected trailing bytes after wire value`) means the stored transaction has
+bytes after its complete wire value. `History(InvalidTag)` (Display: `local
+history wire validation failed: unexpected wire tag`) means its wire tag is
+invalid. `History(DeltaTypeMismatch)` (Display: `local history wire validation
+failed: wire delta schema does not match the expected type`) means the stored
+transaction has the wrong delta schema. For each, retain the damaged store for
+inspection; restart does not salvage the record. Investigate the failed write
+or transfer, and recover only from a known consistent history with its original
+identity and allocation metadata. Do not initialize over the damaged store.
 See the [recovery evidence](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md).
 
 <a id="predict-then-run-a-concurrent-add-and-remove"></a>
