@@ -181,6 +181,165 @@ fn gset_and_rga_collection_limits() {
 }
 
 #[test]
+fn event_log_nested_collection_budget_preserves_persisted_bytes() {
+    use safemesh_crdt::{Crdt, DecodeError, DecodeLimits, MergeError, Mergeable, WireError};
+    struct SetCarrier(GSet<u64>);
+    impl Mergeable for SetCarrier {
+        fn merge(&mut self, other: &Self) -> Result<(), MergeError> {
+            self.0.merge(&other.0);
+            Ok(())
+        }
+    }
+    impl Crdt for SetCarrier {
+        type Delta = GSet<u64>;
+        fn validate_record(&self, _: RecordId, _: &Self::Delta) -> Result<(), WireError> {
+            Ok(())
+        }
+        fn apply_delta(&mut self, delta: Self::Delta) {
+            self.0.merge(&delta);
+        }
+    }
+    let mut state = GSet::new();
+    for value in 0..5000 {
+        state.insert(value);
+    }
+    let record = Record {
+        id: RecordId {
+            replica: 7,
+            sequence: 1,
+        },
+        delta: state.clone(),
+    };
+    let mut persisted = Vec::new();
+    EventLog::encode_records(None, &[record], &mut persisted).unwrap();
+    assert_eq!(persisted.len(), 40076);
+    let default_error =
+        DecodeError::Wire(WireError::CollectionElementLimitExceeded { max_elements: 4096 });
+    assert_eq!(
+        EventLog::<GSet<u64>>::from_wire_bytes(&persisted),
+        Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+    );
+    assert_eq!(
+        EventLog::<GSet<u64>>::from_wire_bytes_with_limits(&persisted, DecodeLimits::default()),
+        Err(default_error)
+    );
+    assert_eq!(
+        EventLog::<GSet<u64>>::from_wire_bytes_with_limits(
+            &persisted,
+            DecodeLimits {
+                max_records: Some(1),
+                max_collection_elements: Some(4999)
+            }
+        ),
+        Err(DecodeError::Wire(
+            WireError::CollectionElementLimitExceeded { max_elements: 4999 }
+        ))
+    );
+    let loaded = EventLog::<GSet<u64>>::from_wire_bytes_with_limits(
+        &persisted,
+        DecodeLimits {
+            max_records: Some(1),
+            max_collection_elements: Some(5000),
+        },
+    )
+    .unwrap();
+    assert_eq!(loaded.records().len(), 1);
+    let destination = SetCarrier(GSet::new());
+    assert_eq!(
+        EventLog::<GSet<u64>>::from_wire_bytes_for(&persisted, &destination),
+        Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+    );
+    assert_eq!(
+        EventLog::<GSet<u64>>::from_wire_bytes_for_with_limits(
+            &persisted,
+            &destination,
+            DecodeLimits {
+                max_records: Some(1),
+                max_collection_elements: Some(5000)
+            },
+        )
+        .unwrap()
+        .to_wire_bytes()
+        .unwrap(),
+        persisted
+    );
+    assert_eq!(
+        EventLog::<GSet<u64>>::records_from_wire_bytes_for_with_limits(
+            &persisted,
+            &destination,
+            DecodeLimits {
+                max_records: Some(1),
+                max_collection_elements: Some(5000)
+            },
+        )
+        .unwrap()
+        .len(),
+        1
+    );
+    let mut replayed = GSet::new();
+    for record in loaded.records() {
+        replayed.merge(&record.delta);
+    }
+    assert_eq!(replayed, state);
+    assert_eq!(loaded.to_wire_bytes().unwrap(), persisted);
+    assert_eq!(
+        EventLog::<GSet<u64>>::from_wire_bytes_with_limits(
+            &persisted,
+            DecodeLimits {
+                max_records: Some(0),
+                max_collection_elements: Some(5000)
+            }
+        ),
+        Err(DecodeError::RecordLimitExceeded { max_records: 0 })
+    );
+}
+
+#[test]
+fn event_log_rga_payload_uses_collection_budget() {
+    use safemesh_crdt::{DecodeError, DecodeLimits};
+    let mut state = Rga::<u64, u64>::new();
+    for value in 0..5000 {
+        state.insert(value, value);
+        state.delete(value);
+    }
+    let records = [Record {
+        id: RecordId {
+            replica: 7,
+            sequence: 1,
+        },
+        delta: state.clone(),
+    }];
+    let mut bytes = Vec::new();
+    EventLog::encode_records(None, &records, &mut bytes).unwrap();
+    assert_eq!(
+        EventLog::<Rga<u64, u64>>::from_wire_bytes(&bytes),
+        Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+    );
+    let loaded = EventLog::<Rga<u64, u64>>::from_wire_bytes_with_limits(
+        &bytes,
+        DecodeLimits {
+            max_records: Some(1),
+            max_collection_elements: Some(5000),
+        },
+    )
+    .unwrap();
+    assert_eq!(loaded.records()[0].delta, state);
+    assert_eq!(loaded.to_wire_bytes().unwrap(), bytes);
+    assert_eq!(
+        EventLog::<Rga<u64, u64>>::from_wire_bytes_with_limits(
+            &bytes,
+            DecodeLimits {
+                max_records: Some(1),
+                max_collection_elements: Some(4999)
+            }
+        ),
+        Err(DecodeError::Wire(
+            WireError::CollectionElementLimitExceeded { max_elements: 4999 }
+        ))
+    );
+}
+
+#[test]
 fn rga_delta_variants_roundtrip_and_refuse_corruption() {
     for delta in [
         RgaDelta::Insert {
@@ -1073,6 +1232,7 @@ fn decode_budget_stops_planted_frame() {
         &bytes,
         safemesh_crdt::DecodeLimits {
             max_records: Some(8),
+            ..Default::default()
         },
     );
     assert_eq!(
@@ -1092,7 +1252,10 @@ fn decode_budget_boundaries_duplicates_and_default() {
             BUDGET_PAYLOAD_READS.with(|reads| reads.set(0));
             let decoded = EventLog::<BudgetPayload>::from_wire_bytes_with_limits(
                 &bytes,
-                DecodeLimits { max_records: limit },
+                DecodeLimits {
+                    max_records: limit,
+                    ..Default::default()
+                },
             )
             .unwrap();
             assert_eq!(decoded, old);
@@ -1106,7 +1269,8 @@ fn decode_budget_boundaries_duplicates_and_default() {
                     EventLog::<BudgetPayload>::from_wire_bytes_with_limits(
                         &bytes,
                         DecodeLimits {
-                            max_records: Some(max_records)
+                            max_records: Some(max_records),
+                            ..Default::default()
                         }
                     ),
                     Err(DecodeError::RecordLimitExceeded { max_records })
@@ -1132,7 +1296,8 @@ fn decode_budget_boundaries_duplicates_and_default() {
             EventLog::<BudgetPayload>::from_wire_bytes_with_limits(
                 &corrupt,
                 DecodeLimits {
-                    max_records: Some(0)
+                    max_records: Some(0),
+                    ..Default::default()
                 }
             ),
             Err(DecodeError::Wire(WireError::IntegrityMismatch))

@@ -133,6 +133,9 @@ pub struct DecodeLimits {
     /// `None` is unbounded; `Some(0)` admits only empty logs.
     /// This does not bound bytes, nested records, or collection entries in a payload.
     pub max_records: Option<usize>,
+    /// Maximum elements in each nested G-Set or RGA collection. `None` uses
+    /// the default ceiling of 4,096; use `Some(n)` to set an explicit ceiling.
+    pub max_collection_elements: Option<usize>,
 }
 
 /// Failure from the opt-in bounded event-log decoder.
@@ -237,8 +240,11 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
     /// let mut bytes = Vec::new();
     /// EventLog::encode_records(None, &records, &mut bytes).unwrap();
     /// assert_eq!(EventLog::<GSet<u64>>::from_wire_bytes_with_limits(
-    ///     &bytes, DecodeLimits { max_records: Some(0) }),
+    ///     &bytes, DecodeLimits { max_records: Some(0), ..DecodeLimits::default() }),
     ///     Err(DecodeError::RecordLimitExceeded { max_records: 0 }));
+    /// let log = EventLog::<GSet<u64>>::from_wire_bytes_with_limits(
+    ///     &bytes, DecodeLimits { max_records: Some(1), max_collection_elements: Some(5_000) }).unwrap();
+    /// assert_eq!(log.records().len(), 1);
     /// ```
     pub fn from_wire_bytes_with_limits(
         bytes: &[u8],
@@ -247,6 +253,11 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
         let mut cursor = WireCursor::new(bytes);
         let log = Self::decode_with(
             &mut cursor,
+            CollectionLimits {
+                max_elements: limits
+                    .max_collection_elements
+                    .or(CollectionLimits::WIRE_DEFAULT.max_elements),
+            },
             |_| {},
             |index| {
                 if let Some(max_records) = limits.max_records {
@@ -275,6 +286,18 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
         Ok(log)
     }
 
+    /// Decode with record and nested collection budgets, then validate the
+    /// saved shape and records against the destination before replay.
+    pub fn from_wire_bytes_for_with_limits<C: Crdt<Delta = D>>(
+        bytes: &[u8],
+        state: &C,
+        limits: DecodeLimits,
+    ) -> Result<Self, DecodeError> {
+        let log = Self::from_wire_bytes_with_limits(bytes, limits)?;
+        log.validate_for(state)?;
+        Ok(log)
+    }
+
     /// Decode all input occurrences in order for per-record admission reporting.
     /// Validate the entire frame, collisions and destination shape before returning.
     /// The ordinary log loaders continue to deduplicate identical records.
@@ -289,11 +312,48 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
         let mut cursor = WireCursor::new(bytes);
         let log = Self::decode_with(
             &mut cursor,
+            CollectionLimits::WIRE_DEFAULT,
             |record| records.push(record.clone()),
             |_| Ok::<(), WireError>(()),
         )?;
         if !cursor.is_empty() {
             return Err(WireError::TrailingBytes);
+        }
+        log.validate_for(state)?;
+        Ok(records)
+    }
+
+    /// Decode each occurrence with record and nested collection budgets, then
+    /// validate the destination before returning the occurrences.
+    pub fn records_from_wire_bytes_for_with_limits<C: Crdt<Delta = D>>(
+        bytes: &[u8],
+        state: &C,
+        limits: DecodeLimits,
+    ) -> Result<Vec<Record<D>>, DecodeError>
+    where
+        D: Clone,
+    {
+        let mut records = Vec::new();
+        let mut cursor = WireCursor::new(bytes);
+        let log = Self::decode_with(
+            &mut cursor,
+            CollectionLimits {
+                max_elements: limits
+                    .max_collection_elements
+                    .or(CollectionLimits::WIRE_DEFAULT.max_elements),
+            },
+            |record| records.push(record.clone()),
+            |index| {
+                if let Some(max_records) = limits.max_records {
+                    if index >= max_records {
+                        return Err(DecodeError::RecordLimitExceeded { max_records });
+                    }
+                }
+                Ok(())
+            },
+        )?;
+        if !cursor.is_empty() {
+            return Err(WireError::TrailingBytes.into());
         }
         log.validate_for(state)?;
         Ok(records)
@@ -346,6 +406,15 @@ pub trait WireEncode {
 pub trait WireDecode: Sized {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError>;
 
+    /// Decode a nested payload with a collection budget. Other payload types
+    /// retain their ordinary decoder unless they implement this method.
+    fn decode_wire_with_collection_limits(
+        cursor: &mut WireCursor<'_>,
+        _limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
+        Self::decode_wire(cursor)
+    }
+
     fn from_wire_bytes(bytes: &[u8]) -> Result<Self, WireError> {
         let mut cursor = WireCursor::new(bytes);
         let value = Self::decode_wire(&mut cursor)?;
@@ -354,6 +423,21 @@ pub trait WireDecode: Sized {
         } else {
             Err(WireError::TrailingBytes)
         }
+    }
+}
+
+impl<D: WireDecode> Record<D> {
+    /// Decode a record with an explicit budget for nested G-Set or RGA state.
+    pub fn from_wire_bytes_with_collection_limits(
+        bytes: &[u8],
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
+        let mut cursor = WireCursor::new(bytes);
+        let record = Self::decode_wire_with_collection_limits(&mut cursor, limits)?;
+        if !cursor.is_empty() {
+            return Err(WireError::TrailingBytes);
+        }
+        Ok(record)
     }
 }
 
@@ -530,6 +614,7 @@ impl<D: WireEncode + WireSchema> EventLog<D> {
 impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
     pub(super) fn decode_with<E: From<WireError>>(
         cursor: &mut WireCursor<'_>,
+        collection_limits: CollectionLimits,
         mut occurrence: impl FnMut(&Record<D>),
         mut before_record: impl FnMut(usize) -> Result<(), E>,
     ) -> Result<Self, E> {
@@ -568,7 +653,14 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
             before_record(index)?;
             let record_len = body.read_len()?;
             let record_bytes = body.read_exact(record_len)?;
-            let record = Record::<D>::from_wire_bytes(record_bytes)?;
+            let mut record_cursor = WireCursor::new(record_bytes);
+            let record = Record::<D>::decode_wire_with_collection_limits(
+                &mut record_cursor,
+                collection_limits,
+            )?;
+            if !record_cursor.is_empty() {
+                return Err(WireError::TrailingBytes.into());
+            }
             occurrence(&record);
             match log.identity_admission(&record) {
                 Admission::Collision => return Err(WireError::RecordCollision.into()),

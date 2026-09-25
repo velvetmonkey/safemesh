@@ -50,10 +50,28 @@ decoding only; canonical encoded bytes are unchanged. Cap input bytes as well,
 since the element ceiling does not bound the size of the input buffer.
 
 An `EventLog<GSet<u64>>` or `EventLog<Rga<u64, u64>>` whose record payload
-exceeds the default now fails to decode before replay; `DecodeLimits` controls
-only the top-level record count and cannot raise a nested collection ceiling.
-Applications retaining such logs need a migration or a custom, explicitly
-budgeted payload decoder before replay. The supplied durable Rust adapters use
+exceeds the default fails to decode before replay. Rust callers can use
+`EventLog::from_wire_bytes_with_limits` with `DecodeLimits::max_collection_elements`
+to raise the nested ceiling. The record budget remains independent:
+
+```rust
+use safemesh_crdt::{DecodeLimits, EventLog, GSet, Record, RecordId};
+let records = [Record {
+    id: RecordId { replica: 0, sequence: 1 },
+    delta: GSet::<u64>::new(),
+}];
+let mut bytes = Vec::new();
+EventLog::encode_records(None, &records, &mut bytes).unwrap();
+let log = EventLog::<GSet<u64>>::from_wire_bytes_with_limits(
+    &bytes,
+    DecodeLimits { max_records: Some(1), max_collection_elements: Some(5_000) },
+).unwrap();
+assert_eq!(log.records().len(), 1);
+```
+
+For a destination CRDT, use `EventLog::from_wire_bytes_for_with_limits`
+to validate its shape before replay. `None` for `max_collection_elements`
+retains the 4,096 default. The supplied durable Rust adapters use
 G-Counter and OR-Set logs, so their ordinary restart paths are unaffected.
 
 ## You exchange peer versions from untrusted input

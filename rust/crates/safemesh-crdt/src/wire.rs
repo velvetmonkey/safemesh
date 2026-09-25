@@ -177,6 +177,12 @@ impl WireDecode for GSet<u64> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
         Self::decode_with_limits(cursor, CollectionLimits::WIRE_DEFAULT)
     }
+    fn decode_wire_with_collection_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
+        Self::decode_with_limits(cursor, limits)
+    }
 }
 
 fn check_collection_count(count: usize, limits: CollectionLimits) -> Result<(), WireError> {
@@ -431,6 +437,12 @@ impl WireDecode for Rga<u64, u64> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
         Self::decode_with_limits(cursor, CollectionLimits::WIRE_DEFAULT)
     }
+    fn decode_wire_with_collection_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
+        Self::decode_with_limits(cursor, limits)
+    }
 }
 
 impl Rga<u64, u64> {
@@ -482,6 +494,13 @@ impl<D: WireEncode> WireEncode for Record<D> {
 
 impl<D: WireDecode> WireDecode for Record<D> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        Self::decode_wire_with_collection_limits(cursor, CollectionLimits::WIRE_DEFAULT)
+    }
+
+    fn decode_wire_with_collection_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
         read_tag(cursor, TAG_RECORD)?;
         let id = RecordId {
             replica: cursor.read_u64()?,
@@ -489,7 +508,11 @@ impl<D: WireDecode> WireDecode for Record<D> {
         };
         let delta_len = cursor.read_len()?;
         let delta_bytes = cursor.read_exact(delta_len)?;
-        let delta = D::from_wire_bytes(delta_bytes)?;
+        let mut delta_cursor = WireCursor::new(delta_bytes);
+        let delta = D::decode_wire_with_collection_limits(&mut delta_cursor, limits)?;
+        if !delta_cursor.is_empty() {
+            return Err(WireError::TrailingBytes);
+        }
         Ok(Record { id, delta })
     }
 }
@@ -508,7 +531,19 @@ impl<D: WireEncode + WireSchema> WireEncode for EventLog<D> {
 
 impl<D: WireDecode + WireSchema + PartialEq> WireDecode for EventLog<D> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
-        Self::decode_with(cursor, |_| {}, |_| Ok::<(), WireError>(()))
+        Self::decode_with(
+            cursor,
+            CollectionLimits::WIRE_DEFAULT,
+            |_| {},
+            |_| Ok::<(), WireError>(()),
+        )
+    }
+
+    fn decode_wire_with_collection_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
+        Self::decode_with(cursor, limits, |_| {}, |_| Ok::<(), WireError>(()))
     }
 }
 
