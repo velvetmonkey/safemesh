@@ -71,9 +71,10 @@ does not discard the review.
 
 The interface displays `Saving…` until the service responds, then
 `Saved on this device` only following successful durable `add`.
-A real write error displays `Not saved — local storage error` and retains the
-draft. SafeMesh revokes further writes after persistence failure; restart the
-service after addressing the storage problem.
+A real write error displays `Not saved — local storage error; fix the storage
+problem, then reopen` followed by the plain OS reason, and retains the draft.
+SafeMesh revokes further writes after persistence failure; restart the service
+after addressing the storage problem.
 
 ## Force-kill journey
 
@@ -99,11 +100,14 @@ named `writer-0.tmp` inside it after startup but before saving. File creation
 then fails with EISDIR; the interface retains the draft. Remove that empty
 directory and kill/reopen the service to retry.
 
-`Could not recover this checklist` means replay or application validation
-failed. The application never substitutes an empty checklist for a damaged
-store. Unsupported schemas, removals, unexpected writers and event-ID
-collisions are rejected. Resubmitting exactly the same event returns its original
-record and sequence; the same ID with different content is refused.
+`Store parent directory does not exist; create the parent and reopen` identifies
+a missing parent path. `Another Fieldcheck process owns this store; close it and
+reopen` identifies a live owner. `Could not recover this checklist; inspect the
+damaged store before reopening` means replay or application validation failed.
+The application never substitutes an empty checklist for a damaged store.
+Unsupported schemas, removals, unexpected writers and event-ID collisions are
+rejected. Resubmitting exactly the same event returns its original record and
+sequence; the same ID with different content is refused.
 
 This adapts the create/restart pattern from `../gold-path/rust`, whose sequential
 example has no service/UI scaffold and also demonstrates a second writer.
