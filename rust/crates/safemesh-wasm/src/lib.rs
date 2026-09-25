@@ -138,6 +138,10 @@ fn decode_limits(value: Option<u32>) -> DecodeLimits {
 
 fn event_log_decode_js_error(error: DecodeError) -> JsValue {
     match error {
+        DecodeError::Wire(WireError::OwnershipViolation) => safe_mesh_error(
+            2,
+            "counter coordinate out of range or not owned by record author",
+        ),
         DecodeError::Wire(WireError::CollectionElementLimitExceeded { max_elements }) => {
             safe_mesh_error(
                 3,
@@ -152,8 +156,7 @@ fn event_log_decode_js_error(error: DecodeError) -> JsValue {
             safe_mesh_error(1, "delta type mismatch")
         }
         DecodeError::Wire(WireError::MissingShape) => safe_mesh_error(1, "event log missing shape"),
-        DecodeError::Wire(WireError::OwnershipViolation)
-        | DecodeError::RecordLimitExceeded { .. } => {
+        DecodeError::RecordLimitExceeded { .. } => {
             safe_mesh_error(1, "failed to decode event log")
         }
         DecodeError::Wire(cause) => {

@@ -73,7 +73,9 @@ fn event_log_decode_error(error: safemesh_crdt::WireError) -> PyErr {
         }
         safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch".to_owned(),
         safemesh_crdt::WireError::MissingShape => "event log missing shape".to_owned(),
-        safemesh_crdt::WireError::OwnershipViolation => "failed to decode event log".to_owned(),
+        safemesh_crdt::WireError::OwnershipViolation => {
+            "counter coordinate out of range or not owned by record author".to_owned()
+        }
         cause => format!("failed to decode event log: {cause}"),
     })
 }
@@ -2359,24 +2361,72 @@ mod admission_tests {
         Python::with_gil(|py| {
             let mut replica = PyGCounterReplica::new(1, 2);
             assert!(replica.append_bump(py, 2, 5).is_err());
-            let record = Record {
-                id: RecordId {
-                    replica: 1,
-                    sequence: 1,
-                },
-                delta: GCounterDelta {
-                    replica: 2,
-                    tally: 5,
-                },
-            };
-            assert!(replica
-                .merge_record_bytes(&record.to_wire_bytes().unwrap())
-                .is_err());
-            let mut bytes = Vec::new();
-            EventLog::encode_records(Some(2), &[record], &mut bytes).unwrap();
-            assert!(replica.merge_log_bytes(&bytes).is_err());
+            let mut errors = Vec::new();
+            for (name, coordinate) in [("out-of-range", 2), ("not-owned", 0)] {
+                let record = Record {
+                    id: RecordId {
+                        replica: 1,
+                        sequence: 1,
+                    },
+                    delta: GCounterDelta {
+                        replica: coordinate,
+                        tally: 5,
+                    },
+                };
+                let single = replica
+                    .merge_record_bytes(&record.to_wire_bytes().unwrap())
+                    .unwrap_err()
+                    .to_string();
+                let mut bytes = Vec::new();
+                EventLog::encode_records(Some(2), &[record], &mut bytes).unwrap();
+                let log = replica.merge_log_bytes(&bytes).unwrap_err().to_string();
+                println!("Python {name}: single={single:?}, log={log:?}");
+                errors.push((name, single, log));
+            }
+            for (name, single, log) in errors {
+                assert_eq!(log, single, "{name} ownership error differs by path");
+                assert_eq!(
+                    single,
+                    "ValueError: counter coordinate out of range or not owned by record author"
+                );
+            }
             assert_eq!(replica.value(), 0);
             assert!(replica.log.records().is_empty());
         });
+    }
+
+    #[test]
+    fn invalid_second_counter_log_record_admits_neither_record() {
+        pyo3::prepare_freethreaded_python();
+        let mut replica = PyGCounterReplica::new(0, 2);
+        let good = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 1,
+            },
+            delta: GCounterDelta {
+                replica: 1,
+                tally: 5,
+            },
+        };
+        let bad = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 2,
+            },
+            delta: GCounterDelta {
+                replica: 0,
+                tally: 6,
+            },
+        };
+        let mut bytes = Vec::new();
+        EventLog::encode_records(Some(2), &[good, bad], &mut bytes).unwrap();
+        let error = replica.merge_log_bytes(&bytes).unwrap_err().to_string();
+        println!(
+            "Python good-then-bad: error={error:?}, value={}",
+            replica.value()
+        );
+        assert_eq!(replica.value(), 0);
+        assert!(replica.log.records().is_empty());
     }
 }
