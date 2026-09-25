@@ -61,7 +61,7 @@ where
     println!(
         "{name}: package={} log_trait_schema={}",
         env!("CARGO_PKG_VERSION"),
-        String::from_utf8(EventLog::<C::Delta>::wire_schema().into_owned()).unwrap()
+        String::from_utf8(EventLog::<C::Delta>::wire_schema()).unwrap()
     );
 }
 #[test]
@@ -112,38 +112,32 @@ fn generate_bootstrap() {
     retain(&out, &root, "orset", &s);
     let mut pn = EventLog::for_crdt(&PnCounter::new(2));
     assert_eq!(
-        pn.insert_record(
-            &PnCounter::new(2),
-            record(
-                0,
-                1,
-                PnCounterDelta::Inc {
-                    replica: 0,
-                    tally: 9
-                }
-            )
-        ),
+        pn.insert_record(record(
+            0,
+            1,
+            PnCounterDelta::Inc {
+                replica: 0,
+                tally: 9
+            }
+        )),
         Admission::Accepted
     );
     assert_eq!(
-        pn.insert_record(
-            &PnCounter::new(2),
-            record(
-                1,
-                3,
-                PnCounterDelta::Dec {
-                    replica: 1,
-                    tally: 4
-                }
-            )
-        ),
+        pn.insert_record(record(
+            1,
+            3,
+            PnCounterDelta::Dec {
+                replica: 1,
+                tally: 4
+            }
+        )),
         Admission::Accepted
     );
     write_new(&out, "pn.log", &pn.to_wire_bytes().unwrap());
     println!(
         "pn: package={} log_trait_schema={}",
         env!("CARGO_PKG_VERSION"),
-        String::from_utf8(EventLog::<PnCounterDelta>::wire_schema().into_owned()).unwrap()
+        String::from_utf8(EventLog::<PnCounterDelta>::wire_schema()).unwrap()
     );
     let mut gs = GSet::<u64>::new();
     gs.insert(7);
@@ -156,7 +150,7 @@ fn generate_bootstrap() {
     write_new(&out, "rga.state", &rga.to_wire_bytes().unwrap());
     println!(
         "state schemas (not embedded): {} {}",
-        String::from_utf8(GSet::<u64>::wire_schema().into_owned()).unwrap(),
-        String::from_utf8(Rga::<u64, u64>::wire_schema().into_owned()).unwrap()
+        String::from_utf8(GSet::<u64>::wire_schema()).unwrap(),
+        String::from_utf8(Rga::<u64, u64>::wire_schema()).unwrap()
     );
 }
