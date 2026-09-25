@@ -5,6 +5,15 @@ Reproduction commands use **Rust 1.96.1**, the full-gate CI and demo toolchain; 
 
 Use Node.js 22.12 or newer and run these commands from the repository root.
 
+The homepage runs the Rust G-Counter through WASM. Both `dev` and `build`
+prepare that module with `wasm-pack` 0.15.0 and the Rust
+`wasm32-unknown-unknown` target (no Lean toolchain). Install the tools with
+`cargo install wasm-pack --version 0.15.0 --locked` and
+`rustup target add wasm32-unknown-unknown` before either command.
+The header checks public GitHub release metadata at build time; a failed lookup
+fails the build rather than guessing release status. `GITHUB_TOKEN` is optional
+for authenticated API rate limits.
+
 Develop:
 
 ```sh
@@ -96,3 +105,14 @@ source, and run `node docs/check-assurance.mjs`: stale HTML must fail. Rebuild t
 see the sentence change on the site, then restore the sentence and rebuild. A
 changed evidence URL or edited built article must fail in the same way. The
 normal build includes this check before reference generation and final indexing.
+
+## Homepage browser checks
+
+After building, serve `docs/dist` at the configured base path and run
+`DOCS_URL=http://localhost:4320/safemesh/ node --test docs/home.browser.test.mjs`.
+Install the browser with `npm --prefix web ci` and
+`cd web && npx playwright install chromium` first. The test checks Rust source
+fidelity, real WASM merge/replay, keyboard input, reduced motion, mobile layout
+and the no-JavaScript result. `SCREENSHOT_DIR` optionally saves four screenshots.
+The retained storyboard and counter mesh live at `merge-illustrations/`; run
+`docs/convergence.browser.test.mjs` with `DOCS_URL` pointing to that page.

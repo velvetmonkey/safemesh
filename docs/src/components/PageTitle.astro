@@ -1,0 +1,5 @@
+---
+import Default from '@astrojs/starlight/components/PageTitle.astro';
+const home = Astro.locals.starlightRoute.entry.id === '';
+---
+{!home && <Default><slot /></Default>}

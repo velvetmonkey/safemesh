@@ -1,4 +1,5 @@
 ---
+import { releaseStatus } from '../../release-status.mjs';
 import Search from '@astrojs/starlight/components/Search.astro';
 import ThemeSelect from '@astrojs/starlight/components/ThemeSelect.astro';
 const labUrl = import.meta.env.LAB_URL || 'http://localhost:4173/';
@@ -8,21 +9,14 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 ---
 <div class="sm-header">
   <a class="sm-brand" href={import.meta.env.BASE_URL} aria-label="SafeMesh documentation home">
-    <svg viewBox="0 0 32 32" aria-hidden="true" class="sm-brand-mark">
-      <path d="M16 5 5 26h22Z" fill="none" stroke="currentColor" stroke-width="1.4"></path>
-      <g fill="currentColor">
-        <circle cx="16" cy="5" r="3"></circle>
-        <circle cx="5" cy="26" r="3"></circle>
-        <circle cx="27" cy="26" r="3"></circle>
-      </g>
-    </svg>
-    SafeMesh<small>Docs</small>
+    SafeMesh
   </a>
   <nav class="sm-nav" aria-label="Global">
-    <a href={import.meta.env.BASE_URL}>Docs</a>
+    <a href={`${base}/getting-started/`}>Guides</a>
+    <a href={`${base}/reference/`}>API</a>
     <a href={lab.href}>Lab</a>
-    <a href={`${base}/examples/`}>Examples</a>
     <a href="https://github.com/velvetmonkey/safemesh">GitHub</a>
+    <a class="sm-release" href="https://github.com/velvetmonkey/safemesh/releases">{releaseStatus}</a>
   </nav>
   <div class="sm-tools"><Search /><ThemeSelect /></div>
 </div>
@@ -50,6 +44,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     color: var(--sl-color-text);
   }
   .sm-nav { flex-wrap: wrap; }
+  .sm-nav .sm-release { font-size: .7rem; font-weight: 400; border: 1px solid var(--sm-line); border-radius: .3rem; padding: .3rem .55rem; }
   .sm-nav a { color: var(--sl-color-text); text-decoration: none; font-weight: 600; font-size: .875rem; }
   .sm-nav a:hover { color: var(--sl-color-white); text-decoration: underline; }
   .sm-nav a:focus-visible { outline: 2px solid var(--sm-blue); outline-offset: 4px; }
@@ -60,7 +55,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
     .sm-brand small { display: none; }
   }
   @media (max-width: 30rem) {
-    :global(:root) { --sl-nav-height: 6rem; }
+    :global(:root) { --sl-nav-height: 8rem; }
     .sm-header { display: grid; grid-template-columns: 1fr auto; gap: .25rem .5rem; }
     .sm-brand { grid-column: 1; grid-row: 1; }
     .sm-brand small { display: inline; }

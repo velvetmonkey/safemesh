@@ -1,26 +1,15 @@
 ---
-// The text side of the homepage hero. Starlight's own <PageTitle/> already
-// renders the page's single <h1> from frontmatter (index.mdx has no `hero:`
-// frontmatter, so Starlight falls through to that default). This component
-// supplies the supporting tagline, lead paragraph and primary task actions —
-// no heading elements of its own, to keep the page at exactly one H1.
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const labUrl = import.meta.env.LAB_URL || 'http://localhost:4173/';
 ---
-
 <div class="sm-hero-copy">
-  <p class="sm-hero-intro">Build apps that work offline and merge shared data when they reconnect with SafeMesh, from Rust, TypeScript/JavaScript via WASM, Python or C. <a href={`${base}/using-safemesh/`}>Each language path has its own scope</a>.</p>
-  <p class="sm-hero-tagline">Keep working.<br /><span>Sync when you can.</span></p>
-  <p class="sm-hero-lead">
-    Merge counters and sets without writing conflict-resolution logic.
-    You bring the transport and application schema.
-    See the <a href={`${base}/claims/`}>claims ceiling</a> for the guarantees and their limits.
-  </p>
+  <p class="sm-eyebrow">EMBEDDABLE CRDTS, RUST CORE.</p>
+  <h1 id="_top" class="sm-hero-tagline">Offline edits.<br /><span>Predictable merges.</span></h1>
+  <p class="sm-hero-lead">Merge counters and sets across disconnected replicas. SafeMesh handles the merge rules; your application supplies transport and storage.</p>
   <div class="sm-hero-actions">
-    <a class="sm-button sm-button-primary" href={`${base}/getting-started/`}>
-      Build your first sync <span aria-hidden="true">→</span>
-    </a>
-    <a class="sm-text-link" href={labUrl}>Explore the Lab ↗</a>
+    <a class="sm-button sm-button-primary" href={`${base}/getting-started/#rust-gold-path`}>Start with Rust <span aria-hidden="true">→</span></a>
+    <a class="sm-text-link" href={labUrl}>Try failure modes ↗</a>
   </div>
-  <p class="sm-hero-note">Start from source · Rust + TypeScript guides · No Lean build needed</p>
+  <p class="sm-hero-note">Build from source, no Lean setup required</p>
+  <p class="sm-languages">Rust, TypeScript/WASM, Python, C<br /><a href={`${base}/using-safemesh/`}>Compare language capabilities →</a></p>
 </div>

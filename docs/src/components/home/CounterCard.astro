@@ -1,0 +1,70 @@
+---
+import { readFileSync } from 'node:fs';
+// Render the executable example itself so the card cannot drift from Rust.
+const source = readFileSync(new URL('../../../../rust/crates/safemesh-crdt/examples/home_counter.rs', import.meta.url), 'utf8').split('\n#[test]')[0].trim();
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+<section class="sm-counter-card" data-counter-card data-wasm-url={`${base}/hero-wasm/safemesh_wasm.js`} aria-label="G-Counter code illustration">
+  <header><span>Rust, G-Counter</span><span>Two writers</span></header>
+  <pre tabindex="0" aria-label="Rust example"><code>{source}</code></pre>
+  <div class="sm-counter-actions">
+    <button class="sm-button sm-button-primary" data-merge disabled>Merge once</button>
+    <button class="sm-button" data-replay disabled>Replay same state</button>
+  </div>
+  <footer><strong data-counter-total>5</strong><span>Expected total after merge, code illustration</span></footer>
+  <p class="sm-counter-status" role="status" aria-live="polite" aria-atomic="true">Enable JavaScript to run the Rust core via WASM.</p>
+</section>
+<script is:inline type="module">
+  const card = document.querySelector('[data-counter-card]');
+  if (card) {
+    const status = card.querySelector('[role="status"]');
+    const total = card.querySelector('[data-counter-total]');
+    const merge = card.querySelector('[data-merge]');
+    const replay = card.querySelector('[data-replay]');
+    try {
+      const wasmUrl = card.dataset.wasmUrl;
+      const { default: init, SafeMeshGCounterReplica } = await import(wasmUrl);
+      await init();
+      const a = new SafeMeshGCounterReplica(0n, 2);
+      const b = new SafeMeshGCounterReplica(1n, 2);
+      a.appendBump(0, 2n);
+      b.appendBump(1, 3n);
+      const state = b.logBytes();
+      // The binding exchanges records; both operations use the same Rust carrier.
+      const apply = (verb) => {
+        try {
+          a.mergeLogBytes(state);
+          total.textContent = String(a.value());
+          status.textContent = `${verb}: total ${a.value()}. Rust core via WASM.`;
+          replay.disabled = false;
+        } catch {
+          status.textContent = 'The merge failed. The code above remains an illustration.';
+        }
+      };
+      merge.disabled = false;
+      status.textContent = 'Two offline writers: 2 and 3. Ready to merge with Rust via WASM.';
+      merge.addEventListener('click', () => apply('Merged'));
+      replay.addEventListener('click', () => apply('Replayed'));
+      window.addEventListener('pagehide', (event) => {
+        if (!event.persisted) { a.free(); b.free(); }
+      });
+    } catch {
+      status.textContent = 'WASM could not load. The expected result above is a code illustration.';
+    }
+  }
+</script>
+<style>
+  .sm-counter-card { border: 1px solid var(--sm-line); border-radius: .6rem; background: var(--sm-panel); overflow: hidden; }
+  .sm-counter-card header { display: flex; justify-content: space-between; padding: 1rem 1.2rem; border-bottom: 1px solid var(--sm-line); font-size: .8rem; }
+  .sm-counter-card pre { margin: 0; padding: 1.3rem 1.2rem; background: transparent; color: var(--sm-text); font: .78rem/1.85 var(--sm-mono); overflow-x: auto; }
+  .sm-counter-card code { all: unset; }
+  .sm-counter-actions { display: flex; gap: .5rem; padding: 0 1.2rem 1rem; flex-wrap: wrap; }
+  .sm-counter-card > * { margin-block: 0; }
+  .sm-counter-actions button { cursor: pointer; font: .8rem/1.5 var(--sm-font); margin: 0; }
+  button:disabled { opacity: .55; cursor: default; }
+  button:focus-visible, pre:focus-visible { outline: 3px solid var(--sm-blue); outline-offset: -3px; }
+  footer { display: flex; align-items: center; gap: 1rem; padding: .9rem 1.2rem; border-top: 1px solid var(--sm-line); font-size: .75rem; }
+  footer strong { font-size: 1.3rem; color: var(--sm-text); }
+  .sm-counter-status { font-size: .7rem; padding: 0 1.2rem .8rem; margin: 0; }
+  @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+</style>

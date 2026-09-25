@@ -15,7 +15,9 @@
     "build:site": "node build-site.mjs",
     "test": "node --test --test-reporter=tap assurance.test.mjs",
     "derive:images": "node derive-images.mjs",
-    "check:images": "node derive-images.mjs --check"
+    "check:images": "node derive-images.mjs --check",
+    "prebuild": "wasm-pack build ../rust/crates/safemesh-wasm --target web --out-dir ../../../docs/public/hero-wasm --release",
+    "predev": "npm run prebuild"
   },
   "dependencies": {
     "@astrojs/mdx": "^8.0.1",
