@@ -117,6 +117,9 @@ jobs:
             fi
           done < "$scratch/generated-files"
 
+      - name: Regenerate legacy EventLog fixtures at claimed sources
+        run: ./scripts/check-legacy-event-log-fixtures.sh
+
       - name: Install declared Rust floor
         id: floor
         run: |

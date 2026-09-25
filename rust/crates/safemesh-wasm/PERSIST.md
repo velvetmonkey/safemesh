@@ -518,6 +518,20 @@ A G-Counter log only restores into a replica built with the same width; a
 different width throws `replica count mismatch`. A counter log will not restore
 into a set replica or the reverse; that throws `delta type mismatch`.
 
+A log saved by an earlier build, before the log frame carried its CRC or its
+shape header, throws code 1 with the frame named and the upgrade step in the
+message. For example:
+
+```text
+failed to decode event log: legacy EventLog frame: found tag 0x03 without shape header, expected tag 0x03 with shape header; migrate once with EventLog::migrate_legacy_wire_bytes_for(bytes, &destination) or `cargo run -p safemesh-crdt --example migrate_event_log`, giving the original replica count (safemesh-crdt README, "Migrating a legacy EventLog")
+```
+
+Nothing was merged. Keep the file and convert it once with the `migrate_event_log`
+example from a clone, giving the delta and the original replica count. Then
+load the converted file; see
+[Migrating a legacy EventLog](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md#migrating-a-legacy-eventlog).
+The package never converts on load.
+
 ## Running the committed copy from a clone
 
 If you are already inside a clone and have built the `nodejs` package with the
