@@ -49,10 +49,18 @@ def main():
         events.put(("stopped", process, None))
 
     def reopen():
-        nonlocal child, loaded, records
+        nonlocal child, loaded, records, saving
         if child is not None and child.poll() is None:
-            say("Service already running")
-            return
+            if saving:
+                say("Saving…")
+                return
+            # EOF lets the service finish its stdin loop and release its writer
+            # lease before a replacement tries to open the same store.
+            child.stdin.close()
+            child.wait()
+        elif saving:
+            say("Save status unknown — reopen to check")
+        saving = False
         loaded = False
         records = []
         command = [str(args.service.resolve()), str(args.store.resolve())]
@@ -124,12 +132,20 @@ def main():
                     draft_path.unlink(missing_ok=True)
                 elif "storage_error" in value:
                     saving = False
-                    say("Not saved — local storage error")
+                    say("Not saved — local storage error; fix the storage problem, then reopen")
                     say(value["storage_error"])
                 elif "recovery_error" in value:
                     loaded = False
                     records = []
-                    say("Could not recover this checklist")
+                    messages = {
+                        "missing_parent": "Store parent directory does not exist; create the parent and reopen",
+                        "owned": "Another Fieldcheck process owns this store; close it and reopen",
+                        "storage": "Could not open this store because of a storage error; fix the storage problem and reopen",
+                        "configuration": "Store writer configuration does not match; reopen with the original writer",
+                        "replay": "Could not recover this checklist; inspect the damaged store before reopening",
+                        "startup": "Could not start this store; inspect its local files and reopen",
+                    }
+                    say(messages.get(value.get("recovery_kind"), "Could not start this store; inspect its local files and reopen"))
                     say(value["recovery_error"])
                 else:
                     saving = False
