@@ -229,7 +229,9 @@ Add this dependency to the generated `Cargo.toml` (it already has a `[dependenci
 safemesh-crdt = { git = "https://github.com/velvetmonkey/safemesh.git", rev = "6172d7ad7b950e3238f372f378cf8617dcd86984" }
 ```
 
-The pinned rev `6172d7ad` is older than current `main` and the gold path, which uses the current checkout.
+The pinned rev `6172d7ad` is older than the CI-tested revision in the
+[pinned-source install recipe](/safemesh/pinned-source/), current `main`, and
+the gold path, which uses the current checkout.
 This is a historical, reproducible G-Counter example. The site's generated rustdoc
 uses the site's build commit and can describe APIs absent from this pin. For the
 canonical current-source install and matching APIs, follow [Getting started](https://velvetmonkey.github.io/safemesh/getting-started/)
