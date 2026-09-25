@@ -23,6 +23,14 @@
 
       const output = document.querySelector("#output");
 
+      function mergeRecord(replica, bytes) {
+        const admission = replica.mergeRecordBytes(bytes);
+        if (admission === "collision") {
+          throw new Error("record ID collision");
+        }
+        return admission;
+      }
+
       function mergeLog(replica, bytes) {
         const admissions = replica.mergeLogBytes(bytes);
         if (admissions.includes("collision")) {
@@ -40,8 +48,8 @@
         const leftRecord = left.appendBump(1, 5n);
         const rightRecord = right.appendBump(2, 7n);
 
-        left.mergeRecordBytes(rightRecord);
-        right.mergeRecordBytes(leftRecord);
+        mergeRecord(left, rightRecord);
+        mergeRecord(right, leftRecord);
         mergeLog(left, right.logBytes());
         mergeLog(right, left.logBytes());
 

@@ -134,10 +134,12 @@ state lock.
   returned by `append_bump` and bytes received over HTTP in its own journal.
   It neither decodes nor edits the SafeMesh wire format. JSON/base64 is an
   application envelope, with a 4 MiB request cap, not a SafeMesh protocol.
-- **Single-record admission has no verdict.** `merge_record_bytes` returns None
-  or raises. After core validation the SQLite unique-byte constraint counts
-  exact duplicates; core exceptions still reject record-ID collisions. These
-  application counts are not claimed as structured SafeMesh admission results.
+- **A record-ID collision is a verdict, not an exception.** `merge_record_bytes`
+  returns `"accepted"`, `"duplicate"` or `"collision"` and raises only for decode
+  and ownership errors. The app raises on `"collision"` itself, so a collision
+  still fails the request and any replay. After core validation the SQLite
+  unique-byte constraint counts exact duplicates. These application counts are
+  not claimed as structured SafeMesh admission results.
 - **Serialized log order is not a canonical history order.** The initial smoke
   run converged in value but failed byte-hash equality. The application now
   replays lexicographically sorted opaque records into a temporary public replica

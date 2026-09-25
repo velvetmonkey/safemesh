@@ -14,6 +14,15 @@ from urllib.request import Request, urlopen
 import safemesh_python as sm
 
 
+def merge_record(replica, wire):
+    # The binding reports a record-ID collision as a verdict. Refuse it here, so a
+    # collision still fails the request, startup replay and status replay.
+    verdict = replica.merge_record_bytes(wire)
+    if verdict == 'collision':
+        raise ValueError('record ID collision')
+    return verdict
+
+
 class Inventory:
     def __init__(self, directory, coordinate, name):
         directory.mkdir(parents=True, exist_ok=True)
@@ -39,7 +48,7 @@ class Inventory:
     def recover(self):
         self.replica = sm.GCounterReplica(self.coordinate, 2)
         for wire in self.records():
-            self.replica.merge_record_bytes(wire)
+            merge_record(self.replica, wire)
 
     def records(self):
         return [row[0] for row in self.db.execute('SELECT wire FROM records ORDER BY position')]
@@ -68,7 +77,7 @@ class Inventory:
             before = self.db.total_changes
             for item in encoded:
                 wire = base64.b64decode(item, validate=True)
-                self.replica.merge_record_bytes(wire)
+                merge_record(self.replica, wire)
                 self.db.execute('INSERT OR IGNORE INTO records(wire) VALUES (?)', (wire,))
             accepted = self.db.total_changes - before
             return {'accepted': accepted, 'duplicates': len(encoded) - accepted}
@@ -79,7 +88,7 @@ class Inventory:
         # opaque records to compare complete histories without decoding internals.
         normalized = sm.GCounterReplica(self.coordinate, 2)
         for wire in sorted(self.records()):
-            normalized.merge_record_bytes(wire)
+            merge_record(normalized, wire)
         return {
             'application': self.name, 'pid': os.getpid(), 'online': self.online,
             'value': self.replica.value(), 'state': self.replica.state(),
