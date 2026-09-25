@@ -34,8 +34,9 @@ This walk uses Rust. Python, WASM and the C FFI expose OR-Set too, as `OrSet`,
 The same four steps in TypeScript/Node, against the `wasm-pack` nodejs package, are in
 [`rust/crates/safemesh-wasm/PERSIST.md`](rust/crates/safemesh-wasm/PERSIST.md).
 Python also exchanges replica and event-log bytes and runs an in-memory partition-and-heal
-[data-mule demo](demos/python-cold-chain/README.md), but has no documented disk or
-process restore walk. The C ABI exposes the types and a G-Counter delta-to-wire helper,
+[data-mule demo](demos/python-cold-chain/README.md). Fieldcheck adds a Python CLI and Rust
+service walk through disk-backed stores, SIGKILL/reopen recovery, and loopback reconnect.
+The C ABI exposes the types and a G-Counter delta-to-wire helper,
 with no replica or event-log surface.
 
 ## Build toolchain
@@ -194,6 +195,9 @@ The demo partitions four replicas, drops cross-partition packets, delivers same-
 ## Integrity Vertical Kill-Test
 
 Python story walkthrough: [`demos/python-cold-chain/README.md`](demos/python-cold-chain/README.md).
+
+Reference application: [Fieldcheck](examples/fieldcheck/README.md) shows durable inspections
+surviving a service SIGKILL and reconciling after a loopback reconnect.
 
 `KILL-TEST.md` records the first software-only integrity vertical: field-science cold-chain sample custody. Run `cargo run -p safemesh-crdt --example cold_chain_kill_test` to exercise `EventLog`, `InMemoryTransport`, and the flat CRDT carriers through drop, duplicate, reorder, partition, and heal. This is an engineered evaluation artifact, not proof of sensors, custody law, storage durability, or real network delivery.
 

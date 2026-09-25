@@ -64,6 +64,10 @@ Next: [Persist and restart](/safemesh/persist-and-restart/), then
 [Connect replicas](/safemesh/connect-replicas/) and
 [Evaluate guarantees](/safemesh/evaluate-guarantees/#proof-boundary).
 
+The [Fieldcheck reference application](https://github.com/velvetmonkey/safemesh/blob/main/examples/fieldcheck/README.md)
+shows disk-backed inspections surviving a service SIGKILL and reconciling after a
+loopback reconnect.
+
 ## Previously bookmarked exercises
 
 <a id="rust-gold-path"></a>
