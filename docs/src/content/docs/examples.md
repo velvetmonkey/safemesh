@@ -3,8 +3,9 @@ title: Examples — main (unreleased)
 description: Clone the source and run Rust, Python, and browser demonstrations.
 ---
 
-These examples use **main (unreleased)** source. They exercise modeled convergence;
-they do not establish real transport delivery, storage durability, or maintainer support.
+The Rust, Python data-mule, and browser demos below use **main (unreleased)** source.
+They exercise modeled convergence; they do not establish real transport delivery,
+storage durability, or maintainer support.
 Success output establishes the stated example outcome, not the release status of
 every carrier shown. **Supported** below means selected for v0, within the
 [v0 scope table and language-path limits](/safemesh/#v0-support); main remains unreleased.
@@ -16,6 +17,10 @@ the local library/package, make an edit, save it, restart in another process and
 sync a second replica. Those complete, CI-executed consumer fixtures include
 asserted output and ordinary malformed-record errors. The examples below explore
 modeled delivery failures after that first integration.
+
+The [Fieldcheck reference application](https://github.com/velvetmonkey/safemesh/blob/main/examples/fieldcheck/README.md)
+shows disk-backed inspections surviving a service SIGKILL and reconciling after a
+loopback reconnect.
 
 ## Before you start
 
