@@ -419,6 +419,35 @@ pub struct DurableReplica<C: Crdt> {
     inner: LocalReplica<C>,
     path: PathBuf,
 }
+
+// A failed restart has no LocalReplica to unlock its fence. Release the lock
+// before closing the file: a concurrent fork may briefly retain a duplicate
+// of the open file description, even when the descriptor is close-on-exec.
+struct RestartFence(Option<File>);
+
+impl RestartFence {
+    fn file(&mut self) -> &mut File {
+        self.0.as_mut().unwrap()
+    }
+
+    fn into_file(mut self) -> File {
+        self.0.take().unwrap()
+    }
+}
+
+impl Drop for RestartFence {
+    fn drop(&mut self) {
+        if let Some(file) = &self.0 {
+            let _ = file.unlock();
+        }
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static RETAIN_RESTART_FENCE: std::cell::RefCell<Option<Option<File>>> = const { std::cell::RefCell::new(None) };
+}
+
 impl<C: Crdt> DurableReplica<C>
 where
     C::Delta: OwnedDelta + Clone + PartialEq + WireEncode + WireSchema,
@@ -541,7 +570,7 @@ where
         config.validate().map_err(|_| LocalError::Configuration)?;
         let root = root.canonicalize()?;
         // Opening without create is deliberate: missing ownership is not a new store.
-        let mut fence = OpenOptions::new()
+        let fence = OpenOptions::new()
             .read(true)
             .write(true)
             .open(root.join(format!("writer-{}.fence", config.writer)))?;
@@ -550,8 +579,16 @@ where
             Err(TryLockError::WouldBlock) => return Err(LocalError::Refused),
             Err(TryLockError::Error(e)) => return Err(e.into()),
         }
+        #[cfg(test)]
+        RETAIN_RESTART_FENCE.with(|slot| {
+            if let Some(duplicate) = slot.borrow_mut().as_mut() {
+                *duplicate = Some(fence.try_clone()?);
+            }
+            Ok::<(), io::Error>(())
+        })?;
+        let mut fence = RestartFence(Some(fence));
         let mut bytes = Vec::new();
-        fence.read_to_end(&mut bytes)?;
+        fence.file().read_to_end(&mut bytes)?;
         if bytes.len() != 24 {
             return Err(LocalError::RecoveryRequired);
         }
@@ -590,7 +627,7 @@ where
         })?;
         let mut inner = LocalReplica {
             config,
-            fence,
+            fence: fence.into_file(),
             held: true,
             generation,
             log: EventLog::for_crdt(&state),
@@ -1326,17 +1363,19 @@ mod durable_tests {
             assert!(matches!(result, Err(LocalError::Configuration)));
             assert_eq!(fs::read(&path).unwrap(), bytes);
             fs::write(&path, original).unwrap();
-            assert!(matches!(
-                restart_and_write(
-                    kind,
-                    &root,
-                    WriterConfig {
-                        writers: 3,
-                        writer: 0
-                    }
-                ),
-                Err(LocalError::Configuration)
-            ));
+            let result = restart_and_write(
+                kind,
+                &root,
+                WriterConfig {
+                    writers: 3,
+                    writer: 0,
+                },
+            );
+            std::println!("control=4 {kind} mismatched writer result={result:?}");
+            assert!(
+                matches!(result, Err(LocalError::Configuration)),
+                "{kind}: mismatched writer restart returned {result:?}"
+            );
         }
         let root = initialized("counter");
         assert!(matches!(
@@ -1435,6 +1474,30 @@ mod durable_tests {
         drop(r);
         restart_and_write("set", &root, config()).unwrap();
         std::println!("control=6 both primitives: held fence Refused, no replica; released fence and empty histories: writable");
+    }
+
+    #[test]
+    fn failed_restart_unlocks_with_duplicated_fence_handle() {
+        let root = initialized("counter");
+        let transaction = transaction_path(&root, config());
+        let withheld = root.join("withheld-transaction");
+        fs::rename(&transaction, &withheld).unwrap();
+
+        RETAIN_RESTART_FENCE.with(|slot| *slot.borrow_mut() = Some(None));
+        let first = DurableReplica::restart_counter(&root, config());
+        let duplicate =
+            RETAIN_RESTART_FENCE.with(|slot| slot.borrow_mut().take().unwrap().unwrap());
+        assert!(matches!(first, Err(LocalError::Io(_))));
+        assert!(!transaction.exists());
+
+        let second = DurableReplica::restart_counter(&root, config());
+        assert!(
+            matches!(second, Err(LocalError::Io(_))),
+            "next restart was Refused"
+        );
+        drop(duplicate);
+        fs::rename(&withheld, &transaction).unwrap();
+        restart_and_write("counter", &root, config()).unwrap();
     }
 
     #[test]
