@@ -4,9 +4,9 @@
 
 use safemesh_crdt::ownership::{allocate_token, WriterConfig};
 use safemesh_crdt::{
-    Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta, GSet, LwwMap,
-    LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta, PnCounter, PnCounterDelta,
-    Record, Rga, WireDecode, WireEncode,
+    CollectionLimits, Crdt, DecodeError, DecodeLimits, EnableWinsFlag, EnableWinsFlagDelta,
+    EventLog, GCounter, GCounterDelta, GSet, LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta,
+    OrSet, OrSetDelta, PnCounter, PnCounterDelta, Record, Rga, WireDecode, WireEncode, WireError,
 };
 use std::{cell::RefCell, collections::BTreeSet};
 use wasm_bindgen::prelude::*;
@@ -64,6 +64,51 @@ pub fn initialize_bindings() {
 
 fn safe_mesh_error(code: u32, message: &str) -> JsValue {
     SafeMeshError::new(code, message).into()
+}
+
+fn wire_decode_error(error: WireError, context: &str) -> JsValue {
+    match error {
+        WireError::CollectionElementLimitExceeded { max_elements } => safe_mesh_error(
+            3,
+            &format!("maxCollectionElements limit exceeded: {max_elements}"),
+        ),
+        _ => safe_mesh_error(1, context),
+    }
+}
+
+fn decode_limits(value: Option<u32>) -> DecodeLimits {
+    DecodeLimits {
+        max_collection_elements: value.map(|value| value as usize),
+        ..DecodeLimits::default()
+    }
+}
+
+fn event_log_decode_js_error(error: DecodeError) -> JsValue {
+    match error {
+        DecodeError::Wire(WireError::CollectionElementLimitExceeded { max_elements }) => {
+            safe_mesh_error(
+                3,
+                &format!("maxCollectionElements limit exceeded: {max_elements}"),
+            )
+        }
+        DecodeError::Wire(WireError::RecordCollision) => safe_mesh_error(1, "record ID collision"),
+        DecodeError::Wire(WireError::ReplicaCountMismatch { .. }) => {
+            safe_mesh_error(1, "replica count mismatch")
+        }
+        DecodeError::Wire(WireError::DeltaTypeMismatch) => {
+            safe_mesh_error(1, "delta type mismatch")
+        }
+        DecodeError::Wire(WireError::MissingShape) => safe_mesh_error(1, "event log missing shape"),
+        _ => safe_mesh_error(1, "failed to decode event log"),
+    }
+}
+
+fn collection_limits(value: Option<u32>) -> CollectionLimits {
+    CollectionLimits {
+        max_elements: value
+            .map(|value| value as usize)
+            .or(CollectionLimits::WIRE_DEFAULT.max_elements),
+    }
 }
 
 /// A counter total as an exact JavaScript `bigint`. wasm-bindgen carries `u64`
@@ -461,9 +506,16 @@ impl SafeMeshGCounterReplica {
     }
 
     #[wasm_bindgen(js_name = mergeRecordBytes)]
-    pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
-        let record = Record::<GCounterDelta>::from_wire_bytes(bytes)
-            .map_err(|_| safe_mesh_error(1, "failed to decode record"))?;
+    pub fn merge_record_bytes(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<(), JsValue> {
+        let record = Record::<GCounterDelta>::from_wire_bytes_with_collection_limits(
+            bytes,
+            collection_limits(max_collection_elements),
+        )
+        .map_err(|error| wire_decode_error(error, "failed to decode record"))?;
         if safemesh_crdt::ownership::check_counter_record(
             self.state.len(),
             record.id,
@@ -493,22 +545,17 @@ impl SafeMeshGCounterReplica {
         js_name = mergeLogBytes,
         unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
     )]
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
-        let log = EventLog::<GCounterDelta>::records_from_wire_bytes_for(bytes, &self.state)
-            .map_err(|error| {
-                safe_mesh_error(
-                    1,
-                    match error {
-                        safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                        safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
-                            "replica count mismatch"
-                        }
-                        safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
-                        safemesh_crdt::WireError::MissingShape => "event log missing shape",
-                        _ => "failed to decode event log",
-                    },
-                )
-            })?;
+    pub fn merge_log_bytes(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<Vec<String>, JsValue> {
+        let log = EventLog::<GCounterDelta>::records_from_wire_bytes_for_with_limits(
+            bytes,
+            &self.state,
+            decode_limits(max_collection_elements),
+        )
+        .map_err(event_log_decode_js_error)?;
         if log.iter().any(|r| {
             safemesh_crdt::ownership::check_counter_record(self.state.len(), r.id, &r.delta)
                 .is_err()
@@ -619,9 +666,16 @@ impl SafeMeshEnableWinsFlagReplica {
     }
 
     #[wasm_bindgen(js_name = mergeRecordBytes)]
-    pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
-        let record = Record::<EnableWinsFlagDelta<u64>>::from_wire_bytes(bytes)
-            .map_err(|_| safe_mesh_error(1, "failed to decode record"))?;
+    pub fn merge_record_bytes(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<(), JsValue> {
+        let record = Record::<EnableWinsFlagDelta<u64>>::from_wire_bytes_with_collection_limits(
+            bytes,
+            collection_limits(max_collection_elements),
+        )
+        .map_err(|error| wire_decode_error(error, "failed to decode record"))?;
         if self
             .log
             .admit_with(&mut self.state, record, |state, delta| {
@@ -639,23 +693,17 @@ impl SafeMeshEnableWinsFlagReplica {
         js_name = mergeLogBytes,
         unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
     )]
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
-        let log =
-            EventLog::<EnableWinsFlagDelta<u64>>::records_from_wire_bytes_for(bytes, &self.state)
-                .map_err(|error| {
-                safe_mesh_error(
-                    1,
-                    match error {
-                        safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                        safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
-                            "replica count mismatch"
-                        }
-                        safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
-                        safemesh_crdt::WireError::MissingShape => "event log missing shape",
-                        _ => "failed to decode event log",
-                    },
-                )
-            })?;
+    pub fn merge_log_bytes(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<Vec<String>, JsValue> {
+        let log = EventLog::<EnableWinsFlagDelta<u64>>::records_from_wire_bytes_for_with_limits(
+            bytes,
+            &self.state,
+            decode_limits(max_collection_elements),
+        )
+        .map_err(event_log_decode_js_error)?;
         Ok(log
             .iter()
             .cloned()
@@ -754,9 +802,16 @@ impl SafeMeshLwwMapReplica {
     }
 
     #[wasm_bindgen(js_name = mergeRecordBytes)]
-    pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
-        let record = Record::<LwwMapDelta<u64, u64>>::from_wire_bytes(bytes)
-            .map_err(|_| safe_mesh_error(1, "failed to decode record"))?;
+    pub fn merge_record_bytes(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<(), JsValue> {
+        let record = Record::<LwwMapDelta<u64, u64>>::from_wire_bytes_with_collection_limits(
+            bytes,
+            collection_limits(max_collection_elements),
+        )
+        .map_err(|error| wire_decode_error(error, "failed to decode record"))?;
         if self
             .log
             .admit_with(&mut self.state, record, |state, delta| {
@@ -774,23 +829,17 @@ impl SafeMeshLwwMapReplica {
         js_name = mergeLogBytes,
         unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
     )]
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
-        let log =
-            EventLog::<LwwMapDelta<u64, u64>>::records_from_wire_bytes_for(bytes, &self.state)
-                .map_err(|error| {
-                    safe_mesh_error(
-                        1,
-                        match error {
-                            safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                            safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
-                                "replica count mismatch"
-                            }
-                            safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
-                            safemesh_crdt::WireError::MissingShape => "event log missing shape",
-                            _ => "failed to decode event log",
-                        },
-                    )
-                })?;
+    pub fn merge_log_bytes(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<Vec<String>, JsValue> {
+        let log = EventLog::<LwwMapDelta<u64, u64>>::records_from_wire_bytes_for_with_limits(
+            bytes,
+            &self.state,
+            decode_limits(max_collection_elements),
+        )
+        .map_err(event_log_decode_js_error)?;
         Ok(log
             .iter()
             .cloned()
@@ -887,9 +936,16 @@ impl SafeMeshLwwRegisterReplica {
     }
 
     #[wasm_bindgen(js_name = mergeRecordBytes)]
-    pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
-        let record = Record::<LwwRegisterDelta<u64>>::from_wire_bytes(bytes)
-            .map_err(|_| safe_mesh_error(1, "failed to decode record"))?;
+    pub fn merge_record_bytes(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<(), JsValue> {
+        let record = Record::<LwwRegisterDelta<u64>>::from_wire_bytes_with_collection_limits(
+            bytes,
+            collection_limits(max_collection_elements),
+        )
+        .map_err(|error| wire_decode_error(error, "failed to decode record"))?;
         if self
             .log
             .admit_with(&mut self.state, record, |state, delta| {
@@ -907,23 +963,17 @@ impl SafeMeshLwwRegisterReplica {
         js_name = mergeLogBytes,
         unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
     )]
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
-        let log =
-            EventLog::<LwwRegisterDelta<u64>>::records_from_wire_bytes_for(bytes, &self.state)
-                .map_err(|error| {
-                    safe_mesh_error(
-                        1,
-                        match error {
-                            safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                            safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
-                                "replica count mismatch"
-                            }
-                            safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
-                            safemesh_crdt::WireError::MissingShape => "event log missing shape",
-                            _ => "failed to decode event log",
-                        },
-                    )
-                })?;
+    pub fn merge_log_bytes(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<Vec<String>, JsValue> {
+        let log = EventLog::<LwwRegisterDelta<u64>>::records_from_wire_bytes_for_with_limits(
+            bytes,
+            &self.state,
+            decode_limits(max_collection_elements),
+        )
+        .map_err(event_log_decode_js_error)?;
         Ok(log
             .iter()
             .cloned()
@@ -1075,6 +1125,12 @@ fn binding_error(code: u32, message: impl Into<String>) -> BindingError {
 }
 
 fn event_log_decode_error(error: safemesh_crdt::WireError) -> BindingError {
+    if let WireError::CollectionElementLimitExceeded { max_elements } = error {
+        return binding_error(
+            3,
+            format!("maxCollectionElements limit exceeded: {max_elements}"),
+        );
+    }
     binding_error(
         1,
         match error {
@@ -1087,6 +1143,13 @@ fn event_log_decode_error(error: safemesh_crdt::WireError) -> BindingError {
             other => format!("failed to decode event log: {other:?}"),
         },
     )
+}
+
+fn bounded_event_log_decode_error(error: DecodeError) -> BindingError {
+    match error {
+        DecodeError::Wire(error) => event_log_decode_error(error),
+        DecodeError::RecordLimitExceeded { .. } => binding_error(1, "failed to decode event log"),
+    }
 }
 
 /// One `(element, token)` add pair as the core `OrSet` stores it.
@@ -1379,12 +1442,36 @@ impl SafeMeshStringOrSetReplica {
     }
 
     fn decode_record(bytes: &[u8]) -> Result<Record<OrSetDelta<String, u64>>, BindingError> {
-        Record::<OrSetDelta<String, u64>>::from_wire_bytes(bytes)
-            .map_err(|error| binding_error(1, format!("failed to decode record: {error:?}")))
+        Self::decode_record_with_limits(bytes, None)
+    }
+
+    fn decode_record_with_limits(
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<Record<OrSetDelta<String, u64>>, BindingError> {
+        Record::<OrSetDelta<String, u64>>::from_wire_bytes_with_collection_limits(
+            bytes,
+            collection_limits(max_collection_elements),
+        )
+        .map_err(|error| match error {
+            WireError::CollectionElementLimitExceeded { max_elements } => binding_error(
+                3,
+                format!("maxCollectionElements limit exceeded: {max_elements}"),
+            ),
+            other => binding_error(1, format!("failed to decode record: {other:?}")),
+        })
     }
 
     fn try_merge_record_bytes(&mut self, bytes: &[u8]) -> Result<&'static str, BindingError> {
-        let record = Self::decode_record(bytes)?;
+        self.try_merge_record_bytes_with_limits(bytes, None)
+    }
+
+    fn try_merge_record_bytes_with_limits(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<&'static str, BindingError> {
+        let record = Self::decode_record_with_limits(bytes, max_collection_elements)?;
         Ok(match self.admit(record)? {
             safemesh_crdt::Admission::Accepted => "accepted",
             safemesh_crdt::Admission::Duplicate => "duplicate",
@@ -1396,9 +1483,20 @@ impl SafeMeshStringOrSetReplica {
     }
 
     fn try_merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, BindingError> {
-        let log =
-            EventLog::<OrSetDelta<String, u64>>::records_from_wire_bytes_for(bytes, &self.state)
-                .map_err(event_log_decode_error)?;
+        self.try_merge_log_bytes_with_limits(bytes, None)
+    }
+
+    fn try_merge_log_bytes_with_limits(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<Vec<String>, BindingError> {
+        let log = EventLog::<OrSetDelta<String, u64>>::records_from_wire_bytes_for_with_limits(
+            bytes,
+            &self.state,
+            decode_limits(max_collection_elements),
+        )
+        .map_err(bounded_event_log_decode_error)?;
         for record in &log {
             self.check_incoming(record)?;
         }
@@ -1416,7 +1514,14 @@ impl SafeMeshStringOrSetReplica {
     }
 
     fn try_inspect_record_bytes(bytes: &[u8]) -> Result<SafeMeshStringOrSetRecord, BindingError> {
-        let Record { id, delta } = Self::decode_record(bytes)?;
+        Self::try_inspect_record_bytes_with_limits(bytes, None)
+    }
+
+    fn try_inspect_record_bytes_with_limits(
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<SafeMeshStringOrSetRecord, BindingError> {
+        let Record { id, delta } = Self::decode_record_with_limits(bytes, max_collection_elements)?;
         Ok(SafeMeshStringOrSetRecord { id, delta })
     }
 }
@@ -1501,8 +1606,12 @@ impl SafeMeshStringOrSetReplica {
         js_name = mergeRecordBytes,
         unchecked_return_type = "\"accepted\" | \"duplicate\""
     )]
-    pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> Result<String, JsValue> {
-        self.try_merge_record_bytes(bytes)
+    pub fn merge_record_bytes(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<String, JsValue> {
+        self.try_merge_record_bytes_with_limits(bytes, max_collection_elements)
             .map(str::to_string)
             .map_err(JsValue::from)
     }
@@ -1512,8 +1621,13 @@ impl SafeMeshStringOrSetReplica {
         js_name = mergeLogBytes,
         unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
     )]
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
-        self.try_merge_log_bytes(bytes).map_err(JsValue::from)
+    pub fn merge_log_bytes(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<Vec<String>, JsValue> {
+        self.try_merge_log_bytes_with_limits(bytes, max_collection_elements)
+            .map_err(JsValue::from)
     }
 
     #[wasm_bindgen(js_name = logBytes)]
@@ -1565,8 +1679,12 @@ impl SafeMeshStringOrSetReplica {
     /// Named after `mergeRecordBytes`: same input, but this only looks. It does
     /// not touch any replica, so it is static.
     #[wasm_bindgen(js_name = inspectRecordBytes)]
-    pub fn inspect_record_bytes(bytes: &[u8]) -> Result<SafeMeshStringOrSetRecord, JsValue> {
-        Self::try_inspect_record_bytes(bytes).map_err(JsValue::from)
+    pub fn inspect_record_bytes(
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<SafeMeshStringOrSetRecord, JsValue> {
+        Self::try_inspect_record_bytes_with_limits(bytes, max_collection_elements)
+            .map_err(JsValue::from)
     }
 }
 
@@ -2088,12 +2206,13 @@ mod tests {
         .unwrap();
         assert_eq!(bytes, expected);
 
-        right.merge_record_bytes(&bytes).unwrap();
-        right.merge_record_bytes(&bytes).unwrap();
+        right.merge_record_bytes(&bytes, None).unwrap();
+        right.merge_record_bytes(&bytes, None).unwrap();
         assert_eq!(right.total(), 5);
         assert_eq!(right.version_for(1), 1);
 
-        left.merge_log_bytes(&right.log_bytes().unwrap()).unwrap();
+        left.merge_log_bytes(&right.log_bytes().unwrap(), None)
+            .unwrap();
         assert_eq!(left.total(), right.total());
     }
 
@@ -2150,46 +2269,49 @@ mod tests {
 
         let mut target = SafeMeshGCounterReplica::new(0, 2);
         target
-            .merge_record_bytes(&existing.to_wire_bytes().unwrap())
+            .merge_record_bytes(&existing.to_wire_bytes().unwrap(), None)
             .unwrap();
         assert_eq!(
-            target.merge_log_bytes(&wire([])).unwrap(),
+            target.merge_log_bytes(&wire([]), None).unwrap(),
             Vec::<String>::new()
         );
         assert_eq!(target.state(), vec![5, 0]);
 
         let mut one = SafeMeshGCounterReplica::new(0, 2);
         assert_eq!(
-            one.merge_log_bytes(&wire([accepted.clone()])).unwrap(),
+            one.merge_log_bytes(&wire([accepted.clone()]), None)
+                .unwrap(),
             vec!["accepted"]
         );
         assert_eq!(one.state(), vec![0, 7]);
 
         let before = target.state();
         assert_eq!(
-            target.merge_log_bytes(&wire([collision.clone()])).unwrap(),
+            target
+                .merge_log_bytes(&wire([collision.clone()]), None)
+                .unwrap(),
             vec!["collision"]
         );
         assert_eq!(target.state(), before);
 
         target
-            .merge_record_bytes(&accepted.to_wire_bytes().unwrap())
+            .merge_record_bytes(&accepted.to_wire_bytes().unwrap(), None)
             .unwrap();
         let before = target.state();
         assert_eq!(
             target
-                .merge_log_bytes(&wire([existing.clone(), accepted.clone()]))
+                .merge_log_bytes(&wire([existing.clone(), accepted.clone()]), None)
                 .unwrap(),
             vec!["duplicate", "duplicate"]
         );
         assert_eq!(target.state(), before);
 
         let mut late = SafeMeshGCounterReplica::new(0, 2);
-        late.merge_record_bytes(&existing.to_wire_bytes().unwrap())
+        late.merge_record_bytes(&existing.to_wire_bytes().unwrap(), None)
             .unwrap();
         let before = late.state();
         let admissions = late
-            .merge_log_bytes(&wire([accepted, collision, after_collision]))
+            .merge_log_bytes(&wire([accepted, collision, after_collision]), None)
             .unwrap();
         let after = late.state();
         println!("WASM admissions={admissions:?} before_state={before:?} after_state={after:?}");
@@ -2215,7 +2337,7 @@ mod tests {
                 };
                 let mut replica = $replica;
                 replica
-                    .merge_record_bytes(&first.to_wire_bytes().unwrap())
+                    .merge_record_bytes(&first.to_wire_bytes().unwrap(), None)
                     .unwrap();
                 let state = replica.state.clone();
                 let log = replica.log.clone();
@@ -2226,7 +2348,7 @@ mod tests {
                 );
                 assert_eq!(
                     replica
-                        .merge_log_bytes(&incoming.to_wire_bytes().unwrap())
+                        .merge_log_bytes(&incoming.to_wire_bytes().unwrap(), None)
                         .unwrap(),
                     vec!["collision"]
                 );
@@ -2409,8 +2531,8 @@ mod tests {
         .unwrap();
         assert_eq!(enable_10, expected);
 
-        right.merge_record_bytes(&enable_10).unwrap();
-        right.merge_record_bytes(&enable_10).unwrap();
+        right.merge_record_bytes(&enable_10, None).unwrap();
+        right.merge_record_bytes(&enable_10, None).unwrap();
         assert!(right.value());
         assert_eq!(right.version_for(1), 1);
 
@@ -2418,12 +2540,13 @@ mod tests {
         assert!(!right.value());
 
         let enable_11 = left.append_enable(11).unwrap();
-        right.merge_record_bytes(&enable_11).unwrap();
+        right.merge_record_bytes(&enable_11, None).unwrap();
         assert!(right.value());
 
-        left.merge_record_bytes(&disable_10).unwrap();
+        left.merge_record_bytes(&disable_10, None).unwrap();
         assert!(left.value());
-        left.merge_log_bytes(&right.log_bytes().unwrap()).unwrap();
+        left.merge_log_bytes(&right.log_bytes().unwrap(), None)
+            .unwrap();
         assert_eq!(left.value(), right.value());
         assert_eq!(left.enabled_tokens(), vec![10, 11]);
         assert_eq!(left.tombstone_tokens(), vec![10]);
@@ -2451,8 +2574,8 @@ mod tests {
         .unwrap();
         assert_eq!(set_100, expected);
 
-        right.merge_record_bytes(&set_100).unwrap();
-        right.merge_record_bytes(&set_100).unwrap();
+        right.merge_record_bytes(&set_100, None).unwrap();
+        right.merge_record_bytes(&set_100, None).unwrap();
         assert_eq!(right.value_or(7, 0), 100);
         assert_eq!(right.version_for(1), 1);
 
@@ -2460,12 +2583,13 @@ mod tests {
         assert!(!right.has_key(7));
 
         let set_300 = left.append_set(7, 12, 1, 300).unwrap();
-        right.merge_record_bytes(&set_300).unwrap();
+        right.merge_record_bytes(&set_300, None).unwrap();
         assert_eq!(right.value_or(7, 0), 300);
 
-        left.merge_record_bytes(&remove_100).unwrap();
+        left.merge_record_bytes(&remove_100, None).unwrap();
         assert_eq!(left.value_or(7, 0), 300);
-        left.merge_log_bytes(&right.log_bytes().unwrap()).unwrap();
+        left.merge_log_bytes(&right.log_bytes().unwrap(), None)
+            .unwrap();
         assert_eq!(left.value_or(7, 0), right.value_or(7, 0));
         assert_eq!(left.visible_keys(), vec![7]);
         assert_eq!(left.removal_keys(), vec![7]);
@@ -2492,13 +2616,14 @@ mod tests {
         .unwrap();
         assert_eq!(bytes, expected);
 
-        right.merge_record_bytes(&bytes).unwrap();
-        right.merge_record_bytes(&bytes).unwrap();
+        right.merge_record_bytes(&bytes, None).unwrap();
+        right.merge_record_bytes(&bytes, None).unwrap();
         right.append_set(10, 2, 200).unwrap();
         assert_eq!(right.value_or(0), 200);
         assert_eq!(right.version_for(1), 1);
 
-        left.merge_log_bytes(&right.log_bytes().unwrap()).unwrap();
+        left.merge_log_bytes(&right.log_bytes().unwrap(), None)
+            .unwrap();
         assert_eq!(left.value_or(0), right.value_or(0));
         assert_eq!(left.writer_replica_or(0), 2);
     }
@@ -2900,9 +3025,16 @@ impl SafeMeshPnCounterReplica {
     }
 
     #[wasm_bindgen(js_name = mergeRecordBytes)]
-    pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
-        let record = Record::<PnCounterDelta>::from_wire_bytes(bytes)
-            .map_err(|_| safe_mesh_error(1, "failed to decode record"))?;
+    pub fn merge_record_bytes(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<(), JsValue> {
+        let record = Record::<PnCounterDelta>::from_wire_bytes_with_collection_limits(
+            bytes,
+            collection_limits(max_collection_elements),
+        )
+        .map_err(|error| wire_decode_error(error, "failed to decode record"))?;
         if safemesh_crdt::ownership::check_counter_record(
             self.state.p_state().len(),
             record.id,
@@ -2932,22 +3064,17 @@ impl SafeMeshPnCounterReplica {
         js_name = mergeLogBytes,
         unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
     )]
-    pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
-        let log = EventLog::<PnCounterDelta>::records_from_wire_bytes_for(bytes, &self.state)
-            .map_err(|error| {
-                safe_mesh_error(
-                    1,
-                    match error {
-                        safemesh_crdt::WireError::RecordCollision => "record ID collision",
-                        safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
-                            "replica count mismatch"
-                        }
-                        safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch",
-                        safemesh_crdt::WireError::MissingShape => "event log missing shape",
-                        _ => "failed to decode event log",
-                    },
-                )
-            })?;
+    pub fn merge_log_bytes(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<Vec<String>, JsValue> {
+        let log = EventLog::<PnCounterDelta>::records_from_wire_bytes_for_with_limits(
+            bytes,
+            &self.state,
+            decode_limits(max_collection_elements),
+        )
+        .map_err(event_log_decode_js_error)?;
         if log.iter().any(|r| {
             safemesh_crdt::ownership::check_counter_record(
                 self.state.p_state().len(),
@@ -3142,9 +3269,16 @@ impl SafeMeshGSetReplica {
             .map_err(|_| safe_mesh_error(1, "failed to encode state"))
     }
     #[wasm_bindgen(js_name = mergeStateBytes)]
-    pub fn merge_state_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
-        let other = <GSet<u64>>::from_wire_bytes(bytes)
-            .map_err(|_| safe_mesh_error(1, "failed to decode state"))?;
+    pub fn merge_state_bytes(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<(), JsValue> {
+        let other = <GSet<u64>>::from_wire_bytes_with_limits(
+            bytes,
+            collection_limits(max_collection_elements),
+        )
+        .map_err(|error| wire_decode_error(error, "failed to decode state"))?;
         self.state.merge(&other);
         Ok(())
     }
@@ -3191,9 +3325,16 @@ impl SafeMeshRgaReplica {
             .map_err(|_| safe_mesh_error(1, "failed to encode state"))
     }
     #[wasm_bindgen(js_name = mergeStateBytes)]
-    pub fn merge_state_bytes(&mut self, bytes: &[u8]) -> Result<(), JsValue> {
-        let other = <Rga<u64, u64>>::from_wire_bytes(bytes)
-            .map_err(|_| safe_mesh_error(1, "failed to decode state"))?;
+    pub fn merge_state_bytes(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+    ) -> Result<(), JsValue> {
+        let other = <Rga<u64, u64>>::from_wire_bytes_with_limits(
+            bytes,
+            collection_limits(max_collection_elements),
+        )
+        .map_err(|error| wire_decode_error(error, "failed to decode state"))?;
         self.state.merge(&other);
         Ok(())
     }

@@ -74,6 +74,17 @@ console.log(left.value(), right.value());
 verdict per input record, in order. Decode and whole-batch validation errors
 throw before any record is applied.
 
+`SafeMeshGSetReplica.mergeStateBytes(bytes)` and
+`SafeMeshRgaReplica.mergeStateBytes(bytes)` default to 4,096 elements per
+collection. A larger state throws `SafeMeshError` code 3 with
+`maxCollectionElements` and the refused budget in its message. Pass a larger
+budget as the second argument, such as `replica.mergeStateBytes(bytes, 4097)`,
+when the larger state is expected. The Record and EventLog byte decoders
+(`mergeRecordBytes`, `mergeLogBytes`, and `inspectRecordBytes` where available)
+accept the same optional second argument for nested collections. Code 1
+continues to identify other decode failures. Raising a decode budget does not
+change the canonical bytes.
+
 Stdout:
 
 ```text

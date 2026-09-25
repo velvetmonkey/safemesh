@@ -5,9 +5,9 @@
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use safemesh_crdt::{
-    Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta, GSet, LwwMap,
-    LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, PnCounter, Record, Rga, WireDecode,
-    WireEncode,
+    CollectionLimits, Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta,
+    GSet, LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, PnCounter, Record, Rga,
+    WireDecode, WireEncode,
 };
 
 // Reject bool at the Python boundary before any method body can mutate state.
@@ -1127,10 +1127,20 @@ mod py_gset_python {
         }
 
         #[staticmethod]
-        pub fn from_wire_bytes(bytes: &[u8]) -> PyResult<Self> {
-            GSet::<u64>::from_wire_bytes(bytes)
-                .map(|inner| Self { inner })
-                .map_err(|error| pyo3::exceptions::PyValueError::new_err(format!("{error:?}")))
+        #[pyo3(signature = (bytes, *, max_collection_elements = None))]
+        pub fn from_wire_bytes(
+            bytes: &[u8],
+            max_collection_elements: Option<usize>,
+        ) -> PyResult<Self> {
+            GSet::<u64>::from_wire_bytes_with_limits(
+                bytes,
+                CollectionLimits {
+                    max_elements: max_collection_elements
+                        .or(CollectionLimits::WIRE_DEFAULT.max_elements),
+                },
+            )
+            .map(|inner| Self { inner })
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(format!("{error:?}")))
         }
 
         /// Merge full state; self-merge is an identity operation.
@@ -1192,10 +1202,20 @@ mod py_rga_python {
         }
 
         #[staticmethod]
-        pub fn from_wire_bytes(bytes: &[u8]) -> PyResult<Self> {
-            Rga::<u64, u64>::from_wire_bytes(bytes)
-                .map(|inner| Self { inner })
-                .map_err(|error| pyo3::exceptions::PyValueError::new_err(format!("{error:?}")))
+        #[pyo3(signature = (bytes, *, max_collection_elements = None))]
+        pub fn from_wire_bytes(
+            bytes: &[u8],
+            max_collection_elements: Option<usize>,
+        ) -> PyResult<Self> {
+            Rga::<u64, u64>::from_wire_bytes_with_limits(
+                bytes,
+                CollectionLimits {
+                    max_elements: max_collection_elements
+                        .or(CollectionLimits::WIRE_DEFAULT.max_elements),
+                },
+            )
+            .map(|inner| Self { inner })
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(format!("{error:?}")))
         }
 
         /// Merge full state; self-merge is an identity operation.
