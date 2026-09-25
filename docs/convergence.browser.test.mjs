@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || new URL('../web/node_modules/playwright/index.mjs', import.meta.url).href);
-const url = process.env.DOCS_URL || 'http://localhost:4321/safemesh/';
+const url = process.env.DOCS_URL || 'http://localhost:4321/safemesh/merge-illustrations/';
 for (const width of [1280, 390]) for (const theme of ['light', 'dark']) {
   test(`reduced motion exposes the whole story: ${width}px ${theme}`, async () => {
     const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, headless: true });
