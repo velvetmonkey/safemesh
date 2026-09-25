@@ -409,11 +409,12 @@ fn transaction_path(root: &Path, config: WriterConfig) -> PathBuf {
     root.join(format!("writer-{}.transaction", config.writer))
 }
 
-/// Additive durable API for Linux local filesystems. The root must already
-/// exist durably and remain in place; all writers use the same fixed root and
-/// configuration. Each Accepted/Ok(record) follows full transaction replacement
-/// and file + directory sync. Any persistence error permanently disables this
-/// instance's writes, retaining its fence until drop. Use the explicit restart
+/// Additive durable API for Linux local filesystems. Fresh constructors create
+/// a missing root; the root must then remain in place. All writers use the same
+/// fixed root and configuration. Each Accepted/Ok(record) follows full
+/// transaction replacement and file + directory sync. Any persistence error
+/// permanently disables this instance's writes, retaining its fence until drop.
+/// Use the explicit restart
 /// constructors for existing stores; fresh constructors never reset a store.
 pub struct DurableReplica<C: Crdt> {
     inner: LocalReplica<C>,
@@ -453,6 +454,7 @@ where
     C::Delta: OwnedDelta + Clone + PartialEq + WireEncode + WireSchema,
 {
     fn fresh(root: &Path, config: WriterConfig, state: C) -> Result<Self, LocalError> {
+        fs::create_dir_all(root)?;
         let root = root.canonicalize()?;
         // Never overwrite a transaction whose fence is missing.
         match fs::metadata(transaction_path(&root, config)) {
@@ -972,6 +974,112 @@ mod durable_tests {
             writers: 2,
             writer: 0,
         }
+    }
+    #[test]
+    fn fresh_durable_counter_creates_missing_root() {
+        let store = root().join("fresh-counter");
+        assert!(!store.exists());
+        let replica = DurableReplica::counter(&store, config()).unwrap();
+        assert!(store.is_dir());
+        assert_eq!(replica.state().value(), 0);
+    }
+    #[test]
+    fn fresh_durable_set_creates_missing_root() {
+        let store = root().join("fresh-set");
+        assert!(!store.exists());
+        let replica = DurableReplica::utf8_set(&store, config()).unwrap();
+        assert!(store.is_dir());
+        assert!(replica.state().elements().is_empty());
+    }
+    #[test]
+    fn fresh_durable_root_inputs() {
+        let parent = root();
+        let nested = parent.join("missing-parent/store");
+        assert!(DurableReplica::counter(&nested, config()).is_ok());
+        assert!(nested.is_dir());
+
+        let file = parent.join("regular-file");
+        fs::write(&file, b"file").unwrap();
+        assert!(matches!(
+            DurableReplica::counter(&file, config()),
+            Err(LocalError::Io(_))
+        ));
+
+        let dangling = parent.join("dangling-link");
+        std::os::unix::fs::symlink(parent.join("missing-target"), &dangling).unwrap();
+        assert!(matches!(
+            DurableReplica::counter(&dangling, config()),
+            Err(LocalError::Io(_))
+        ));
+        assert!(!parent.join("missing-target").exists());
+
+        let missing = parent.join("restart-missing");
+        assert!(matches!(
+            DurableReplica::restart_counter(&missing, config()),
+            Err(LocalError::Io(_))
+        ));
+        assert!(matches!(
+            DurableReplica::restart_utf8_set(&missing, config()),
+            Err(LocalError::Io(_))
+        ));
+        assert!(!missing.exists());
+    }
+    #[test]
+    fn fresh_durable_race_and_live_writer() {
+        use std::sync::{Arc, Barrier};
+
+        let store = root().join("raced-store");
+        let start = Arc::new(Barrier::new(2));
+        let finish = Arc::new(Barrier::new(2));
+        let workers: Vec<_> = (0..2)
+            .map(|_| {
+                let store = store.clone();
+                let start = start.clone();
+                let finish = finish.clone();
+                std::thread::spawn(move || {
+                    start.wait();
+                    let result = DurableReplica::counter(&store, config());
+                    let outcome = match &result {
+                        Ok(_) => "ok",
+                        Err(LocalError::RecoveryRequired) => "recovery",
+                        Err(LocalError::Refused) => "refused",
+                        Err(_) => "unexpected",
+                    };
+                    finish.wait();
+                    outcome
+                })
+            })
+            .collect();
+        let outcomes: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        assert_eq!(
+            outcomes.iter().filter(|&&outcome| outcome == "ok").count(),
+            1
+        );
+        assert!(outcomes.iter().all(|outcome| *outcome != "unexpected"));
+
+        let live_root = root().join("live");
+        let _live = DurableReplica::counter(&live_root, config()).unwrap();
+        assert!(matches!(
+            DurableReplica::counter(&live_root, config()),
+            Err(LocalError::RecoveryRequired)
+        ));
+    }
+    #[test]
+    fn fresh_durable_read_only_parent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let parent = root();
+        let original = fs::metadata(&parent).unwrap().permissions();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o555)).unwrap();
+        let result = DurableReplica::counter(&parent.join("store"), config());
+        fs::set_permissions(&parent, original).unwrap();
+        assert!(
+            matches!(result, Err(LocalError::Io(ref error)) if error.kind() == io::ErrorKind::PermissionDenied)
+        );
+        assert!(!parent.join("store").exists());
     }
     #[test]
     fn oversized_stored_orset_restarts_ordinary() {
