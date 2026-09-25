@@ -4,6 +4,7 @@
 
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use safemesh_crdt::ownership::{allocate_token, WriterConfig};
 use safemesh_crdt::{
     CollectionLimits, Crdt, DecodeError, DecodeLimits, EnableWinsFlag, EnableWinsFlagDelta,
     EventLog, GCounter, GCounterDelta, GSet, LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta,
@@ -1080,12 +1081,15 @@ impl PyOrSet {
     }
 }
 
+// The WASM `SafeMeshStringOrSetReplica` error texts, message for message. Each
+// decode path keeps one stable prefix and names the core `WireError` as its
+// cause, so the same malformed bytes read the same on either binding.
 fn string_orset_record_decode_error(error: WireError) -> String {
     match error {
         WireError::CollectionElementLimitExceeded { max_elements } => {
             format!("maxCollectionElements limit exceeded: {max_elements}")
         }
-        other => format!("failed to decode record: {other:?}"),
+        cause => format!("failed to decode record: {cause}"),
     }
 }
 
@@ -1100,7 +1104,7 @@ fn string_orset_log_decode_error(error: DecodeError) -> String {
         }
         DecodeError::Wire(WireError::DeltaTypeMismatch) => "delta type mismatch".to_owned(),
         DecodeError::Wire(WireError::MissingShape) => "event log missing shape".to_owned(),
-        DecodeError::Wire(other) => format!("failed to decode event log: {other:?}"),
+        DecodeError::Wire(cause) => format!("failed to decode event log: {cause}"),
         DecodeError::RecordLimitExceeded { .. } => "failed to decode event log".to_owned(),
     }
 }
@@ -1160,17 +1164,192 @@ impl PyStringOrSetRecord {
 /// event log so records can be replayed, deduplicated and repaired from a log.
 ///
 /// Every value is computed by `safemesh_crdt::OrSet<String, u64>` and
-/// `safemesh_crdt::EventLog`. Tokens remain global to the set, exactly as in
-/// `OrSet`. Method names, verdict strings and error texts match the WASM
-/// `SafeMeshStringOrSetReplica`; errors raise `ValueError`.
+/// `safemesh_crdt::EventLog`. The optional allocated lifecycle checks ownership
+/// and holds a live-author claim within this Python process. Tokens remain
+/// global to the set, exactly as in `OrSet`. Method names, verdict strings and
+/// error texts match the WASM `SafeMeshStringOrSetReplica`; errors raise
+/// `ValueError`.
 #[pyclass(name = "StringOrSetReplica")]
 pub struct PyStringOrSetReplica {
     replica_id: u64,
+    allocated_writers: Option<u64>,
     state: OrSet<String, u64>,
     log: EventLog<OrSetDelta<String, u64>>,
 }
 
+// WASM keeps this registry `thread_local`, which is one WASM instance. A Python
+// object can be created on one thread and dropped on another, so the Python
+// registry is one process-wide set behind a mutex: at most one live allocated
+// handle per author in this process. This is not cross-process fencing.
+// Replicas built with the plain constructor never enter it.
+static STRING_ORSET_ALLOCATED_AUTHORS: std::sync::Mutex<std::collections::BTreeSet<u64>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+// The set holds plain integers, so a panic elsewhere cannot leave it half
+// updated; recover the guard instead of refusing every later claim.
+fn string_orset_allocated_authors(
+) -> std::sync::MutexGuard<'static, std::collections::BTreeSet<u64>> {
+    STRING_ORSET_ALLOCATED_AUTHORS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+impl Drop for PyStringOrSetReplica {
+    fn drop(&mut self) {
+        if self.allocated_writers.is_some() {
+            string_orset_allocated_authors().remove(&self.replica_id);
+        }
+    }
+}
+
 impl PyStringOrSetReplica {
+    fn unallocated(replica_id: u64) -> Self {
+        PyStringOrSetReplica {
+            replica_id,
+            allocated_writers: None,
+            state: OrSet::new(),
+            log: EventLog::new(),
+        }
+    }
+
+    fn claim(&mut self, writers: u64) -> Result<(), String> {
+        WriterConfig {
+            writers,
+            writer: self.replica_id,
+        }
+        .validate()
+        .map_err(|_| "invalid writer configuration".to_owned())?;
+        if !string_orset_allocated_authors().insert(self.replica_id) {
+            return Err("author already has a live allocated writer".to_owned());
+        }
+        self.allocated_writers = Some(writers);
+        Ok(())
+    }
+
+    fn try_create_allocated(writers: u64, author: u64) -> Result<Self, String> {
+        let mut replica = Self::unallocated(author);
+        replica.claim(writers)?;
+        Ok(replica)
+    }
+
+    fn check_owned_record(
+        writers: u64,
+        record: &Record<OrSetDelta<String, u64>>,
+    ) -> Result<(), String> {
+        if record.id.replica >= writers || record.id.sequence == 0 {
+            return Err(
+                "allocation/history consistency: invalid record author or sequence".to_owned(),
+            );
+        }
+        if let OrSetDelta::Add { token, .. } = &record.delta {
+            if allocate_token(writers, record.id.replica, record.id.sequence) != Some(*token) {
+                return Err("allocation/history consistency: token mismatch".to_owned());
+            }
+        }
+        Ok(())
+    }
+
+    // Check every add, including tombstoned adds, and require a complete local
+    // history. Peer histories may contain gaps during ordinary record exchange.
+    fn checked_next(&self, writers: u64) -> Result<u64, String> {
+        WriterConfig {
+            writers,
+            writer: self.replica_id,
+        }
+        .validate()
+        .map_err(|_| "invalid writer configuration".to_owned())?;
+        let mut last = 0;
+        let mut count = 0;
+        for record in self.log.records() {
+            Self::check_owned_record(writers, record)?;
+            if record.id.replica == self.replica_id {
+                last = last.max(record.id.sequence);
+                count += 1;
+            }
+        }
+        if count != last {
+            return Err("allocation/history consistency: incomplete local history".to_owned());
+        }
+        last.checked_add(1)
+            .ok_or_else(|| "allocation sequence exhausted".to_owned())
+    }
+
+    fn checked_write_next(&self, writers: u64) -> Result<u64, String> {
+        let next = self.checked_next(writers)?;
+        // Keep an exhausted but consistent identity exportable/restorable.
+        // A write must leave its subsequent cursor representable as well.
+        if next == u64::MAX {
+            return Err("allocation sequence exhausted".to_owned());
+        }
+        Ok(next)
+    }
+
+    fn check_incoming(&self, record: &Record<OrSetDelta<String, u64>>) -> Result<(), String> {
+        if let Some(writers) = self.allocated_writers {
+            Self::check_owned_record(writers, record)?;
+            if record.id.replica == self.replica_id
+                && !self.log.records().iter().any(|known| known.id == record.id)
+            {
+                return Err("incoming record claims the local author".to_owned());
+            }
+        }
+        Ok(())
+    }
+
+    fn try_append_allocated_add(&mut self, element: String) -> Result<Vec<u8>, String> {
+        let writers = self
+            .allocated_writers
+            .ok_or_else(|| "replica has no allocated identity".to_owned())?;
+        let sequence = self.checked_write_next(writers)?;
+        let token = allocate_token(writers, self.replica_id, sequence)
+            .ok_or_else(|| "token allocation exhausted".to_owned())?;
+        self.append(OrSetDelta::Add { element, token })
+    }
+
+    fn try_export_identity(&self) -> Result<Vec<u8>, String> {
+        let writers = self
+            .allocated_writers
+            .ok_or_else(|| "replica has no allocated identity".to_owned())?;
+        let next = self.checked_next(writers)?;
+        // Local identity storage only, not a new CRDT transport encoding. The
+        // suffix is the existing core log, including its shape/integrity checks.
+        // Byte for byte the layout WASM `exportIdentity` writes.
+        let mut bytes = b"SMOI\x01".to_vec();
+        for word in [writers, self.replica_id, next] {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        bytes.extend(
+            self.log
+                .to_wire_bytes()
+                .map_err(|error| format!("failed to encode event log: {error:?}"))?,
+        );
+        Ok(bytes)
+    }
+
+    fn try_import_identity(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() < 29 || &bytes[..5] != b"SMOI\x01" {
+            return Err("allocation/history consistency: invalid identity storage".to_owned());
+        }
+        let word = |i: usize| {
+            let mut buffer = [0u8; 8];
+            buffer.copy_from_slice(&bytes[i..i + 8]);
+            u64::from_le_bytes(buffer)
+        };
+        let (writers, author, next) = (word(5), word(13), word(21));
+        let mut candidate = Self::unallocated(author);
+        candidate.log = EventLog::from_wire_bytes_for(&bytes[29..], &candidate.state)
+            .map_err(|error| string_orset_log_decode_error(DecodeError::Wire(error)))?;
+        if candidate.checked_next(writers)? != next {
+            return Err("allocation/history consistency: next sequence mismatch".to_owned());
+        }
+        for record in candidate.log.records() {
+            candidate.state.apply_delta(record.delta.clone());
+        }
+        // Claim only after all checks; a failed import creates no live writer.
+        candidate.claim(writers)?;
+        Ok(candidate)
+    }
+
     fn append(&mut self, delta: OrSetDelta<String, u64>) -> Result<Vec<u8>, String> {
         let id = self
             .log
@@ -1189,10 +1368,19 @@ impl PyStringOrSetReplica {
     }
 
     fn try_append_add(&mut self, element: String, token: u64) -> Result<Vec<u8>, String> {
+        if self.allocated_writers.is_some() {
+            return Err(
+                "allocated replica rejects caller-supplied tokens; use appendAllocatedAdd"
+                    .to_owned(),
+            );
+        }
         self.append(OrSetDelta::Add { element, token })
     }
 
     fn try_append_remove_observed(&mut self, element: String) -> Result<Vec<u8>, String> {
+        if let Some(writers) = self.allocated_writers {
+            self.checked_write_next(writers)?;
+        }
         let tokens = self.state.observed_tokens(&element).into_iter().collect();
         self.append(OrSetDelta::Remove { tokens })
     }
@@ -1211,21 +1399,22 @@ impl PyStringOrSetReplica {
         .map_err(string_orset_record_decode_error)
     }
 
+    // A duplicate or collision is a verdict, not an error, as on the log path.
+    // Only an invalid record raises.
     fn try_merge_record_bytes(
         &mut self,
         bytes: &[u8],
         max_collection_elements: Option<usize>,
-    ) -> Result<&'static str, String> {
+    ) -> Result<String, String> {
         let record = Self::decode_record(bytes, max_collection_elements)?;
+        self.check_incoming(&record)?;
         match self
             .log
             .admit_with(&mut self.state, record, |state, delta| {
                 state.apply_delta(delta.clone());
             }) {
-            safemesh_crdt::Admission::Accepted => Ok("accepted"),
-            safemesh_crdt::Admission::Duplicate => Ok("duplicate"),
-            safemesh_crdt::Admission::Collision => Err("record ID collision".to_owned()),
             safemesh_crdt::Admission::Invalid(_) => Err("invalid record".to_owned()),
+            admission => Ok(admission_name(admission)),
         }
     }
 
@@ -1243,6 +1432,10 @@ impl PyStringOrSetReplica {
             },
         )
         .map_err(string_orset_log_decode_error)?;
+        // Every record passes the ownership check before any is admitted.
+        for record in &log {
+            self.check_incoming(record)?;
+        }
         Ok(log
             .iter()
             .cloned()
@@ -1285,14 +1478,51 @@ mod py_string_or_set_replica_python {
     impl PyStringOrSetReplica {
         #[new]
         pub fn new(#[pyo3(from_py_with = "numeric")] replica_id: u64) -> Self {
-            PyStringOrSetReplica {
-                replica_id,
-                state: OrSet::new(),
-                log: EventLog::new(),
-            }
+            Self::unallocated(replica_id)
+        }
+
+        /// Create an allocated writer. At most one allocated handle per author
+        /// may live in this Python process; dropping the last reference
+        /// releases it. The caller provides any cross-process exclusion and
+        /// must not restore stale snapshots.
+        #[staticmethod]
+        pub fn create_allocated(
+            #[pyo3(from_py_with = "numeric")] writers: u64,
+            #[pyo3(from_py_with = "numeric")] author: u64,
+        ) -> PyResult<Self> {
+            Self::try_create_allocated(writers, author).map_err(py_value_error)
+        }
+
+        /// Allocate through the Rust ownership rule, append, and return record bytes.
+        pub fn append_allocated_add<'py>(
+            &mut self,
+            py: Python<'py>,
+            element: String,
+        ) -> PyResult<Bound<'py, PyBytes>> {
+            self.try_append_allocated_add(element)
+                .map(|bytes| PyBytes::new_bound(py, &bytes))
+                .map_err(py_value_error)
+        }
+
+        /// Export fixed writer configuration, next sequence, and the complete
+        /// log. The bytes are caller-persisted identity storage, not a
+        /// transport packet.
+        pub fn export_identity<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+            self.try_export_identity()
+                .map(|bytes| PyBytes::new_bound(py, &bytes))
+                .map_err(py_value_error)
+        }
+
+        /// Allocation/history consistency check; failure never creates a
+        /// fresh writer. A self-consistent stale snapshot is not detected.
+        /// There is no disk I/O.
+        #[staticmethod]
+        pub fn import_identity(bytes: &[u8]) -> PyResult<Self> {
+            Self::try_import_identity(bytes).map_err(py_value_error)
         }
 
         /// Append an add record for `(element, token)` and return its wire bytes.
+        /// Allocated instances reject caller tokens; use `append_allocated_add`.
         pub fn append_add<'py>(
             &mut self,
             py: Python<'py>,
@@ -1318,16 +1548,18 @@ mod py_string_or_set_replica_python {
 
         /// Decode one record and admit it through the core event log.
         ///
-        /// Returns `"accepted"` when the record was new and applied, or
+        /// Returns the core's admission verdict, as `merge_log_bytes` does per
+        /// record: `"accepted"` when the record was new and applied,
         /// `"duplicate"` when a record with the same identity and payload was
-        /// already in the log (state does not move). A record whose identity is
-        /// known but whose payload differs raises `record ID collision`.
+        /// already in the log, and `"collision"` when the identity is known
+        /// with a different payload. Only `"accepted"` changes state. Decode
+        /// and ownership failures raise.
         #[pyo3(signature = (bytes, *, max_collection_elements = None))]
         pub fn merge_record_bytes(
             &mut self,
             bytes: &[u8],
             max_collection_elements: Option<&Bound<'_, PyAny>>,
-        ) -> PyResult<&'static str> {
+        ) -> PyResult<String> {
             let max_collection_elements = collection_budget(max_collection_elements)?;
             self.try_merge_record_bytes(bytes, max_collection_elements)
                 .map_err(py_value_error)
@@ -2843,6 +3075,200 @@ mod string_orset_tests {
         PyStringOrSetReplica::new(replica_id)
     }
 
+    // The allocated registry is process-wide and the test harness runs tests on
+    // parallel threads, so every allocated test below owns a distinct author.
+
+    #[test]
+    fn python_allocated_identity_checks_history_and_restarts() {
+        // WASM `allocated_identity_checks_history_and_restarts`, author moved to
+        // 1000 so it cannot meet another test's claim.
+        let author = 1000;
+        let writers = 1001;
+        let mut left = Replica::try_create_allocated(writers, author).unwrap();
+        let first = left.try_append_allocated_add("water".into()).unwrap();
+        let record = Replica::decode_record(&first, None).unwrap();
+        assert_eq!(record.id.sequence, 1);
+        assert_eq!(
+            record.delta,
+            OrSetDelta::Add {
+                element: "water".into(),
+                token: writers + author
+            }
+        );
+        let saved = left.try_export_identity().unwrap();
+        assert_eq!(&saved[..5], b"SMOI\x01");
+        // A second live handle for the same author is refused.
+        assert_eq!(
+            Replica::try_import_identity(&saved).err().unwrap(),
+            "author already has a live allocated writer"
+        );
+        assert_eq!(
+            Replica::try_create_allocated(writers, author)
+                .err()
+                .unwrap(),
+            "author already has a live allocated writer"
+        );
+        drop(left);
+        for (offset, word) in [
+            (5, 0u64),
+            (5, author),
+            (5, writers + 1),
+            (13, author - 1),
+            (21, 0),
+            (21, u64::MAX),
+        ] {
+            let mut bad = saved.clone();
+            bad[offset..offset + 8].copy_from_slice(&word.to_le_bytes());
+            assert!(
+                Replica::try_import_identity(&bad).is_err(),
+                "{offset} {word}"
+            );
+        }
+        let mut restored = Replica::try_import_identity(&saved).unwrap();
+        let next = restored.try_append_allocated_add("radio".into()).unwrap();
+        let record = Replica::decode_record(&next, None).unwrap();
+        assert_eq!(record.id.sequence, 2);
+        assert_eq!(
+            record.delta,
+            OrSetDelta::Add {
+                element: "radio".into(),
+                token: 2 * writers + author
+            }
+        );
+        assert_eq!(
+            restored.elements(),
+            vec!["radio".to_string(), "water".to_string()]
+        );
+    }
+
+    #[test]
+    fn python_allocated_history_refuses_gaps_zero_and_max_sequence() {
+        for sequence in [0, 2, u64::MAX] {
+            let mut replica = replica(0);
+            replica.log.insert_record(
+                &replica.state,
+                Record {
+                    id: RecordId {
+                        replica: 0,
+                        sequence,
+                    },
+                    delta: OrSetDelta::Remove { tokens: vec![] },
+                },
+            );
+            assert!(replica.checked_next(1).is_err());
+        }
+    }
+
+    #[test]
+    fn python_allocated_writer_refuses_misuse_with_wasm_texts() {
+        let author = 2000;
+        assert_eq!(
+            Replica::try_create_allocated(author, author).err().unwrap(),
+            "invalid writer configuration"
+        );
+        assert_eq!(
+            Replica::try_create_allocated(0, 0).err().unwrap(),
+            "invalid writer configuration"
+        );
+        // A failed claim leaves no live writer behind.
+        let mut writer = Replica::try_create_allocated(author + 1, author).unwrap();
+        assert_eq!(
+            writer.try_append_add("x".into(), 5).unwrap_err(),
+            "allocated replica rejects caller-supplied tokens; use appendAllocatedAdd"
+        );
+        let mut plain = replica(author);
+        assert_eq!(
+            plain.try_append_allocated_add("x".into()).unwrap_err(),
+            "replica has no allocated identity"
+        );
+        assert_eq!(
+            plain.try_export_identity().unwrap_err(),
+            "replica has no allocated identity"
+        );
+        assert_eq!(
+            Replica::try_import_identity(b"SMOI").err().unwrap(),
+            "allocation/history consistency: invalid identity storage"
+        );
+
+        // Incoming records must follow the allocation rule and must not claim
+        // the local author.
+        let own: Record<OrSetDelta<String, u64>> = Record {
+            id: RecordId {
+                replica: author,
+                sequence: 1,
+            },
+            delta: OrSetDelta::Add {
+                element: "x".into(),
+                token: allocate_token(author + 1, author, 1).unwrap(),
+            },
+        };
+        assert_eq!(
+            writer
+                .try_merge_record_bytes(&own.to_wire_bytes().unwrap(), None)
+                .unwrap_err(),
+            "incoming record claims the local author"
+        );
+        let wrong_token: Record<OrSetDelta<String, u64>> = Record {
+            id: RecordId {
+                replica: 3,
+                sequence: 1,
+            },
+            delta: OrSetDelta::Add {
+                element: "x".to_string(),
+                token: 7u64,
+            },
+        };
+        assert_eq!(
+            writer
+                .try_merge_record_bytes(&wrong_token.to_wire_bytes().unwrap(), None)
+                .unwrap_err(),
+            "allocation/history consistency: token mismatch"
+        );
+        let outsider: Record<OrSetDelta<String, u64>> = Record {
+            id: RecordId {
+                replica: author + 1,
+                sequence: 1,
+            },
+            delta: OrSetDelta::Remove { tokens: vec![] },
+        };
+        assert_eq!(
+            writer
+                .try_merge_record_bytes(&outsider.to_wire_bytes().unwrap(), None)
+                .unwrap_err(),
+            "allocation/history consistency: invalid record author or sequence"
+        );
+        assert!(writer.log.records().is_empty());
+        assert!(writer.elements().is_empty());
+    }
+
+    #[test]
+    fn python_allocated_writers_report_a_collision_as_a_verdict() {
+        // Two allocated writers in two processes may share an author id; the
+        // registry only fences one process. Simulate the second process by
+        // releasing the first handle, then show the core reports the clash.
+        let (writers, author) = (3010, 3000);
+        let mut first = Replica::try_create_allocated(writers, author).unwrap();
+        let from_first = first.try_append_allocated_add("apple".into()).unwrap();
+        drop(first);
+        let mut second = Replica::try_create_allocated(writers, author).unwrap();
+        let from_second = second.try_append_allocated_add("pear".into()).unwrap();
+        drop(second);
+
+        let mut reader = Replica::try_create_allocated(writers, 3002).unwrap();
+        assert_eq!(
+            reader.try_merge_record_bytes(&from_first, None).unwrap(),
+            "accepted"
+        );
+        let state = reader.state.clone();
+        let log = reader.log.clone();
+        assert_eq!(
+            reader.try_merge_record_bytes(&from_second, None).unwrap(),
+            "collision"
+        );
+        assert_eq!(reader.state, state);
+        assert_eq!(reader.log, log);
+    }
+
     fn fields(
         record: &PyStringOrSetRecord,
     ) -> (
@@ -2945,8 +3371,9 @@ mod string_orset_tests {
         assert_eq!(before, after);
         assert_eq!(after.3, 1);
 
-        // Same identity, different payload: the core reports a collision and the
-        // binding refuses it rather than absorbing either reading.
+        // Same identity, different payload: the core reports a collision. The
+        // binding returns that verdict, as the log path does, and absorbs
+        // neither reading.
         let forged = Record {
             id: RecordId {
                 replica: 1,
@@ -2956,12 +3383,24 @@ mod string_orset_tests {
                 element: "forged".to_string(),
                 token: 99,
             },
-        }
-        .to_wire_bytes()
-        .unwrap();
-        let error = reader.try_merge_record_bytes(&forged, None).unwrap_err();
-        assert_eq!(error, "record ID collision");
+        };
+        let verdict = reader
+            .try_merge_record_bytes(&forged.to_wire_bytes().unwrap(), None)
+            .unwrap();
+        assert_eq!(verdict, "collision");
+        let mut incoming = EventLog::for_crdt(&reader.state);
+        assert_eq!(
+            incoming.insert_record(&reader.state, forged),
+            safemesh_crdt::Admission::Accepted
+        );
+        assert_eq!(
+            reader
+                .try_merge_log_bytes(&incoming.to_wire_bytes().unwrap(), None)
+                .unwrap(),
+            vec![verdict]
+        );
         assert_eq!(reader.elements(), before.0);
+        assert_eq!(reader.tombstones(), before.1);
         assert_eq!(reader.log.records().len(), 1);
     }
 
@@ -3024,7 +3463,7 @@ mod string_orset_tests {
         planted[0] ^= 0xff;
         let mut reader = replica(2);
         let error = reader.try_merge_record_bytes(&planted, None).unwrap_err();
-        assert_eq!(error, "failed to decode record: InvalidTag");
+        assert_eq!(error, "failed to decode record: unexpected wire tag");
         assert!(reader.elements().is_empty());
         assert_eq!(reader.log.records().len(), 0);
 
@@ -3174,7 +3613,7 @@ mod string_orset_tests {
         bad[0] ^= 0xff;
         assert_eq!(
             Replica::try_inspect_record_bytes(&bad, None).unwrap_err(),
-            "failed to decode record: InvalidTag"
+            "failed to decode record: unexpected wire tag"
         );
     }
 

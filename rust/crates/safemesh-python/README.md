@@ -137,8 +137,8 @@ core's token semantics, including token reuse; the binding does not allocate IDs
 `StringOrSetReplica` carries a Rust `OrSet<String, u64>` behind an `EventLog`,
 so records can be replayed, deduplicated and repaired from a log the same way
 `GCounterReplica` does. It is the Python counterpart of the WASM
-`SafeMeshStringOrSetReplica`: method names (in snake_case), verdict strings and
-error texts match it. It sits beside `OrSet`, which is unchanged.
+`SafeMeshStringOrSetReplica` and has every one of its methods, in snake_case.
+It sits beside `OrSet`, which is unchanged.
 
 ```python
 left, right = sm.StringOrSetReplica(1), sm.StringOrSetReplica(2)
@@ -155,23 +155,76 @@ third = sm.StringOrSetReplica(3)
 assert third.merge_log_bytes(left.log_bytes()) == ["accepted", "accepted"]
 ```
 
-`merge_record_bytes` returns `"accepted"` or `"duplicate"`; a record whose
-identity is already known with a different payload raises `ValueError`
-(`record ID collision`), and bytes the core cannot decode raise
-`failed to decode record: <reason>`. `merge_log_bytes` returns one
-`"accepted"`, `"duplicate"`, or `"collision"` verdict per input record; decode
-errors raise before any record is applied. `inspect_record_bytes` decodes record
-bytes through the same core decoder without admitting them anywhere and returns
-a `StringOrSetRecord` whose `delta_kind()` is `"add"` or `"remove"`. The three
-decoding methods accept a keyword-only `max_collection_elements` budget;
-exceeding it raises `maxCollectionElements limit exceeded: <n>`. `add_entries()`
-returns `(element, token)` tuples where WASM returns entry objects.
+`merge_record_bytes` returns `"accepted"`, `"duplicate"`, or `"collision"`
+(the identity is already known with a different payload). Only `"accepted"`
+changes state. `merge_log_bytes` returns one of those verdicts per input record;
+decode errors raise before any record is applied. Bytes the core cannot decode
+raise `failed to decode record: <reason>` or `failed to decode event log:
+<reason>`, where the reason is the core's error text. `inspect_record_bytes`
+decodes record bytes through the same core decoder without admitting them
+anywhere and returns a `StringOrSetRecord` whose `delta_kind()` is `"add"` or
+`"remove"`. The three decoding methods accept a keyword-only
+`max_collection_elements` budget; exceeding it raises
+`maxCollectionElements limit exceeded: <n>`.
 
-Tokens are caller-supplied and global to the set, exactly as for `OrSet` above.
-The WASM allocated-writer lifecycle (`create_allocated`, `append_allocated_add`,
-`export_identity`, `import_identity`) is not exposed in Python. Where WASM throws
-`SafeMeshError` with a numeric code, Python raises `ValueError` with the same
-message.
+Tokens are caller-supplied and global to the set, exactly as for `OrSet` above,
+unless the replica is allocated.
+
+### Allocated writers
+
+An allocated replica takes its tokens from the Rust ownership rule instead of
+from the caller:
+
+```python
+writer = sm.StringOrSetReplica.create_allocated(2, 0)  # writers, author
+record = writer.append_allocated_add("water")        # token 2, sequence 1
+saved = writer.export_identity()                     # store this yourself
+del writer                                           # releases author 0
+restored = sm.StringOrSetReplica.import_identity(saved)
+restored.append_allocated_add("radio")               # token 4, sequence 2
+```
+
+An allocated replica refuses `append_add` with a caller token, and refuses
+incoming records whose author, sequence or token break the allocation rule, or
+that claim its own author without already being in its log.
+`export_identity()` returns local storage bytes (writer count, author, next
+sequence, and the full log), not a transport packet. `import_identity` checks
+the stored history and never creates a fresh writer when a check fails. It does
+not detect a stale snapshot that is consistent with itself, and it does no disk
+I/O.
+
+At most one allocated handle per author may be live in one Python process.
+A second `create_allocated` or `import_identity` for a live author raises
+`author already has a live allocated writer`. The claim is released when the
+handle is deallocated. WASM enforces the same rule per WASM instance. Neither
+binding fences other processes: two processes that allocate the same author
+produce records with the same ID and different payloads, and a reader reports
+the second one as `"collision"`. Cross-process exclusion is the caller's job.
+
+### Differences from WASM
+
+- Errors raise `ValueError` with the WASM message. WASM's numeric
+  `SafeMeshError` code is not carried over. Error texts are the WASM strings
+  unchanged, so the append refusal on an allocated replica names the WASM
+  method: `allocated replica rejects caller-supplied tokens; use
+  appendAllocatedAdd`.
+- Integer arguments go through the same checks as the other Python classes: a
+  bool raises `TypeError`, a negative or too-large integer raises
+  `OverflowError`. WASM raises `SafeMeshError` code 2 with its own text for
+  these.
+- `max_collection_elements` is keyword-only.
+- `add_entries()` returns `(element, token)` tuples where WASM returns entry
+  objects with `element()` and `token()`.
+- WASM releases an allocated claim on `free()`. Python has no `free()`; the
+  claim is released when the object is deallocated (`del` of the last
+  reference, or garbage collection).
+- The live-author registry is per Python process instead of per WASM instance,
+  because a Python object can be used and dropped on any thread.
+
+`tests/string_orset_wasm_parity.py` runs one list of steps through the
+installed wheel and through a Node build of the WASM package, and requires the
+same bytes, verdicts, reads and error texts from both, including an
+allocated-writer collision. The package smoke script runs it.
 
 ## Experimental value classes
 

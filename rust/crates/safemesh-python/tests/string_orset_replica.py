@@ -34,7 +34,8 @@ assert (third.elements(), third.tombstones(), third.add_entries()) == (
 for replica in [left, right, third]:
     assert (replica.version_for(1), replica.version_for(2)) == (2, 0)
 
-# C2: a duplicate does not move state; same identity, other payload is refused.
+# C2: a duplicate does not move state; same identity, other payload is a
+# collision verdict on both merge paths, and neither reading is absorbed.
 author, reader = sm.StringOrSetReplica(1), sm.StringOrSetReplica(2)
 record = author.append_add('vaccine', 11)
 assert reader.merge_record_bytes(record) == 'accepted'
@@ -42,7 +43,7 @@ assert reader.merge_record_bytes(record) == 'duplicate'
 assert (reader.elements(), reader.version_for(1)) == (['vaccine'], 1)
 forger = sm.StringOrSetReplica(1)
 forged = forger.append_add('forged', 99)
-raises(ValueError, lambda: reader.merge_record_bytes(forged), 'record ID collision')
+assert reader.merge_record_bytes(forged) == 'collision'
 assert reader.merge_log_bytes(forger.log_bytes()) == ['collision']
 assert (reader.elements(), reader.add_entries()) == (['vaccine'], [('vaccine', 11)])
 
@@ -50,9 +51,9 @@ assert (reader.elements(), reader.add_entries()) == (['vaccine'], [('vaccine', 1
 planted = bytes([record[0] ^ 0xff]) + record[1:]
 reader = sm.StringOrSetReplica(2)
 raises(ValueError, lambda: reader.merge_record_bytes(planted),
-       'failed to decode record: InvalidTag')
+       'failed to decode record: unexpected wire tag')
 raises(ValueError, lambda: sm.StringOrSetReplica.inspect_record_bytes(planted),
-       'failed to decode record: InvalidTag')
+       'failed to decode record: unexpected wire tag')
 log = author.log_bytes()
 for position in range(len(log)):
     bad = bytearray(log)
@@ -116,3 +117,40 @@ for bad in [True, False, 0.5, -1, 1 << 64]:
            lambda: replica.merge_record_bytes(add, max_collection_elements=bad))
 raises(TypeError, lambda: replica.append_add(b'x', 1))
 assert replica.elements() == [] and replica.version_for(1) == 0
+
+# Allocated writers. The registry is process-wide and the Rust test harness runs
+# this script beside other tests, so these authors (5000 and up) are unique.
+W = 5010
+writer = sm.StringOrSetReplica.create_allocated(W, 5000)
+first = writer.append_allocated_add('water')
+view = sm.StringOrSetReplica.inspect_record_bytes(first)
+assert (view.replica(), view.sequence(), view.token()) == (5000, 1, W + 5000)
+raises(ValueError, lambda: sm.StringOrSetReplica.create_allocated(W, 5000),
+       'author already has a live allocated writer')
+raises(ValueError, lambda: writer.append_add('x', 1),
+       'allocated replica rejects caller-supplied tokens; use appendAllocatedAdd')
+raises(ValueError, lambda: sm.StringOrSetReplica.create_allocated(5001, 5001),
+       'invalid writer configuration')
+plain = sm.StringOrSetReplica(5002)
+raises(ValueError, lambda: plain.append_allocated_add('x'), 'replica has no allocated identity')
+raises(ValueError, lambda: plain.export_identity(), 'replica has no allocated identity')
+raises(ValueError, lambda: sm.StringOrSetReplica.import_identity(b'SMOI'),
+       'allocation/history consistency: invalid identity storage')
+for bad in [True, -1, 1 << 64]:
+    raises((TypeError, OverflowError), lambda: sm.StringOrSetReplica.create_allocated(bad, 1))
+    raises((TypeError, OverflowError), lambda: sm.StringOrSetReplica.create_allocated(W, bad))
+saved = writer.export_identity()
+assert isinstance(saved, bytes) and saved[:5] == b'SMOI\x01'
+raises(ValueError, lambda: sm.StringOrSetReplica.import_identity(saved),
+       'author already has a live allocated writer')
+del writer, view
+restored = sm.StringOrSetReplica.import_identity(saved)
+second = restored.append_allocated_add('radio')
+assert sm.StringOrSetReplica.inspect_record_bytes(second).token() == 2 * W + 5000
+assert restored.elements() == ['radio', 'water']
+peer = sm.StringOrSetReplica.create_allocated(W, 5003)
+assert peer.merge_log_bytes(restored.log_bytes()) == ['accepted', 'accepted']
+raises(ValueError, lambda: peer.merge_record_bytes(add),
+       'allocation/history consistency: token mismatch')
+assert peer.elements() == ['radio', 'water']
+del restored, peer
