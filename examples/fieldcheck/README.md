@@ -25,6 +25,19 @@ Each invocation starts its own OS process with exclusive ownership of its own
 store. Keep the same writer flag on restart. The connecting service retries after
 socket loss; the listener accepts a new connection after the old socket closes.
 Independent saves remain available while disconnected and during a live connection.
+`--listen` and `--connect` are start-time flags, not prompt commands. To make
+opposing offline inspections and then reconnect, start each CLI without its
+network flag, using `--writer 1` for device-b and `--writer 0` for device-a.
+Enter `draft` and `save` on each. Then enter `quit` at both prompts and restart
+the same stores in separate terminals:
+
+```sh
+python3 examples/fieldcheck/fieldcheck.py /absolute/existing/parent/device-b --writer 1 --listen 127.0.0.1:7402
+python3 examples/fieldcheck/fieldcheck.py /absolute/existing/parent/device-a --writer 0 --connect 127.0.0.1:7402
+```
+
+Enter `show` after exchange. The CLI names each item needing review and each
+resolved item in plain words, using the service's current status projection.
 There is no simulated-offline switch: kill a service or actually close the socket.
 Only numeric loopback addresses are supported in this slice. One listener and one
 connector form the fixed pair; there is no enrollment or relay.
@@ -43,7 +56,9 @@ show
 ```
 
 `show` requests a fresh service snapshot, including received records, network
-status and durable delivery evidence. It does not rely on the CLI’s cached list.
+status, durable delivery evidence, and review state. It does not rely on the
+CLI’s cached list. The prompt commands are `draft Pass|Fail "inspector" "note"`,
+`save`, `show`, `reopen`, and `quit`.
 
 The draft gets a UUID and is fsynced to `new-store.draft.json` beside the store
 before submission. Keep that file when resolving an uncertain save.
@@ -97,7 +112,14 @@ IDs, projected from the durable records. A review resolves a disagreement only
 when it cites every other observation currently present for that item. An
 unreferenced later observation or a competing review reopens it. Original records
 remain unchanged. The Python CLI still creates ordinary inspections with an
-empty citation list; review submissions use the service's JSON pipe directly.
+empty citation list. To file a review today, quit the Python CLI so it releases
+the store, then start the Rust service directly on that store with the same
+`--writer` value. Send a new inspection JSON line on its stdin with a fresh
+`event_id`, the same `item_id`, your chosen `Pass` or `Fail` answer and note, and
+an `observed_event_ids` array containing every other observation for that item
+shown by `show`. The array must be sorted; at least one cited answer must differ
+from yours. The service responds with `saved` or an error. Exit that service,
+restart the Python CLI with the same writer and network flags, and enter `show`.
 There is no browser UI. The forced-kill journey
 establishes process-crash recovery on the tested Linux filesystem, not arbitrary
 hardware/power-loss guarantees.
