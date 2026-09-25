@@ -51,6 +51,10 @@ by searching the Git repository for its manifest, so the Git URL needs neither a
 subdirectory nor a root `Cargo.toml`. See [Cargo's Git dependency rules](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies-from-git-repositories)
 and the [package manifest](Cargo.toml).
 
+Compatibility note for the first release: `WireError` is `#[non_exhaustive]`.
+Downstream Rust matches must include a wildcard arm so future error variants do
+not break compilation. Existing variants, messages, and wire bytes are unchanged.
+
 The [integration guide](https://velvetmonkey.github.io/safemesh/using-safemesh/#rust)
 provides complete runnable programs and rustdoc evidence for this install,
 OR-Set token recovery without `local-writer`, and the `u64`-key/`u64`-value LWW

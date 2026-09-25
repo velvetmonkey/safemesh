@@ -35,6 +35,7 @@ pub(super) const TAG_LWW_MAP_REMOVE_U64: u8 = 0x71;
 pub(super) const TAG_LWW_MAP_U64: u8 = 0x72;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WireError {
     OwnershipViolation,
     UnexpectedEof,
