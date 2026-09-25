@@ -50,6 +50,36 @@ pub enum WireError {
     ArityKindMismatch,
 }
 
+impl core::fmt::Display for WireError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::OwnershipViolation => {
+                f.write_str("record violates replica ownership or coordinate bounds")
+            }
+            Self::UnexpectedEof => f.write_str("unexpected end of wire input"),
+            Self::InvalidTag => f.write_str("unexpected wire tag"),
+            Self::TrailingBytes => f.write_str("unexpected trailing bytes after wire value"),
+            Self::LengthOverflow => f.write_str("wire length exceeds the representable range"),
+            Self::RecordCollision => f.write_str("record identity has conflicting payloads"),
+            Self::IntegrityMismatch => f.write_str("wire frame integrity check failed"),
+            Self::InvalidUtf8 => f.write_str("wire string contains invalid UTF-8"),
+            Self::MissingShape => f.write_str("wire frame is missing required shape metadata"),
+            Self::DeltaTypeMismatch => {
+                f.write_str("wire delta schema does not match the expected type")
+            }
+            Self::ReplicaCountMismatch { expected, actual } => write!(
+                f,
+                "replica-count mismatch: expected={expected}, actual={actual}"
+            ),
+            Self::ArityKindMismatch => {
+                f.write_str("invalid or incompatible replica-domain arity kind")
+            }
+        }
+    }
+}
+
+impl core::error::Error for WireError {}
+
 /// Optional limits for [`EventLog::from_wire_bytes_with_limits`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DecodeLimits {

@@ -1,0 +1,1 @@
+milk remains=true; observed token removed, fresh token survives
