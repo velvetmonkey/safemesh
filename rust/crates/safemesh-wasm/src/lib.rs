@@ -114,7 +114,7 @@ fn wire_decode_error(error: WireError, context: &str) -> JsValue {
             3,
             &format!("maxCollectionElements limit exceeded: {max_elements}"),
         ),
-        _ => safe_mesh_error(1, context),
+        other => safe_mesh_error(1, &format!("{context}: {other}")),
     }
 }
 
@@ -145,7 +145,10 @@ fn event_log_decode_js_error(error: DecodeError) -> JsValue {
             safe_mesh_error(1, "delta type mismatch")
         }
         DecodeError::Wire(WireError::MissingShape) => safe_mesh_error(1, "event log missing shape"),
-        _ => safe_mesh_error(1, "failed to decode event log"),
+        DecodeError::Wire(other) => {
+            safe_mesh_error(1, &format!("failed to decode event log: {other}"))
+        }
+        DecodeError::RecordLimitExceeded { .. } => safe_mesh_error(1, "failed to decode event log"),
     }
 }
 
@@ -1186,7 +1189,7 @@ fn event_log_decode_error(error: safemesh_crdt::WireError) -> BindingError {
             }
             safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch".to_string(),
             safemesh_crdt::WireError::MissingShape => "event log missing shape".to_string(),
-            other => format!("failed to decode event log: {other:?}"),
+            other => format!("failed to decode event log: {other}"),
         },
     )
 }
@@ -1505,7 +1508,7 @@ impl SafeMeshStringOrSetReplica {
                 3,
                 format!("maxCollectionElements limit exceeded: {max_elements}"),
             ),
-            other => binding_error(1, format!("failed to decode record: {other:?}")),
+            other => binding_error(1, format!("failed to decode record: {other}")),
         })
     }
 
@@ -2810,6 +2813,60 @@ mod tests {
     }
 
     #[test]
+    fn wasm_utf8_orset_record_and_log_decode_errors_share_wire_cause() {
+        let mut source = SafeMeshStringOrSetReplica::new(0);
+        let record = source.append_add("item".to_string(), 1).unwrap();
+        let log = source.log_bytes().unwrap();
+        let cases = [
+            ("undecodable_bytes", vec![0], vec![0], "unexpected wire tag"),
+            (
+                "empty_bytes",
+                vec![],
+                vec![],
+                "unexpected end of wire input",
+            ),
+            (
+                "truncated_frame",
+                vec![1],
+                vec![3],
+                "unexpected end of wire input",
+            ),
+            (
+                "trailing_bytes",
+                [record, vec![0]].concat(),
+                [log, vec![0]].concat(),
+                "unexpected trailing bytes after wire value",
+            ),
+        ];
+        for (name, record_bytes, log_bytes, cause) in cases {
+            let mut receiver = SafeMeshStringOrSetReplica::new(1);
+            let record_error = receiver.try_merge_record_bytes(&record_bytes).unwrap_err();
+            let log_error = receiver.try_merge_log_bytes(&log_bytes).unwrap_err();
+            assert_eq!(record_error.code, 1, "{name}");
+            assert_eq!(log_error.code, 1, "{name}");
+            assert_eq!(
+                record_error.message,
+                format!("failed to decode record: {cause}"),
+                "{name}"
+            );
+            assert_eq!(
+                log_error.message,
+                format!("failed to decode event log: {cause}"),
+                "{name}"
+            );
+            assert_eq!(
+                record_error
+                    .message
+                    .strip_prefix("failed to decode record: "),
+                log_error
+                    .message
+                    .strip_prefix("failed to decode event log: "),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
     fn wasm_string_orset_replica_refuses_corrupted_bytes_without_panicking() {
         let mut author = SafeMeshStringOrSetReplica::new(1);
         let good = author.append_add("vaccine".to_string(), 11).unwrap();
@@ -2828,7 +2885,10 @@ mod tests {
         let mut reader = SafeMeshStringOrSetReplica::new(2);
         let error = reader.try_merge_record_bytes(&planted).unwrap_err();
         println!("C3 planted bad byte 0 (record tag): {}", error.message);
-        assert_eq!(error.message, "failed to decode record: InvalidTag");
+        assert_eq!(
+            error.message,
+            "failed to decode record: unexpected wire tag"
+        );
         assert!(reader.elements().is_empty());
         assert_eq!(reader.log.records().len(), 0);
 
@@ -3028,7 +3088,7 @@ mod tests {
             SafeMeshStringOrSetReplica::try_inspect_record_bytes(&bad)
                 .unwrap_err()
                 .message,
-            "failed to decode record: InvalidTag"
+            "failed to decode record: unexpected wire tag"
         );
     }
 }

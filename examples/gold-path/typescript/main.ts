@@ -81,7 +81,7 @@ try {
       assert.throws(() => malformedTarget.mergeRecordBytes(new Uint8Array()), (error: unknown) => {
         assert(error instanceof Error);
         assert.equal(error.name, "SafeMeshError");
-        assert.equal(error.message, "failed to decode record");
+        assert.equal(error.message, "failed to decode record: unexpected end of wire input");
         console.log(`malformed record: ${error.name}: ${error.message}`);
         return true;
       });

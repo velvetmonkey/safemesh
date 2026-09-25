@@ -35,8 +35,22 @@ assertSafeMeshError(
 assertSafeMeshError(
   () => replica.mergeRecordBytes(new Uint8Array([0])),
   1,
-  "failed to decode record",
+  "failed to decode record: unexpected wire tag",
 );
+
+const validRecord = replica.appendBump(1, 1n);
+const validLog = replica.logBytes();
+for (const [name, recordBytes, logBytes, cause] of [
+  ["undecodable_bytes", [0], [0], "unexpected wire tag"],
+  ["empty_bytes", [], [], "unexpected end of wire input"],
+  ["truncated_frame", [1], [3], "unexpected end of wire input"],
+  ["trailing_bytes", [...validRecord, 0], [...validLog, 0], "unexpected trailing bytes after wire value"],
+]) {
+  assertSafeMeshError(() => replica.mergeRecordBytes(Uint8Array.from(recordBytes)), 1,
+    `failed to decode record: ${cause}`);
+  assertSafeMeshError(() => replica.mergeLogBytes(Uint8Array.from(logBytes)), 1,
+    `failed to decode event log: ${cause}`);
+}
 
 function replaceRecordInLog(log, original, replacement) {
   const frame = Uint8Array.from(log);
