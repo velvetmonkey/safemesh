@@ -11,6 +11,13 @@ fn typescript_surface_lists_the_public_binding() {
     assert!(DTS.contains("tryApplyBump(replica: number, tally: bigint): void"));
     assert!(DTS.contains("applyRemove(tokens: BigUint64Array): void"));
     assert!(DTS.contains("export class SafeMeshGCounterReplica"));
+    assert_eq!(
+        DTS.matches(
+            "mergeStateBytes(bytes: Uint8Array, max_collection_elements?: number | null): void"
+        )
+        .count(),
+        2
+    );
     assert!(DTS.contains("export class SafeMeshLwwRegister"));
     assert!(DTS.contains("export class SafeMeshLwwRegisterReplica"));
     assert!(DTS.contains("export class SafeMeshEnableWinsFlag"));
@@ -28,11 +35,11 @@ fn typescript_surface_lists_the_public_binding() {
     assert!(DTS.contains("exportIdentity(): Uint8Array"));
     assert!(DTS.contains("static importIdentity(bytes: Uint8Array): SafeMeshStringOrSetReplica"));
     assert!(DTS.contains("appendRemoveObserved(element: string): Uint8Array"));
-    assert!(DTS.contains("mergeRecordBytes(bytes: Uint8Array): \"accepted\" | \"duplicate\""));
+    assert!(DTS.contains("mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): \"accepted\" | \"duplicate\""));
     assert!(DTS.contains("elements(): string[]"));
     assert!(DTS.contains("observedTokens(element: string): BigUint64Array"));
     assert!(DTS.contains("addEntries(): SafeMeshStringOrSetAddEntry[]"));
-    assert!(DTS.contains("static inspectRecordBytes(bytes: Uint8Array): SafeMeshStringOrSetRecord"));
+    assert!(DTS.contains("static inspectRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): SafeMeshStringOrSetRecord"));
     assert!(DTS.contains("deltaKind(): \"add\" | \"remove\""));
     assert!(DTS.contains("element(): string | undefined"));
     assert!(DTS.contains("token(): bigint | undefined"));
@@ -48,10 +55,12 @@ fn typescript_surface_lists_the_public_binding() {
     ));
     assert!(DTS.contains("appendEnable(token: bigint): Uint8Array"));
     assert!(DTS.contains("appendDisableObserved(): Uint8Array"));
-    assert!(DTS.contains("mergeRecordBytes(bytes: Uint8Array): void"));
+    assert!(DTS.contains(
+        "mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): void"
+    ));
     assert_eq!(
         DTS.matches(
-            "mergeLogBytes(bytes: Uint8Array): (\"accepted\" | \"duplicate\" | \"collision\")[]"
+            "mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): (\"accepted\" | \"duplicate\" | \"collision\")[]"
         )
         .count(),
         6
