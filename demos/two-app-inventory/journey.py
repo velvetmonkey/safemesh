@@ -7,6 +7,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -84,7 +85,7 @@ def main():
                 status = rpc(ports[index], 'status')
                 require(status['pid'] == process.pid, 'unexpected listener')
                 require(status['package_version'] == '0.1.0', 'wrong package version')
-                require(Path(status['package_file']).is_relative_to(app / 'venv'),
+                require(app / 'venv' in Path(status['package_file']).parents,
                         'package did not load from private installed environment')
                 emit('started', **status)
                 return status
@@ -121,7 +122,7 @@ def main():
             app.mkdir()
             for filename in (f'{name}.py', 'node.py', 'requirements.txt'):
                 shutil.copy2(source / filename, app / filename)
-            subprocess.run(['python3', '-m', 'venv', str(app / 'venv')], check=True, env=env)
+            subprocess.run([sys.executable, '-m', 'venv', str(app / 'venv')], check=True, env=env)
             subprocess.run([str(app / 'venv/bin/pip'), 'install', '--no-index',
                             '--find-links', str(args.wheels.resolve()),
                             '-r', str(app / 'requirements.txt')], check=True, env=env)
