@@ -34,26 +34,26 @@ fn corpus() -> PathBuf {
 // This checks the source identity, not byte-for-byte reproducibility. For that,
 // follow the isolated baseline regeneration procedure in the fixture README.
 #[test]
-fn bootstrap_generating_source_is_in_history() {
+fn bootstrap_library_source_is_in_history() {
     let readme = corpus().join("README.md");
     let text = fs::read_to_string(&readme).unwrap();
     let claims: Vec<_> = text
         .lines()
-        .filter(|line| line.starts_with("Generating source:"))
+        .filter(|line| line.starts_with("Library source used by the reproduction check:"))
         .collect();
     assert_eq!(
         claims.len(),
         1,
-        "{}: expected exactly one Generating source claim",
+        "{}: expected exactly one library source claim",
         readme.display()
     );
     let sha = claims[0]
-        .strip_prefix("Generating source: `")
+        .strip_prefix("Library source used by the reproduction check: `")
         .and_then(|s| s.strip_suffix("`."))
         .unwrap_or_else(|| panic!("{}: malformed claim: {}", readme.display(), claims[0]));
     assert!(
         sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
-        "{}: generating source must be a full commit SHA, found {sha:?}",
+        "{}: library source must be a full commit SHA, found {sha:?}",
         readme.display()
     );
     // Anchor at the code checkout, even when BOOTFIXTURE_DIR selects a scratch
@@ -65,7 +65,7 @@ fn bootstrap_generating_source_is_in_history() {
         .expect("bootstrap provenance requires git and repository history");
     assert!(
         object.status.success() && object.stdout == b"commit\n",
-        "{}: generating source {sha} must name an existing commit object; \
+        "{}: library source {sha} must name an existing commit object; \
          found {:?}: {}. Use a full-history checkout (CI fetch-depth: 0)",
         readme.display(),
         String::from_utf8_lossy(&object.stdout).trim(),
@@ -78,7 +78,7 @@ fn bootstrap_generating_source_is_in_history() {
         .expect("bootstrap provenance requires git and repository history");
     assert!(
         result.status.success(),
-        "{}: generating source {sha} is not a reachable commit in this checkout's HEAD history \
+        "{}: library source {sha} is not a reachable commit in this checkout's HEAD history \
          (git status {}): {}. Use a full-history checkout (CI fetch-depth: 0); \
          for a shallow clone, run git fetch --unshallow before testing",
         readme.display(),
