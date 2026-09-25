@@ -1,15 +1,15 @@
 // Real Astro regressions, adapted from the supplied tooling review probes.
 // All source mutations and builds happen in a disposable clone.
 import fs from 'node:fs';
-import { resolve, join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync, execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { test, after } from 'node:test';
 import { parse, serialize } from 'parse5';
 const live = fileURLToPath(new URL('../', import.meta.url));
-const scratch = fs.mkdtempSync(join(tmpdir(), 'assurance-'));
+// Astro resolves symlinked dependencies against the fixture root during builds.
+const scratch = fs.mkdtempSync(join(dirname(live), 'assurance-'));
 const root = join(scratch, 'repo'), out = join(scratch, 'results');
 execFileSync('git', ['clone', '--quiet', '--shared', live, root]);
 const docs = join(root, 'docs');

@@ -67,6 +67,8 @@ jobs:
         run: |
           npm --prefix docs ci
           npm --prefix web ci
+      - name: Test documentation assurance
+        run: npm --prefix docs test
       - name: Run Rust and compiled TypeScript first-use fixtures and check documentation drift
         run: python3 scripts/check-gold-paths.py
       - name: Build documentation, search and the Lab at the deployment address
