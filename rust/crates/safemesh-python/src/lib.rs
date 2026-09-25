@@ -5,9 +5,9 @@
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use safemesh_crdt::{
-    CollectionLimits, Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta,
-    GSet, LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, PnCounter, Record, Rga,
-    WireDecode, WireEncode,
+    CollectionLimits, Crdt, DecodeError, DecodeLimits, EnableWinsFlag, EnableWinsFlagDelta,
+    EventLog, GCounter, GCounterDelta, GSet, LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta,
+    OrSet, OrSetDelta, PnCounter, Record, Rga, WireDecode, WireEncode, WireError,
 };
 
 // Reject bool at the Python boundary before any method body can mutate state.
@@ -993,6 +993,8 @@ mod py_lww_register_replica_python {
 fn safemesh_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGCounter>()?;
     m.add_class::<PyOrSet>()?;
+    m.add_class::<PyStringOrSetReplica>()?;
+    m.add_class::<PyStringOrSetRecord>()?;
     m.add_class::<PyGSet>()?;
     m.add_class::<PyPnCounter>()?;
     m.add_class::<PyRga>()?;
@@ -1075,6 +1077,313 @@ mod py_or_set_python {
 impl PyOrSet {
     pub fn merge(&mut self, other: &PyOrSet) {
         self.inner.merge(&other.inner);
+    }
+}
+
+fn string_orset_record_decode_error(error: WireError) -> String {
+    match error {
+        WireError::CollectionElementLimitExceeded { max_elements } => {
+            format!("maxCollectionElements limit exceeded: {max_elements}")
+        }
+        other => format!("failed to decode record: {other:?}"),
+    }
+}
+
+fn string_orset_log_decode_error(error: DecodeError) -> String {
+    match error {
+        DecodeError::Wire(WireError::CollectionElementLimitExceeded { max_elements }) => {
+            format!("maxCollectionElements limit exceeded: {max_elements}")
+        }
+        DecodeError::Wire(WireError::RecordCollision) => "record ID collision".to_owned(),
+        DecodeError::Wire(WireError::ReplicaCountMismatch { .. }) => {
+            "replica count mismatch".to_owned()
+        }
+        DecodeError::Wire(WireError::DeltaTypeMismatch) => "delta type mismatch".to_owned(),
+        DecodeError::Wire(WireError::MissingShape) => "event log missing shape".to_owned(),
+        DecodeError::Wire(other) => format!("failed to decode event log: {other:?}"),
+        DecodeError::RecordLimitExceeded { .. } => "failed to decode event log".to_owned(),
+    }
+}
+
+/// A record decoded by the core, exposed field by field.
+///
+/// `delta_kind()` is `"add"` (then `element()` and `token()` are set, `tokens()`
+/// is empty) or `"remove"` (then `tokens()` carries the tombstoned tokens and
+/// `element()`/`token()` are `None`).
+#[pyclass(name = "StringOrSetRecord", frozen)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PyStringOrSetRecord {
+    id: safemesh_crdt::RecordId,
+    delta: OrSetDelta<String, u64>,
+}
+
+#[pymethods]
+impl PyStringOrSetRecord {
+    pub fn replica(&self) -> u64 {
+        self.id.replica
+    }
+
+    pub fn sequence(&self) -> u64 {
+        self.id.sequence
+    }
+
+    pub fn delta_kind(&self) -> &'static str {
+        match self.delta {
+            OrSetDelta::Add { .. } => "add",
+            OrSetDelta::Remove { .. } => "remove",
+        }
+    }
+
+    pub fn element(&self) -> Option<String> {
+        match &self.delta {
+            OrSetDelta::Add { element, .. } => Some(element.clone()),
+            OrSetDelta::Remove { .. } => None,
+        }
+    }
+
+    pub fn token(&self) -> Option<u64> {
+        match &self.delta {
+            OrSetDelta::Add { token, .. } => Some(*token),
+            OrSetDelta::Remove { .. } => None,
+        }
+    }
+
+    pub fn tokens(&self) -> Vec<u64> {
+        match &self.delta {
+            OrSetDelta::Add { .. } => Vec::new(),
+            OrSetDelta::Remove { tokens } => tokens.clone(),
+        }
+    }
+}
+
+/// Observed-remove set of UTF-8 string elements and u64 tokens, carried by an
+/// event log so records can be replayed, deduplicated and repaired from a log.
+///
+/// Every value is computed by `safemesh_crdt::OrSet<String, u64>` and
+/// `safemesh_crdt::EventLog`. Tokens remain global to the set, exactly as in
+/// `OrSet`. Method names, verdict strings and error texts match the WASM
+/// `SafeMeshStringOrSetReplica`; errors raise `ValueError`.
+#[pyclass(name = "StringOrSetReplica")]
+pub struct PyStringOrSetReplica {
+    replica_id: u64,
+    state: OrSet<String, u64>,
+    log: EventLog<OrSetDelta<String, u64>>,
+}
+
+impl PyStringOrSetReplica {
+    fn append(&mut self, delta: OrSetDelta<String, u64>) -> Result<Vec<u8>, String> {
+        let id = self
+            .log
+            .append_with(
+                &mut self.state,
+                self.replica_id,
+                delta.clone(),
+                |state, delta| {
+                    state.apply_delta(delta.clone());
+                },
+            )
+            .map_err(|_| "event log sequence exhausted".to_owned())?;
+        Record { id, delta }
+            .to_wire_bytes()
+            .map_err(|error| format!("failed to encode record: {error:?}"))
+    }
+
+    fn try_append_add(&mut self, element: String, token: u64) -> Result<Vec<u8>, String> {
+        self.append(OrSetDelta::Add { element, token })
+    }
+
+    fn try_append_remove_observed(&mut self, element: String) -> Result<Vec<u8>, String> {
+        let tokens = self.state.observed_tokens(&element).into_iter().collect();
+        self.append(OrSetDelta::Remove { tokens })
+    }
+
+    fn decode_record(
+        bytes: &[u8],
+        max_collection_elements: Option<usize>,
+    ) -> Result<Record<OrSetDelta<String, u64>>, String> {
+        Record::<OrSetDelta<String, u64>>::from_wire_bytes_with_collection_limits(
+            bytes,
+            CollectionLimits {
+                max_elements: max_collection_elements
+                    .or(CollectionLimits::WIRE_DEFAULT.max_elements),
+            },
+        )
+        .map_err(string_orset_record_decode_error)
+    }
+
+    fn try_merge_record_bytes(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<usize>,
+    ) -> Result<&'static str, String> {
+        let record = Self::decode_record(bytes, max_collection_elements)?;
+        match self
+            .log
+            .admit_with(&mut self.state, record, |state, delta| {
+                state.apply_delta(delta.clone());
+            }) {
+            safemesh_crdt::Admission::Accepted => Ok("accepted"),
+            safemesh_crdt::Admission::Duplicate => Ok("duplicate"),
+            safemesh_crdt::Admission::Collision => Err("record ID collision".to_owned()),
+            safemesh_crdt::Admission::Invalid(_) => Err("invalid record".to_owned()),
+        }
+    }
+
+    fn try_merge_log_bytes(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<usize>,
+    ) -> Result<Vec<String>, String> {
+        let log = EventLog::<OrSetDelta<String, u64>>::records_from_wire_bytes_for_with_limits(
+            bytes,
+            &self.state,
+            DecodeLimits {
+                max_collection_elements,
+                ..DecodeLimits::default()
+            },
+        )
+        .map_err(string_orset_log_decode_error)?;
+        Ok(log
+            .iter()
+            .cloned()
+            .map(|record| {
+                self.log
+                    .admit_with(&mut self.state, record, |state, delta| {
+                        state.apply_delta(delta.clone());
+                    })
+            })
+            .map(admission_name)
+            .collect())
+    }
+
+    fn try_log_bytes(&self) -> Result<Vec<u8>, String> {
+        self.log
+            .to_wire_bytes()
+            .map_err(|error| format!("failed to encode event log: {error:?}"))
+    }
+
+    fn try_inspect_record_bytes(
+        bytes: &[u8],
+        max_collection_elements: Option<usize>,
+    ) -> Result<PyStringOrSetRecord, String> {
+        let Record { id, delta } = Self::decode_record(bytes, max_collection_elements)?;
+        Ok(PyStringOrSetRecord { id, delta })
+    }
+}
+
+fn py_value_error(message: String) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(message)
+}
+
+// PyO3 0.22 generates redundant PyErr conversions outside the annotated item.
+// Scope this lint allowance to this entry point and its generated wrappers.
+#[allow(clippy::useless_conversion)]
+mod py_string_or_set_replica_python {
+    use super::*;
+
+    #[pymethods]
+    impl PyStringOrSetReplica {
+        #[new]
+        pub fn new(#[pyo3(from_py_with = "numeric")] replica_id: u64) -> Self {
+            PyStringOrSetReplica {
+                replica_id,
+                state: OrSet::new(),
+                log: EventLog::new(),
+            }
+        }
+
+        /// Append an add record for `(element, token)` and return its wire bytes.
+        pub fn append_add<'py>(
+            &mut self,
+            py: Python<'py>,
+            element: String,
+            #[pyo3(from_py_with = "numeric")] token: u64,
+        ) -> PyResult<Bound<'py, PyBytes>> {
+            self.try_append_add(element, token)
+                .map(|bytes| PyBytes::new_bound(py, &bytes))
+                .map_err(py_value_error)
+        }
+
+        /// Append a remove record tombstoning every token this replica has
+        /// observed for `element`, as the core reports them, and return its bytes.
+        pub fn append_remove_observed<'py>(
+            &mut self,
+            py: Python<'py>,
+            element: String,
+        ) -> PyResult<Bound<'py, PyBytes>> {
+            self.try_append_remove_observed(element)
+                .map(|bytes| PyBytes::new_bound(py, &bytes))
+                .map_err(py_value_error)
+        }
+
+        /// Decode one record and admit it through the core event log.
+        ///
+        /// Returns `"accepted"` when the record was new and applied, or
+        /// `"duplicate"` when a record with the same identity and payload was
+        /// already in the log (state does not move). A record whose identity is
+        /// known but whose payload differs raises `record ID collision`.
+        #[pyo3(signature = (bytes, *, max_collection_elements = None))]
+        pub fn merge_record_bytes(
+            &mut self,
+            bytes: &[u8],
+            max_collection_elements: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<&'static str> {
+            let max_collection_elements = collection_budget(max_collection_elements)?;
+            self.try_merge_record_bytes(bytes, max_collection_elements)
+                .map_err(py_value_error)
+        }
+
+        /// Return one core admission verdict for every decoded input record.
+        #[pyo3(signature = (bytes, *, max_collection_elements = None))]
+        pub fn merge_log_bytes(
+            &mut self,
+            bytes: &[u8],
+            max_collection_elements: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<Vec<String>> {
+            let max_collection_elements = collection_budget(max_collection_elements)?;
+            self.try_merge_log_bytes(bytes, max_collection_elements)
+                .map_err(py_value_error)
+        }
+
+        pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+            self.try_log_bytes()
+                .map(|bytes| PyBytes::new_bound(py, &bytes))
+                .map_err(py_value_error)
+        }
+
+        pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
+            self.log.version().get(replica)
+        }
+
+        /// Live members, sorted and unique, as the core computes them.
+        pub fn elements(&self) -> Vec<String> {
+            self.state.elements().into_iter().collect()
+        }
+
+        /// Live add tokens for `element`, excluding tombstoned tokens.
+        pub fn observed_tokens(&self, element: String) -> Vec<u64> {
+            self.state.observed_tokens(&element).into_iter().collect()
+        }
+
+        pub fn tombstones(&self) -> Vec<u64> {
+            self.state.tombstones().iter().copied().collect()
+        }
+
+        /// Every `(element, token)` add pair the core holds, tombstoned or not.
+        pub fn add_entries(&self) -> Vec<(String, u64)> {
+            self.state.adds().iter().cloned().collect()
+        }
+
+        /// Decode record bytes through the core without admitting them anywhere.
+        #[staticmethod]
+        #[pyo3(signature = (bytes, *, max_collection_elements = None))]
+        pub fn inspect_record_bytes(
+            bytes: &[u8],
+            max_collection_elements: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<PyStringOrSetRecord> {
+            let max_collection_elements = collection_budget(max_collection_elements)?;
+            Self::try_inspect_record_bytes(bytes, max_collection_elements).map_err(py_value_error)
+        }
     }
 }
 
@@ -2518,5 +2827,371 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
         );
         assert_eq!(replica.value(), 0);
         assert!(replica.log.records().is_empty());
+    }
+}
+
+// Mirrors the `wasm_string_orset_*` host tests in safemesh-wasm: same inputs,
+// same verdict strings, same error texts, checked against the Rust core.
+#[cfg(test)]
+mod string_orset_tests {
+    use super::*;
+    use safemesh_crdt::RecordId;
+
+    type Replica = PyStringOrSetReplica;
+
+    fn replica(replica_id: u64) -> Replica {
+        PyStringOrSetReplica::new(replica_id)
+    }
+
+    fn fields(
+        record: &PyStringOrSetRecord,
+    ) -> (
+        u64,
+        u64,
+        &'static str,
+        Option<String>,
+        Option<u64>,
+        Vec<u64>,
+    ) {
+        (
+            record.replica(),
+            record.sequence(),
+            record.delta_kind(),
+            record.element(),
+            record.token(),
+            record.tokens(),
+        )
+    }
+
+    #[test]
+    fn python_string_orset_replica_round_trips_records_through_core() {
+        let mut left = replica(1);
+        let mut right = replica(2);
+        let mut core = OrSet::<String, u64>::new();
+
+        let add_bytes = left.try_append_add("vaccine".to_string(), 11).unwrap();
+        assert_eq!(
+            right.try_merge_record_bytes(&add_bytes, None).unwrap(),
+            "accepted"
+        );
+        core.apply_delta(OrSetDelta::Add {
+            element: "vaccine".to_string(),
+            token: 11,
+        });
+        assert_eq!(right.elements(), left.elements());
+        assert_eq!(right.elements(), vec!["vaccine".to_string()]);
+        assert_eq!(
+            right.elements(),
+            core.elements().into_iter().collect::<Vec<_>>()
+        );
+        assert_eq!(right.observed_tokens("vaccine".to_string()), vec![11]);
+
+        let remove_bytes = left
+            .try_append_remove_observed("vaccine".to_string())
+            .unwrap();
+        assert_eq!(
+            right.try_merge_record_bytes(&remove_bytes, None).unwrap(),
+            "accepted"
+        );
+        core.apply_delta(OrSetDelta::Remove { tokens: vec![11] });
+        assert_eq!(right.elements(), left.elements());
+        assert!(right.elements().is_empty());
+        assert_eq!(right.tombstones(), left.tombstones());
+        assert_eq!(right.tombstones(), vec![11]);
+        assert_eq!(
+            right.tombstones(),
+            core.tombstones().iter().copied().collect::<Vec<_>>()
+        );
+        let entries = right.add_entries();
+        assert_eq!(entries, left.add_entries());
+        assert_eq!(entries, vec![("vaccine".to_string(), 11)]);
+        assert_eq!(entries, core.adds().iter().cloned().collect::<Vec<_>>());
+
+        let mut third = replica(3);
+        third
+            .try_merge_log_bytes(&left.try_log_bytes().unwrap(), None)
+            .unwrap();
+        assert_eq!(third.elements(), left.elements());
+        assert_eq!(third.tombstones(), left.tombstones());
+        assert_eq!(third.add_entries(), left.add_entries());
+        for replica in [&left, &right, &third] {
+            assert_eq!(replica.version_for(1), 2);
+            assert_eq!(replica.version_for(2), 0);
+        }
+    }
+
+    #[test]
+    fn python_string_orset_replica_rejects_duplicate_record_without_moving_state() {
+        let mut author = replica(1);
+        let mut reader = replica(2);
+        let bytes = author.try_append_add("vaccine".to_string(), 11).unwrap();
+
+        let first = reader.try_merge_record_bytes(&bytes, None).unwrap();
+        let before = (
+            reader.elements(),
+            reader.tombstones(),
+            reader.version_for(1),
+            reader.log.records().len(),
+        );
+        let second = reader.try_merge_record_bytes(&bytes, None).unwrap();
+        let after = (
+            reader.elements(),
+            reader.tombstones(),
+            reader.version_for(1),
+            reader.log.records().len(),
+        );
+        assert_eq!(first, "accepted");
+        assert_eq!(second, "duplicate");
+        assert_eq!(before, after);
+        assert_eq!(after.3, 1);
+
+        // Same identity, different payload: the core reports a collision and the
+        // binding refuses it rather than absorbing either reading.
+        let forged = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 1,
+            },
+            delta: OrSetDelta::Add {
+                element: "forged".to_string(),
+                token: 99,
+            },
+        }
+        .to_wire_bytes()
+        .unwrap();
+        let error = reader.try_merge_record_bytes(&forged, None).unwrap_err();
+        assert_eq!(error, "record ID collision");
+        assert_eq!(reader.elements(), before.0);
+        assert_eq!(reader.log.records().len(), 1);
+    }
+
+    #[test]
+    fn python_string_orset_replica_reports_log_collision_without_moving_state() {
+        let first = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 1,
+            },
+            delta: OrSetDelta::Add {
+                element: "first".to_owned(),
+                token: 5,
+            },
+        };
+        let second = Record {
+            id: first.id,
+            delta: OrSetDelta::Add {
+                element: "second".to_owned(),
+                token: 9,
+            },
+        };
+        let mut replica = replica(2);
+        assert_eq!(
+            replica
+                .try_merge_record_bytes(&first.to_wire_bytes().unwrap(), None)
+                .unwrap(),
+            "accepted"
+        );
+        let state = replica.state.clone();
+        let log = replica.log.clone();
+        let mut incoming = EventLog::for_crdt(&replica.state);
+        assert_eq!(
+            incoming.insert_record(&replica.state, second),
+            safemesh_crdt::Admission::Accepted
+        );
+        assert_eq!(
+            replica
+                .try_merge_log_bytes(&incoming.to_wire_bytes().unwrap(), None)
+                .unwrap(),
+            vec!["collision"]
+        );
+        assert_eq!(replica.state, state);
+        assert_eq!(replica.log, log);
+    }
+
+    #[test]
+    fn python_string_orset_replica_refuses_corrupted_bytes_without_panicking() {
+        let mut author = replica(1);
+        let good = author.try_append_add("vaccine".to_string(), 11).unwrap();
+
+        let mut reader = replica(2);
+        assert_eq!(
+            reader.try_merge_record_bytes(&good, None).unwrap(),
+            "accepted"
+        );
+        assert_eq!(reader.elements(), vec!["vaccine".to_string()]);
+
+        let mut planted = good.clone();
+        planted[0] ^= 0xff;
+        let mut reader = replica(2);
+        let error = reader.try_merge_record_bytes(&planted, None).unwrap_err();
+        assert_eq!(error, "failed to decode record: InvalidTag");
+        assert!(reader.elements().is_empty());
+        assert_eq!(reader.log.records().len(), 0);
+
+        // Every single-byte change on the bare record path either errors or
+        // decodes as a visibly different record. None panics, none is absorbed
+        // as the original.
+        let original = Replica::try_inspect_record_bytes(&good, None).unwrap();
+        let (mut errored, mut decoded_differently) = (0usize, 0usize);
+        for position in 0..good.len() {
+            let mut bad = good.clone();
+            bad[position] ^= 0x01;
+            let mut reader = replica(2);
+            match reader.try_merge_record_bytes(&bad, None) {
+                Err(_) => {
+                    errored += 1;
+                    assert!(reader.elements().is_empty());
+                    assert_eq!(reader.log.records().len(), 0);
+                }
+                Ok(_) => {
+                    decoded_differently += 1;
+                    let seen = Replica::try_inspect_record_bytes(&bad, None).unwrap();
+                    assert_ne!(
+                        (
+                            seen.replica(),
+                            seen.sequence(),
+                            seen.element(),
+                            seen.token()
+                        ),
+                        (
+                            original.replica(),
+                            original.sequence(),
+                            original.element(),
+                            original.token()
+                        )
+                    );
+                }
+            }
+        }
+        assert_eq!(errored + decoded_differently, good.len());
+        assert!(errored > 0);
+
+        // The event-log frame carries a CRC, so every single-byte change errors.
+        let log = author.try_log_bytes().unwrap();
+        for position in 0..log.len() {
+            let mut bad = log.clone();
+            bad[position] ^= 0x01;
+            let mut reader = replica(2);
+            assert!(reader.try_merge_log_bytes(&bad, None).is_err());
+            assert!(reader.elements().is_empty());
+        }
+        let mut reader = replica(2);
+        reader.try_merge_log_bytes(&log, None).unwrap();
+        assert_eq!(reader.elements(), vec!["vaccine".to_string()]);
+    }
+
+    #[test]
+    fn python_string_orset_replica_keeps_core_token_semantics() {
+        // (a) A reused token keeps both pairs.
+        let mut replica_a = replica(1);
+        replica_a.try_append_add("a".to_string(), 7).unwrap();
+        replica_a.try_append_add("b".to_string(), 7).unwrap();
+        let mut core = OrSet::<String, u64>::new();
+        core.add("a".to_string(), 7);
+        core.add("b".to_string(), 7);
+        assert_eq!(replica_a.elements(), vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            replica_a.elements(),
+            core.elements().into_iter().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            replica_a.add_entries(),
+            vec![("a".to_string(), 7), ("b".to_string(), 7)]
+        );
+        // Tokens are global: removing what was observed for `a` tombstones 7 and
+        // takes `b` with it, as the core does.
+        replica_a
+            .try_append_remove_observed("a".to_string())
+            .unwrap();
+        core.apply_remove([7]);
+        assert!(replica_a.elements().is_empty());
+        assert!(core.elements().is_empty());
+
+        // (b) Observed tokens exclude removals, while tombstones retain history.
+        let mut replica_b = replica(1);
+        replica_b.try_append_add("a".to_string(), 7).unwrap();
+        let remove = replica_b
+            .try_append_remove_observed("a".to_string())
+            .unwrap();
+        let mut core = OrSet::<String, u64>::new();
+        core.add("a".to_string(), 7);
+        core.apply_remove([7]);
+        assert_eq!(
+            replica_b.observed_tokens("a".to_string()),
+            Vec::<u64>::new()
+        );
+        assert_eq!(
+            replica_b.observed_tokens("a".to_string()),
+            core.observed_tokens(&"a".to_string())
+                .into_iter()
+                .collect::<Vec<_>>()
+        );
+        assert!(replica_b.elements().is_empty());
+        assert_eq!(replica_b.tombstones(), vec![7]);
+        let record = Replica::try_inspect_record_bytes(&remove, None).unwrap();
+        assert_eq!(record.delta_kind(), "remove");
+        assert_eq!(record.tokens(), vec![7]);
+    }
+
+    #[test]
+    fn python_string_orset_record_inspector_reports_core_decoded_fields() {
+        let mut author = replica(9);
+        let add = author.try_append_add("vaccine".to_string(), 11).unwrap();
+        let expected = Record {
+            id: RecordId {
+                replica: 9,
+                sequence: 1,
+            },
+            delta: OrSetDelta::Add {
+                element: "vaccine".to_string(),
+                token: 11,
+            },
+        }
+        .to_wire_bytes()
+        .unwrap();
+        assert_eq!(add, expected);
+
+        let view = Replica::try_inspect_record_bytes(&add, None).unwrap();
+        assert_eq!(
+            fields(&view),
+            (9, 1, "add", Some("vaccine".to_string()), Some(11), vec![])
+        );
+
+        let remove = author
+            .try_append_remove_observed("vaccine".to_string())
+            .unwrap();
+        let view = Replica::try_inspect_record_bytes(&remove, None).unwrap();
+        assert_eq!(fields(&view), (9, 2, "remove", None, None, vec![11]));
+
+        // Inspecting admits nothing: a reader still accepts the record afterwards.
+        let mut reader = replica(2);
+        assert_eq!(
+            reader.try_merge_record_bytes(&add, None).unwrap(),
+            "accepted"
+        );
+
+        let mut bad = add.clone();
+        bad[0] ^= 0xff;
+        assert_eq!(
+            Replica::try_inspect_record_bytes(&bad, None).unwrap_err(),
+            "failed to decode record: InvalidTag"
+        );
+    }
+
+    #[test]
+    fn python_string_orset_replica_surface() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let module = PyModule::new_bound(py, "safemesh_python").unwrap();
+            safemesh_python(&module).unwrap();
+            let globals = pyo3::types::PyDict::new_bound(py);
+            globals.set_item("sm", module).unwrap();
+            py.run_bound(
+                include_str!("../tests/string_orset_replica.py"),
+                Some(&globals),
+                None,
+            )
+            .unwrap();
+        });
     }
 }

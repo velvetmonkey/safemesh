@@ -132,6 +132,47 @@ element carrying it. Observed tokens include only live adds, excluding tombstone
 tokens. Merge unions all adds and tombstones, and reads return sorted unique live members. This is the
 core's token semantics, including token reuse; the binding does not allocate IDs.
 
+## String OR-Set replica with an event log
+
+`StringOrSetReplica` carries a Rust `OrSet<String, u64>` behind an `EventLog`,
+so records can be replayed, deduplicated and repaired from a log the same way
+`GCounterReplica` does. It is the Python counterpart of the WASM
+`SafeMeshStringOrSetReplica`: method names (in snake_case), verdict strings and
+error texts match it. It sits beside `OrSet`, which is unchanged.
+
+```python
+left, right = sm.StringOrSetReplica(1), sm.StringOrSetReplica(2)
+add = left.append_add("vaccine", 11)
+assert right.merge_record_bytes(add) == "accepted"
+assert right.merge_record_bytes(add) == "duplicate"  # State unchanged.
+right.merge_record_bytes(left.append_remove_observed("vaccine"))
+assert right.elements() == [] and right.tombstones() == [11]
+assert right.add_entries() == [("vaccine", 11)]
+view = sm.StringOrSetReplica.inspect_record_bytes(add)
+assert (view.replica(), view.sequence(), view.delta_kind(), view.element(), view.token()) == (
+    1, 1, "add", "vaccine", 11)
+third = sm.StringOrSetReplica(3)
+assert third.merge_log_bytes(left.log_bytes()) == ["accepted", "accepted"]
+```
+
+`merge_record_bytes` returns `"accepted"` or `"duplicate"`; a record whose
+identity is already known with a different payload raises `ValueError`
+(`record ID collision`), and bytes the core cannot decode raise
+`failed to decode record: <reason>`. `merge_log_bytes` returns one
+`"accepted"`, `"duplicate"`, or `"collision"` verdict per input record; decode
+errors raise before any record is applied. `inspect_record_bytes` decodes record
+bytes through the same core decoder without admitting them anywhere and returns
+a `StringOrSetRecord` whose `delta_kind()` is `"add"` or `"remove"`. The three
+decoding methods accept a keyword-only `max_collection_elements` budget;
+exceeding it raises `maxCollectionElements limit exceeded: <n>`. `add_entries()`
+returns `(element, token)` tuples where WASM returns entry objects.
+
+Tokens are caller-supplied and global to the set, exactly as for `OrSet` above.
+The WASM allocated-writer lifecycle (`create_allocated`, `append_allocated_add`,
+`export_identity`, `import_identity`) is not exposed in Python. Where WASM throws
+`SafeMeshError` with a numeric code, Python raises `ValueError` with the same
+message.
+
 ## Experimental value classes
 
 `GSet`, `PnCounter`, and `Rga` delegate directly to the Rust value types. Their
