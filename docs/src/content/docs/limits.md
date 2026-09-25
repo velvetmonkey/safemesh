@@ -74,12 +74,20 @@ assert_eq!(log.records().len(), 1);
 
 For a destination CRDT, use `EventLog::from_wire_bytes_for_with_limits`
 to validate its shape before replay. `None` for `max_collection_elements`
-retains the 4,096 default. A durable OR-Set log with a historical Remove delta
-containing more than 4,096 tokens needs
-`DurableReplica::restart_utf8_set_with_max_collection_elements(root, config, n)`.
-A state with more than 4,096 live
-tokens built from individual Add records still restarts normally: the log stores
-those Add deltas, not a serialized whole-state collection.
+retains the 4,096 default for peer bytes. The Linux durable adapter's ordinary
+`restart_utf8_set(root, config)` and `restart_counter(root, config)` instead
+budget locally committed history from its stored byte length. This lets stores
+written before the collection ceiling restart even when a historical OR-Set
+Remove contains more than 4,096 tokens. The explicit
+`restart_utf8_set_with_max_collection_elements(root, config, n)` remains available
+to set a smaller or larger local restart ceiling. A state with more than 4,096
+live tokens built from individual Add records also restarts normally: the log
+stores those Add deltas, not a serialized whole-state collection. Treat a copied
+or imported store file as trusted local input only after validating its source;
+the restart budget does not authenticate store provenance. Likewise, a caller
+that constructs a `Record` directly or explicitly raises peer decode limits
+can pass a larger delta to `DurableReplica::receive`; it is then committed as
+local history and ordinary restart will replay it.
 
 ## You exchange peer versions from untrusted input
 

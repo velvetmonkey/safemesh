@@ -208,6 +208,10 @@ All instances for the same primitive and writer configuration must use the same
 store directory. Preserve the fence and transaction files of real stores; the
 fixture deletes only its disposable exercise after releasing every writer. Use
 restart constructors for existing stores. A failed restart grants no writer.
+Ordinary `restart_utf8_set` budgets collection counts from the locally committed
+transaction length, including old stores with a Remove of more than 4,096 tokens.
+Peer wire decoding still rejects collections above 4,096 elements by default;
+check the provenance of a copied store file before treating it as local history.
 These are tested engineering contracts, not a proof of storage durability.
 See the [longer durable walkthrough](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md#persist-restore-partition-and-reconcile)
 and the [generated Rust reference](/safemesh/reference/).
