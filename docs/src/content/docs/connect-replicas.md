@@ -7,10 +7,27 @@ SafeMesh gives you records and merge rules; your application moves the bytes.
 After [Persist and restart](/safemesh/persist-and-restart/), this in-memory exercise
 shows that boundary without pretending to test a physical network.
 
+## Use it in your own project
+
+SafeMesh is unreleased; use this pinned Git source instead of a crates.io package.
+With Git and Rust 1.96.1 installed, run `cargo new --bin --vcs none connect-replicas`
+outside the SafeMesh checkout. Replace the generated `Cargo.toml` dependency
+section with this block. The example needs no optional crate features.
+
+<!-- consumer:dependency -->
+```toml
+[dependencies]
+safemesh-crdt = { git = "https://github.com/velvetmonkey/safemesh.git", rev = "1321bf576dcc0e71cfe765b0dae0de518a5ae934" }
+```
+<!-- /consumer:dependency -->
+
+Paste the complete Rust example below into `src/main.rs`, then run `cargo run --quiet`
+from your new project. It prints the expected output shown below.
+
 ## Exchange and repair
 
-Run the complete example below from the source checkout described in
-[Try a merge](/safemesh/getting-started/#before-you-start).
+Inside the SafeMesh checkout, you can instead run the checkout command below;
+[Try a merge](/safemesh/getting-started/#before-you-start) explains how to get the source.
 `to_wire_bytes()` produces each outgoing record. At the receiving boundary,
 check its byte length, decode it, then use `admit_with` to apply only an accepted
 record. A duplicate must not apply the edit again.

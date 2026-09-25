@@ -60,6 +60,7 @@ def fixture_block(kind, name):
 
 PAGES = ("getting-started.md", "persist-and-restart.md", "connect-replicas.md", "using-safemesh.md")
 PATTERN = re.compile(r"(<!-- gold:(commands|output|source) ([^ ]+) -->\n)(.*?)(\n<!-- /gold -->)", re.S)
+CONSUMER_DEP = re.compile(r"<!-- consumer:dependency -->\n(```toml\n.*?\n```)\n<!-- /consumer:dependency -->", re.S)
 
 
 def required_assertions(staging):
@@ -100,6 +101,7 @@ def main():
     outputs = {}
     staging = ROOT
     blocks = 0
+    consumer_dependency = None
     if not args.refresh:
         # Materialize exactly the fenced sources, commands and outputs readers see.
         # Retain the sandbox for diagnosing failures, never overwrite the checkout.
@@ -117,6 +119,14 @@ def main():
             # Every fence on the three tutorial pages must belong to the mechanism.
             # check_fence uses the site's parser to verify each block is closed.
             remainder = PATTERN.sub("", text)
+            if filename == "connect-replicas.md":
+                matches = CONSUMER_DEP.findall(remainder)
+                if len(matches) != 1:
+                    failures.append("connect-replicas.md: expected one consumer dependency block")
+                else:
+                    consumer_dependency = matches[0]
+                    check_fence(consumer_dependency)
+                remainder = CONSUMER_DEP.sub("", remainder)
             if filename != "using-safemesh.md" and re.search(r"^\s*(`{3,}|~{3,})", remainder, re.M):
                 failures.append(f"{filename}: untested code fence")
             def replace(match):
@@ -178,6 +188,21 @@ def main():
                             fromfile=str(expected), tofile="actual stdout")))
             if not args.refresh and stdout != outputs[lane]:
                 failures.append(f"{lane}: executed stdout disagrees with extracted output")
+    if not args.refresh and not args.write_docs and not failures and consumer_dependency:
+        # Compile the page's own source with its printed dependency in an outside project.
+        consumer = Path(tempfile.mkdtemp(prefix="consumer-", dir=logs))
+        (consumer / "src").mkdir()
+        manifest = '[package]\nname = "safemesh-connect-consumer"\nversion = "0.0.0"\nedition = "2021"\n\n'
+        (consumer / "Cargo.toml").write_text(manifest + consumer_dependency.removeprefix("```toml\n").removesuffix("\n```") + "\n")
+        shutil.copy2(staging / "examples/gold-path/rust/examples/connect_replicas.rs", consumer / "src/main.rs")
+        result = subprocess.run(["cargo", "run", "--quiet"], cwd=consumer, text=True, capture_output=True)
+        (logs / "connect-consumer.stdout").write_text(result.stdout)
+        (logs / "connect-consumer.stderr").write_text(result.stderr)
+        (logs / "connect-consumer.exit").write_text(f"{result.returncode}\n")
+        print(f"connect-consumer: exit {result.returncode}: cargo run --quiet", flush=True)
+        count += 1
+        if result.returncode or result.stdout != outputs["connect_replicas"]:
+            failures.append(f"connect-consumer: dependency or output failed\n{result.stderr}")
     for failure in failures:
         print(failure)
     print(f"gold paths: commands={count} failures={len(failures)} fixture-blocks={blocks}")
