@@ -10,6 +10,9 @@ shows that boundary without pretending to test a physical network.
 ## Use it in your own project
 
 SafeMesh is unreleased; use this pinned Git source instead of a crates.io package.
+This example's pin is older than the CI-tested revision in the
+[pinned-source install recipe](/safemesh/pinned-source/); use that page for the
+current tested source install.
 With Git and Rust 1.96.1 installed, run `cargo new --bin --vcs none connect-replicas`
 outside the SafeMesh checkout. Replace the generated `Cargo.toml` dependency
 section with this block. The example needs no optional crate features.

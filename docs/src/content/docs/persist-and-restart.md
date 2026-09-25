@@ -118,15 +118,28 @@ Read the [complete Rust source and storage boundary](/safemesh/using-safemesh/#r
 ## Diagnose a failed Rust exercise
 
 The fixture uses `expect`/`unwrap`, so failures appear as a Rust panic (exit 101).
-`AlreadyExists` on a second `persist` means the exercise store already exists:
-keep it and run `restart` with its original writer configuration, or use a fresh
-checkout for a separate exercise. Never reset an existing writer's fence/history.
-`History(UnexpectedEof)` on restart means the stored transaction is truncated or
-incomplete. Retain the damaged store for inspection; restart does not salvage a
-torn record. Investigate the failed write/transfer and recover only from a known
-consistent history with its original identity and allocation metadata. Do not
-initialize over the damaged store. These are tested engineering outcomes, not
-proofs of crash safety. See the [recovery evidence](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md).
+On a second `persist`, an existing store returns `RecoveryRequired` (Display:
+`local store requires recovery`). Check whether `.gold-rust` existed before this
+run: if it did, keep that store and run `restart` with its original writer
+configuration, or use a fresh checkout for a separate exercise.
+
+A truncated writer fence on `restart` returns the same `RecoveryRequired` and
+`local store requires recovery`. If the store was already present and this was
+a `restart`, inspect its `writer-0.fence` files: each must be 24 bytes. Retain a
+damaged store for inspection and recover only from a known consistent copy with
+its original writer identity and allocation metadata. Never reset an existing
+writer's fence/history.
+
+`History(UnexpectedEof)` on `restart` (Display: `local history wire validation
+failed: unexpected end of wire input`) means the stored transaction is truncated
+or incomplete. `History(IntegrityMismatch)` (Display: `local history wire
+validation failed: wire frame integrity check failed`) means a stored
+transaction failed its integrity check. Retain either damaged store for
+inspection; restart does not salvage a torn or corrupted record. Investigate
+the failed write or transfer, and recover only from a known consistent history
+with its original identity and allocation metadata. Do not initialize over the
+damaged store. These are tested engineering outcomes, not proofs of crash safety.
+See the [recovery evidence](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md).
 
 <a id="predict-then-run-a-concurrent-add-and-remove"></a>
 
