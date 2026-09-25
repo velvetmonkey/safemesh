@@ -35,8 +35,78 @@ assertSafeMeshError(
 assertSafeMeshError(
   () => replica.mergeRecordBytes(new Uint8Array([0])),
   1,
-  "failed to decode record",
+  "failed to decode record: unexpected wire tag",
 );
+
+function replaceRecordInLog(log, original, replacement) {
+  const frame = Uint8Array.from(log);
+  let offset = -1;
+  for (let i = 0; i <= frame.length - original.length; i++) {
+    if (original.every((byte, j) => frame[i + j] === byte)) {
+      offset = i;
+      break;
+    }
+  }
+  assert.notEqual(offset, -1, "record is present in encoded log");
+  frame.set(replacement, offset);
+  let crc = 0xffffffff;
+  for (const byte of frame.subarray(1, frame.length - 4)) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  new DataView(frame.buffer).setUint32(frame.length - 4, (crc ^ 0xffffffff) >>> 0, true);
+  return frame;
+}
+
+function caughtError(operation) {
+  try {
+    operation();
+    assert.fail("expected SafeMeshError");
+  } catch (error) {
+    assert.equal(error.name, "SafeMeshError");
+    return { code: error.code, message: error.message };
+  }
+}
+
+const ownershipErrors = [];
+for (const [name, coordinate] of [["out-of-range", 2], ["not-owned", 0]]) {
+  const author = new wasm.SafeMeshGCounterReplica(1n, 2);
+  const valid = author.appendBump(1, 5n);
+  const invalid = Uint8Array.from(valid);
+  new DataView(invalid.buffer).setBigUint64(22, BigInt(coordinate), true);
+  const log = replaceRecordInLog(author.logBytes(), valid, invalid);
+  const receiver = new wasm.SafeMeshGCounterReplica(0n, 2);
+  const singleError = caughtError(() => receiver.mergeRecordBytes(invalid));
+  const logError = caughtError(() => receiver.mergeLogBytes(log));
+  console.log(`WASM ${name}: single=${JSON.stringify(singleError)}, log=${JSON.stringify(logError)}`);
+  ownershipErrors.push({ name, singleError, logError });
+  author.free();
+  receiver.free();
+}
+{
+  const author = new wasm.SafeMeshGCounterReplica(1n, 2);
+  const first = author.appendBump(1, 5n);
+  const second = author.appendBump(1, 6n);
+  const badSecond = Uint8Array.from(second);
+  new DataView(badSecond.buffer).setBigUint64(22, 0n, true);
+  const log = replaceRecordInLog(author.logBytes(), second, badSecond);
+  const receiver = new wasm.SafeMeshGCounterReplica(0n, 2);
+  const error = caughtError(() => receiver.mergeLogBytes(log));
+  console.log(`WASM good-then-bad: error=${JSON.stringify(error)}, value=${receiver.value()}`);
+  assert.equal(receiver.value(), 0n);
+  assert.equal(receiver.logBytes().length < log.length, true);
+  author.free();
+  receiver.free();
+}
+for (const { name, singleError, logError } of ownershipErrors) {
+  assert.deepEqual(logError, singleError, `${name} ownership error differs by path`);
+  assert.deepEqual(singleError, {
+    code: 2,
+    message: "counter coordinate out of range or not owned by record author",
+  });
+}
 
 console.log("NODE_ERROR_SHAPE=true");
 
