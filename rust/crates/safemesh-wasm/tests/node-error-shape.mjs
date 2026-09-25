@@ -273,6 +273,63 @@ for (const [make, append] of [
 }
 console.log(`BATCH_OCCURRENCE_CASES=${occurrenceCases}`);
 
+// A single record gets the verdict its log merge names, and neither path throws
+// for it. Two writers reusing record ID (1, 1) with different payloads collide.
+let verdictCases = 0;
+for (const [make, write, forge] of [
+  [id => new wasm.SafeMeshGCounterReplica(id, 2), r => r.appendBump(1, 5n), r => r.appendBump(1, 9n)],
+  [id => new wasm.SafeMeshPnCounterReplica(id, 2), r => r.appendInc(1, 5n), r => r.appendDec(1, 9n)],
+  [id => new wasm.SafeMeshEnableWinsFlagReplica(id), r => r.appendEnable(5n), r => r.appendEnable(9n)],
+  [id => new wasm.SafeMeshLwwMapReplica(id), r => r.appendSet(1n, 1n, 1n, 5n), r => r.appendRemove(1n, 2n, 1n)],
+  [id => new wasm.SafeMeshLwwRegisterReplica(id), r => r.appendSet(1n, 1n, 5n), r => r.appendSet(2n, 1n, 9n)],
+  [id => new wasm.SafeMeshStringOrSetReplica(id), r => r.appendAdd("first", 5n), r => r.appendAdd("second", 9n)],
+]) {
+  const author = make(1n), forger = make(1n), receiver = make(0n);
+  try {
+    const name = receiver.constructor.name;
+    const record = write(author), forged = forge(forger);
+    assert.equal(receiver.mergeRecordBytes(record), "accepted", name);
+    const before = snapshot(receiver);
+    for (const [single, batch, verdict] of [
+      [record, author.logBytes(), "duplicate"],
+      [forged, forger.logBytes(), "collision"],
+    ]) {
+      const result = receiver.mergeRecordBytes(single);
+      assert.equal(result, verdict, name);
+      assert.deepEqual(receiver.mergeLogBytes(batch), [result], name);
+      assert.deepEqual(snapshot(receiver), before, name);
+      verdictCases++;
+    }
+    assert.throws(() => receiver.mergeRecordBytes(new Uint8Array([0])), error =>
+      error.name === "SafeMeshError" && error.code === 1 && error.message.startsWith("failed to decode record"));
+    assert.deepEqual(snapshot(receiver), before, name);
+  } finally { author.free(); forger.free(); receiver.free(); }
+}
+// Ownership refusals are errors, not verdicts: coordinate 2 is outside width 2,
+// and an allocated replica refuses a new record claiming its own author.
+for (const [wide, narrow, write] of [
+  [new wasm.SafeMeshGCounterReplica(2n, 3), new wasm.SafeMeshGCounterReplica(0n, 2), r => r.appendBump(2, 5n)],
+  [new wasm.SafeMeshPnCounterReplica(2n, 3), new wasm.SafeMeshPnCounterReplica(0n, 2), r => r.appendInc(2, 5n)],
+]) {
+  try {
+    const record = write(wide), before = snapshot(narrow);
+    assert.throws(() => narrow.mergeRecordBytes(record), error =>
+      error.name === "SafeMeshError" && error.code === 2 && /not owned by record author/.test(error.message));
+    assert.deepEqual(snapshot(narrow), before);
+  } finally { wide.free(); narrow.free(); }
+}
+{
+  const allocated = wasm.SafeMeshStringOrSetReplica.createAllocated(2n, 0n);
+  const impostor = new wasm.SafeMeshStringOrSetReplica(0n);
+  try {
+    const record = impostor.appendAdd("clone", 2n), before = snapshot(allocated);
+    assert.throws(() => allocated.mergeRecordBytes(record), error =>
+      error.name === "SafeMeshError" && error.code === 1 && /local author/.test(error.message));
+    assert.deepEqual(snapshot(allocated), before);
+  } finally { allocated.free(); impostor.free(); }
+}
+console.log(`SINGLE_RECORD_VERDICT_CASES=${verdictCases}`);
+
 // Audit CRDT-core probes: exact reads, dimensions, and token collisions.
 {
   const a = new wasm.SafeMeshGCounter(2);

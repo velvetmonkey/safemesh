@@ -50,6 +50,10 @@ cd rust/crates/safemesh-wasm
 
 `SafeMeshGCounter.value()` and `SafeMeshGCounterReplica.value()` return an exact JavaScript `bigint`, now also for totals above `u64::MAX`. The previous `u64` binding already returned `bigint`: there is no JavaScript return-type change. `typeof` is `"bigint"`, `===` against a number is false, and `JSON.stringify` throws on a bigint. Use bigint literals such as `5n` for comparisons and convert totals to decimal strings explicitly when encoding JSON; converting to `Number` can lose precision.
 
+## Single-record merge compatibility (main, unreleased)
+
+Every `mergeRecordBytes` method returns the core's admission verdict for its record: `"accepted"`, `"duplicate"`, or `"collision"`, the names `mergeLogBytes` returns per record. It no longer throws for a collision. Previously the G-Counter, PN-Counter, Enable-wins Flag, LWW Map and LWW Register replicas returned `undefined` for both accepted and duplicate records and threw `SafeMeshError` code 1 `record ID collision` for a collision, while `SafeMeshStringOrSetReplica` returned `"accepted"` or `"duplicate"` and threw the same error. Code that relied on that throw must check for `"collision"` instead. Decode and ownership errors still throw, with unchanged codes and messages.
+
 ## Quickstart
 
 The bundler package exports named classes and initializes WASM on import; it has
@@ -63,16 +67,18 @@ import { SafeMeshGCounterReplica } from "./pkg/safemesh_wasm.js";
 const left = new SafeMeshGCounterReplica(1n, 3);
 const right = new SafeMeshGCounterReplica(2n, 3);
 
-right.mergeRecordBytes(left.appendBump(1, 5n));
+console.assert(right.mergeRecordBytes(left.appendBump(1, 5n)) === "accepted");
 const admissions = left.mergeLogBytes(right.logBytes());
 console.assert(admissions.join() === "duplicate");
 
 console.log(left.value(), right.value());
 ```
 
-`mergeLogBytes` returns one `"accepted"`, `"duplicate"`, or `"collision"`
-verdict per input record, in order. Decode and whole-batch validation errors
-throw before any record is applied.
+`mergeRecordBytes` returns one `"accepted"`, `"duplicate"`, or `"collision"`
+verdict for its record, and `mergeLogBytes` returns one per input record, in
+order. Neither throws for a duplicate or a collision, and neither changes state
+for one, so check the verdicts for `"collision"`. Decode, ownership, and
+whole-batch validation errors throw before any record is applied.
 
 `SafeMeshGSetReplica.mergeStateBytes(bytes)` and
 `SafeMeshRgaReplica.mergeStateBytes(bytes)` default to 4,096 elements per
@@ -205,8 +211,8 @@ BigUint64Array(1) [ 4n ]
 ```
 
 `mergeRecordBytes` returns the core's admission verdict; a record whose
-identity is already known with a different payload throws
-`record ID collision`, and bytes the core cannot decode throw
+identity is already known with a different payload returns `"collision"` and
+changes no state, and bytes the core cannot decode throw
 `failed to decode record: <reason>`. `inspectRecordBytes` decodes record bytes
 through the same core decoder without admitting them anywhere. Every value
 these classes return is computed by `safemesh-crdt`; the binding holds no

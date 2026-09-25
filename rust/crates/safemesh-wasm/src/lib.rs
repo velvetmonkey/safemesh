@@ -208,6 +208,15 @@ fn admission_name(admission: safemesh_crdt::Admission) -> String {
     .to_owned()
 }
 
+// A single record reports the verdict `mergeLogBytes` reports for it: a
+// duplicate or collision is a verdict, not an error. An invalid record throws.
+fn record_verdict(admission: safemesh_crdt::Admission) -> Result<String, BindingError> {
+    match admission {
+        safemesh_crdt::Admission::Invalid(_) => Err(binding_error(1, "invalid record")),
+        admission => Ok(admission_name(admission)),
+    }
+}
+
 #[wasm_bindgen]
 pub struct SafeMeshGCounter {
     inner: GCounter,
@@ -547,12 +556,17 @@ impl SafeMeshGCounterReplica {
         self.append_bump(counter_replica, tally)
     }
 
-    #[wasm_bindgen(js_name = mergeRecordBytes)]
+    /// Return the core admission verdict for the decoded input record, as
+    /// `mergeLogBytes` does per record. Only `"accepted"` changes state.
+    #[wasm_bindgen(
+        js_name = mergeRecordBytes,
+        unchecked_return_type = "\"accepted\" | \"duplicate\" | \"collision\""
+    )]
     pub fn merge_record_bytes(
         &mut self,
         bytes: &[u8],
         max_collection_elements: Option<u32>,
-    ) -> Result<(), JsValue> {
+    ) -> Result<String, JsValue> {
         let record = Record::<GCounterDelta>::from_wire_bytes_with_collection_limits(
             bytes,
             collection_limits(max_collection_elements),
@@ -570,16 +584,13 @@ impl SafeMeshGCounterReplica {
                 "counter coordinate out of range or not owned by record author",
             ));
         }
-        if self
-            .log
-            .admit_with(&mut self.state, record, |state, delta| {
-                state.apply_delta(delta.clone());
-            })
-            == safemesh_crdt::Admission::Collision
-        {
-            return Err(safe_mesh_error(1, "record ID collision"));
-        }
-        Ok(())
+        record_verdict(
+            self.log
+                .admit_with(&mut self.state, record, |state, delta| {
+                    state.apply_delta(delta.clone());
+                }),
+        )
+        .map_err(JsValue::from)
     }
 
     /// Return one core admission verdict for every decoded input record.
@@ -707,27 +718,29 @@ impl SafeMeshEnableWinsFlagReplica {
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
     }
 
-    #[wasm_bindgen(js_name = mergeRecordBytes)]
+    /// Return the core admission verdict for the decoded input record, as
+    /// `mergeLogBytes` does per record. Only `"accepted"` changes state.
+    #[wasm_bindgen(
+        js_name = mergeRecordBytes,
+        unchecked_return_type = "\"accepted\" | \"duplicate\" | \"collision\""
+    )]
     pub fn merge_record_bytes(
         &mut self,
         bytes: &[u8],
         max_collection_elements: Option<u32>,
-    ) -> Result<(), JsValue> {
+    ) -> Result<String, JsValue> {
         let record = Record::<EnableWinsFlagDelta<u64>>::from_wire_bytes_with_collection_limits(
             bytes,
             collection_limits(max_collection_elements),
         )
         .map_err(|error| wire_decode_error(error, "failed to decode record"))?;
-        if self
-            .log
-            .admit_with(&mut self.state, record, |state, delta| {
-                state.apply_delta(delta.clone());
-            })
-            == safemesh_crdt::Admission::Collision
-        {
-            return Err(safe_mesh_error(1, "record ID collision"));
-        }
-        Ok(())
+        record_verdict(
+            self.log
+                .admit_with(&mut self.state, record, |state, delta| {
+                    state.apply_delta(delta.clone());
+                }),
+        )
+        .map_err(JsValue::from)
     }
 
     /// Return one core admission verdict for every decoded input record.
@@ -843,27 +856,29 @@ impl SafeMeshLwwMapReplica {
         self.append_remove(key, timestamp, writer_replica)
     }
 
-    #[wasm_bindgen(js_name = mergeRecordBytes)]
+    /// Return the core admission verdict for the decoded input record, as
+    /// `mergeLogBytes` does per record. Only `"accepted"` changes state.
+    #[wasm_bindgen(
+        js_name = mergeRecordBytes,
+        unchecked_return_type = "\"accepted\" | \"duplicate\" | \"collision\""
+    )]
     pub fn merge_record_bytes(
         &mut self,
         bytes: &[u8],
         max_collection_elements: Option<u32>,
-    ) -> Result<(), JsValue> {
+    ) -> Result<String, JsValue> {
         let record = Record::<LwwMapDelta<u64, u64>>::from_wire_bytes_with_collection_limits(
             bytes,
             collection_limits(max_collection_elements),
         )
         .map_err(|error| wire_decode_error(error, "failed to decode record"))?;
-        if self
-            .log
-            .admit_with(&mut self.state, record, |state, delta| {
-                state.apply_delta(delta.clone());
-            })
-            == safemesh_crdt::Admission::Collision
-        {
-            return Err(safe_mesh_error(1, "record ID collision"));
-        }
-        Ok(())
+        record_verdict(
+            self.log
+                .admit_with(&mut self.state, record, |state, delta| {
+                    state.apply_delta(delta.clone());
+                }),
+        )
+        .map_err(JsValue::from)
     }
 
     /// Return one core admission verdict for every decoded input record.
@@ -977,27 +992,29 @@ impl SafeMeshLwwRegisterReplica {
         self.append_set(timestamp, writer_replica, value)
     }
 
-    #[wasm_bindgen(js_name = mergeRecordBytes)]
+    /// Return the core admission verdict for the decoded input record, as
+    /// `mergeLogBytes` does per record. Only `"accepted"` changes state.
+    #[wasm_bindgen(
+        js_name = mergeRecordBytes,
+        unchecked_return_type = "\"accepted\" | \"duplicate\" | \"collision\""
+    )]
     pub fn merge_record_bytes(
         &mut self,
         bytes: &[u8],
         max_collection_elements: Option<u32>,
-    ) -> Result<(), JsValue> {
+    ) -> Result<String, JsValue> {
         let record = Record::<LwwRegisterDelta<u64>>::from_wire_bytes_with_collection_limits(
             bytes,
             collection_limits(max_collection_elements),
         )
         .map_err(|error| wire_decode_error(error, "failed to decode record"))?;
-        if self
-            .log
-            .admit_with(&mut self.state, record, |state, delta| {
-                state.apply_delta(delta.clone());
-            })
-            == safemesh_crdt::Admission::Collision
-        {
-            return Err(safe_mesh_error(1, "record ID collision"));
-        }
-        Ok(())
+        record_verdict(
+            self.log
+                .admit_with(&mut self.state, record, |state, delta| {
+                    state.apply_delta(delta.clone());
+                }),
+        )
+        .map_err(JsValue::from)
     }
 
     /// Return one core admission verdict for every decoded input record.
@@ -1467,20 +1484,14 @@ impl SafeMeshStringOrSetReplica {
             .map_err(|error| binding_error(1, format!("failed to encode record: {error:?}")))
     }
 
-    fn admit(
-        &mut self,
-        record: Record<OrSetDelta<String, u64>>,
-    ) -> Result<safemesh_crdt::Admission, BindingError> {
+    fn admit(&mut self, record: Record<OrSetDelta<String, u64>>) -> Result<String, BindingError> {
         self.check_incoming(&record)?;
-        match self
-            .log
-            .admit_with(&mut self.state, record, |state, delta| {
-                state.apply_delta(delta.clone());
-            }) {
-            safemesh_crdt::Admission::Collision => Err(binding_error(1, "record ID collision")),
-            safemesh_crdt::Admission::Invalid(_) => Err(binding_error(1, "invalid record")),
-            admission => Ok(admission),
-        }
+        record_verdict(
+            self.log
+                .admit_with(&mut self.state, record, |state, delta| {
+                    state.apply_delta(delta.clone());
+                }),
+        )
     }
 
     #[cfg(test)]
@@ -1506,7 +1517,7 @@ impl SafeMeshStringOrSetReplica {
     }
 
     #[cfg(test)]
-    fn try_merge_record_bytes(&mut self, bytes: &[u8]) -> Result<&'static str, BindingError> {
+    fn try_merge_record_bytes(&mut self, bytes: &[u8]) -> Result<String, BindingError> {
         self.try_merge_record_bytes_with_limits(bytes, None)
     }
 
@@ -1514,16 +1525,9 @@ impl SafeMeshStringOrSetReplica {
         &mut self,
         bytes: &[u8],
         max_collection_elements: Option<u32>,
-    ) -> Result<&'static str, BindingError> {
+    ) -> Result<String, BindingError> {
         let record = Self::decode_record_with_limits(bytes, max_collection_elements)?;
-        Ok(match self.admit(record)? {
-            safemesh_crdt::Admission::Accepted => "accepted",
-            safemesh_crdt::Admission::Duplicate => "duplicate",
-            safemesh_crdt::Admission::Collision => unreachable!("admit maps collision to Err"),
-            safemesh_crdt::Admission::Invalid(_) => {
-                unreachable!("admit maps invalid record to Err")
-            }
-        })
+        self.admit(record)
     }
 
     #[cfg(test)]
@@ -1644,13 +1648,14 @@ impl SafeMeshStringOrSetReplica {
 
     /// Decode one record and admit it through the core event log.
     ///
-    /// Returns the core's admission verdict: `"accepted"` when the record was
-    /// new and applied, `"duplicate"` when a record with the same identity and
-    /// payload was already in the log (state does not move). A record whose
-    /// identity is known but whose payload differs throws `record ID collision`.
+    /// Returns the core's admission verdict, as `mergeLogBytes` does per
+    /// record: `"accepted"` when the record was new and applied, `"duplicate"`
+    /// when a record with the same identity and payload was already in the log,
+    /// and `"collision"` when the identity is known with a different payload.
+    /// Only `"accepted"` changes state. Decode and ownership failures throw.
     #[wasm_bindgen(
         js_name = mergeRecordBytes,
-        unchecked_return_type = "\"accepted\" | \"duplicate\""
+        unchecked_return_type = "\"accepted\" | \"duplicate\" | \"collision\""
     )]
     pub fn merge_record_bytes(
         &mut self,
@@ -1658,7 +1663,6 @@ impl SafeMeshStringOrSetReplica {
         max_collection_elements: Option<u32>,
     ) -> Result<String, JsValue> {
         self.try_merge_record_bytes_with_limits(bytes, max_collection_elements)
-            .map(str::to_string)
             .map_err(JsValue::from)
     }
 
@@ -2314,9 +2318,12 @@ mod tests {
         };
 
         let mut target = SafeMeshGCounterReplica::new(0, 2);
-        target
-            .merge_record_bytes(&existing.to_wire_bytes().unwrap(), None)
-            .unwrap();
+        assert_eq!(
+            target
+                .merge_record_bytes(&existing.to_wire_bytes().unwrap(), None)
+                .unwrap(),
+            "accepted"
+        );
         assert_eq!(
             target.merge_log_bytes(&wire([]), None).unwrap(),
             Vec::<String>::new()
@@ -2331,7 +2338,14 @@ mod tests {
         );
         assert_eq!(one.state(), vec![0, 7]);
 
+        // The single-record path reports the collision the batch reports.
         let before = target.state();
+        assert_eq!(
+            target
+                .merge_record_bytes(&collision.to_wire_bytes().unwrap(), None)
+                .unwrap(),
+            "collision"
+        );
         assert_eq!(
             target
                 .merge_log_bytes(&wire([collision.clone()]), None)
@@ -2340,10 +2354,21 @@ mod tests {
         );
         assert_eq!(target.state(), before);
 
-        target
-            .merge_record_bytes(&accepted.to_wire_bytes().unwrap(), None)
-            .unwrap();
+        assert_eq!(
+            target
+                .merge_record_bytes(&accepted.to_wire_bytes().unwrap(), None)
+                .unwrap(),
+            "accepted"
+        );
         let before = target.state();
+        for record in [&existing, &accepted] {
+            assert_eq!(
+                target
+                    .merge_record_bytes(&record.to_wire_bytes().unwrap(), None)
+                    .unwrap(),
+                "duplicate"
+            );
+        }
         assert_eq!(
             target
                 .merge_log_bytes(&wire([existing.clone(), accepted.clone()]), None)
@@ -2353,8 +2378,11 @@ mod tests {
         assert_eq!(target.state(), before);
 
         let mut late = SafeMeshGCounterReplica::new(0, 2);
-        late.merge_record_bytes(&existing.to_wire_bytes().unwrap(), None)
-            .unwrap();
+        assert_eq!(
+            late.merge_record_bytes(&existing.to_wire_bytes().unwrap(), None)
+                .unwrap(),
+            "accepted"
+        );
         let before = late.state();
         let admissions = late
             .merge_log_bytes(&wire([accepted, collision, after_collision]), None)
@@ -2480,6 +2508,122 @@ mod tests {
         );
         assert_eq!(replica.state, state);
         assert_eq!(replica.log, log);
+    }
+
+    #[test]
+    fn wasm_record_and_log_paths_name_the_same_verdict() {
+        macro_rules! check {
+            ($replica:expr, $first:expr, $second:expr) => {{
+                let first = Record {
+                    id: RecordId {
+                        replica: 1,
+                        sequence: 1,
+                    },
+                    delta: $first,
+                };
+                let second = Record {
+                    id: first.id,
+                    delta: $second,
+                };
+                let mut replica = $replica;
+                assert_eq!(
+                    replica
+                        .merge_record_bytes(&first.to_wire_bytes().unwrap(), None)
+                        .unwrap(),
+                    "accepted"
+                );
+                let state = replica.state.clone();
+                let log = replica.log.clone();
+                // A redelivery and a conflicting payload each get one verdict, named
+                // the same on both paths, and neither moves state or the log.
+                for (record, verdict) in [(first, "duplicate"), (second, "collision")] {
+                    let single = replica
+                        .merge_record_bytes(&record.to_wire_bytes().unwrap(), None)
+                        .unwrap();
+                    let mut incoming = EventLog::for_crdt(&replica.state);
+                    assert_eq!(
+                        incoming.insert_record(&replica.state, record),
+                        safemesh_crdt::Admission::Accepted
+                    );
+                    let batch = replica
+                        .merge_log_bytes(&incoming.to_wire_bytes().unwrap(), None)
+                        .unwrap();
+                    println!(
+                        "WASM {}: single={single} batch={batch:?}",
+                        stringify!($replica)
+                    );
+                    assert_eq!(single, verdict);
+                    assert_eq!(batch, vec![single]);
+                    assert_eq!(replica.state, state);
+                    assert_eq!(replica.log, log);
+                }
+            }};
+        }
+        check!(
+            SafeMeshGCounterReplica::new(2, 2),
+            GCounterDelta {
+                replica: 1,
+                tally: 5
+            },
+            GCounterDelta {
+                replica: 1,
+                tally: 9
+            }
+        );
+        check!(
+            SafeMeshPnCounterReplica::new(2, 2),
+            PnCounterDelta::Inc {
+                replica: 1,
+                tally: 5
+            },
+            PnCounterDelta::Dec {
+                replica: 1,
+                tally: 9
+            }
+        );
+        check!(
+            SafeMeshEnableWinsFlagReplica::new(2),
+            EnableWinsFlagDelta::Enable { token: 5 },
+            EnableWinsFlagDelta::Enable { token: 9 }
+        );
+        check!(
+            SafeMeshLwwRegisterReplica::new(2),
+            LwwRegisterDelta {
+                timestamp: 1,
+                replica: 1,
+                value: 5
+            },
+            LwwRegisterDelta {
+                timestamp: 2,
+                replica: 1,
+                value: 9
+            }
+        );
+        check!(
+            SafeMeshLwwMapReplica::new(2),
+            LwwMapDelta::Set {
+                key: 1,
+                timestamp: 1,
+                replica: 1,
+                value: 5
+            },
+            LwwMapDelta::Remove {
+                key: 1,
+                timestamp: 2,
+                replica: 1
+            }
+        );
+        check!(
+            SafeMeshStringOrSetReplica::new(2),
+            OrSetDelta::Add {
+                element: "first".to_owned(),
+                token: 5,
+            },
+            OrSetDelta::Add {
+                element: "second".to_owned(),
+                token: 9,
+            }
+        );
     }
 
     #[test]
@@ -2784,8 +2928,9 @@ mod tests {
         assert_eq!(before, after);
         assert_eq!(after.3, 1);
 
-        // Same identity, different payload: the core reports a collision and the
-        // binding refuses it rather than absorbing either reading.
+        // Same identity, different payload: the core reports a collision. The
+        // binding returns that verdict, as the log path does, and absorbs neither
+        // reading.
         let forged = Record {
             id: RecordId {
                 replica: 1,
@@ -2795,13 +2940,25 @@ mod tests {
                 element: "forged".to_string(),
                 token: 99,
             },
-        }
-        .to_wire_bytes()
-        .unwrap();
-        let error = reader.try_merge_record_bytes(&forged).unwrap_err();
-        println!("C2 same id, different payload: {}", error.message);
-        assert_eq!(error.message, "record ID collision");
+        };
+        let verdict = reader
+            .try_merge_record_bytes(&forged.to_wire_bytes().unwrap())
+            .unwrap();
+        println!("C2 same id, different payload: {verdict}");
+        assert_eq!(verdict, "collision");
+        let mut incoming = EventLog::for_crdt(&reader.state);
+        assert_eq!(
+            incoming.insert_record(&reader.state, forged),
+            safemesh_crdt::Admission::Accepted
+        );
+        assert_eq!(
+            reader
+                .try_merge_log_bytes(&incoming.to_wire_bytes().unwrap())
+                .unwrap(),
+            vec![verdict]
+        );
         assert_eq!(reader.elements(), before.0);
+        assert_eq!(reader.tombstones(), before.1);
         assert_eq!(reader.log.records().len(), 1);
     }
 
@@ -3070,12 +3227,17 @@ impl SafeMeshPnCounterReplica {
         self.append_dec(counter_replica, tally)
     }
 
-    #[wasm_bindgen(js_name = mergeRecordBytes)]
+    /// Return the core admission verdict for the decoded input record, as
+    /// `mergeLogBytes` does per record. Only `"accepted"` changes state.
+    #[wasm_bindgen(
+        js_name = mergeRecordBytes,
+        unchecked_return_type = "\"accepted\" | \"duplicate\" | \"collision\""
+    )]
     pub fn merge_record_bytes(
         &mut self,
         bytes: &[u8],
         max_collection_elements: Option<u32>,
-    ) -> Result<(), JsValue> {
+    ) -> Result<String, JsValue> {
         let record = Record::<PnCounterDelta>::from_wire_bytes_with_collection_limits(
             bytes,
             collection_limits(max_collection_elements),
@@ -3093,16 +3255,13 @@ impl SafeMeshPnCounterReplica {
                 "counter coordinate out of range or not owned by record author",
             ));
         }
-        if self
-            .log
-            .admit_with(&mut self.state, record, |state, delta| {
-                state.apply_delta(delta.clone());
-            })
-            == safemesh_crdt::Admission::Collision
-        {
-            return Err(safe_mesh_error(1, "record ID collision"));
-        }
-        Ok(())
+        record_verdict(
+            self.log
+                .admit_with(&mut self.state, record, |state, delta| {
+                    state.apply_delta(delta.clone());
+                }),
+        )
+        .map_err(JsValue::from)
     }
 
     /// Return one core admission verdict for every decoded input record.

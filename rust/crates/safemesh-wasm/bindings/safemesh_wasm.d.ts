@@ -23,7 +23,11 @@ export class SafeMeshEnableWinsFlagReplica {
      * Return one core admission verdict for every decoded input record.
      */
     mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): ("accepted" | "duplicate" | "collision")[];
-    mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): void;
+    /**
+     * Return the core admission verdict for the decoded input record, as
+     * `mergeLogBytes` does per record. Only `"accepted"` changes state.
+     */
+    mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): "accepted" | "duplicate" | "collision";
     constructor(replica_id: bigint);
     tombstoneTokens(): BigUint64Array;
     value(): boolean;
@@ -55,7 +59,11 @@ export class SafeMeshGCounterReplica {
      * Return one core admission verdict for every decoded input record.
      */
     mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): ("accepted" | "duplicate" | "collision")[];
-    mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): void;
+    /**
+     * Return the core admission verdict for the decoded input record, as
+     * `mergeLogBytes` does per record. Only `"accepted"` changes state.
+     */
+    mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): "accepted" | "duplicate" | "collision";
     constructor(replica_id: bigint, replicas: number);
     /**
      * Compare the Rust-core carrier states without reproducing its equality in JavaScript.
@@ -107,7 +115,11 @@ export class SafeMeshLwwMapReplica {
      * Return one core admission verdict for every decoded input record.
      */
     mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): ("accepted" | "duplicate" | "collision")[];
-    mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): void;
+    /**
+     * Return the core admission verdict for the decoded input record, as
+     * `mergeLogBytes` does per record. Only `"accepted"` changes state.
+     */
+    mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): "accepted" | "duplicate" | "collision";
     constructor(replica_id: bigint);
     removalKeys(): BigUint64Array;
     /**
@@ -140,7 +152,11 @@ export class SafeMeshLwwRegisterReplica {
      * Return one core admission verdict for every decoded input record.
      */
     mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): ("accepted" | "duplicate" | "collision")[];
-    mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): void;
+    /**
+     * Return the core admission verdict for the decoded input record, as
+     * `mergeLogBytes` does per record. Only `"accepted"` changes state.
+     */
+    mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): "accepted" | "duplicate" | "collision";
     constructor(replica_id: bigint);
     timestampOr(default_value: bigint): bigint;
     valueOr(default_value: bigint): bigint;
@@ -180,7 +196,11 @@ export class SafeMeshPnCounterReplica {
      * Return one core admission verdict for every decoded input record.
      */
     mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): ("accepted" | "duplicate" | "collision")[];
-    mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): void;
+    /**
+     * Return the core admission verdict for the decoded input record, as
+     * `mergeLogBytes` does per record. Only `"accepted"` changes state.
+     */
+    mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): "accepted" | "duplicate" | "collision";
     constructor(replica_id: bigint, replicas: number);
     /**
      * Compare the Rust-core carrier states without reproducing its equality in JavaScript.
@@ -307,12 +327,13 @@ export class SafeMeshStringOrSetReplica {
     /**
      * Decode one record and admit it through the core event log.
      *
-     * Returns the core's admission verdict: `"accepted"` when the record was
-     * new and applied, `"duplicate"` when a record with the same identity and
-     * payload was already in the log (state does not move). A record whose
-     * identity is known but whose payload differs throws `record ID collision`.
+     * Returns the core's admission verdict, as `mergeLogBytes` does per
+     * record: `"accepted"` when the record was new and applied, `"duplicate"`
+     * when a record with the same identity and payload was already in the log,
+     * and `"collision"` when the identity is known with a different payload.
+     * Only `"accepted"` changes state. Decode and ownership failures throw.
      */
-    mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): "accepted" | "duplicate";
+    mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): "accepted" | "duplicate" | "collision";
     constructor(replica_id: bigint);
     /**
      * Live add tokens for `element`, excluding tombstoned tokens.
