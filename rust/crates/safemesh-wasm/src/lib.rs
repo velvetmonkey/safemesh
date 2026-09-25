@@ -6,7 +6,7 @@ use safemesh_crdt::ownership::{allocate_token, WriterConfig};
 use safemesh_crdt::{
     CollectionLimits, Crdt, DecodeError, DecodeLimits, EnableWinsFlag, EnableWinsFlagDelta,
     EventLog, GCounter, GCounterDelta, GSet, LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta,
-    OrSet, OrSetDelta, PnCounter, PnCounterDelta, Record, Rga, WireDecode, WireEncode, WireError,
+    OrSet, OrSetDelta, PnCounter, PnCounterDelta, Record, Rga, WireEncode, WireError,
 };
 use std::{cell::RefCell, collections::BTreeSet};
 use wasm_bindgen::prelude::*;
@@ -22,6 +22,37 @@ export function installOrSetSelfMergeGuard(sample) {
         if (this === other) return;
         return merge.call(this, other);
     };
+    sample.free();
+}
+
+// Wrap the generated JS methods before wasm-bindgen converts a number to u32.
+// All decode entry points take the optional budget as their second argument.
+export function installCollectionBudgetGuard(sample) {
+    const prototype = Object.getPrototypeOf(sample);
+    const check = budget => {
+        if (budget == null) return;
+        if (typeof budget !== 'number' || !Number.isSafeInteger(budget) ||
+            budget < 0 || budget > 4294967295) {
+            throw new SafeMeshError(2,
+                'maxCollectionElements must be a nonnegative integer at most 4294967295');
+        }
+    };
+    for (const name of ['mergeStateBytes', 'mergeRecordBytes', 'mergeLogBytes']) {
+        if (typeof prototype[name] !== 'function') continue;
+        const original = prototype[name];
+        prototype[name] = function(bytes, budget) {
+            check(budget);
+            return original.call(this, bytes, budget);
+        };
+    }
+    const klass = sample.constructor;
+    if (typeof klass.inspectRecordBytes === 'function') {
+        const original = klass.inspectRecordBytes;
+        klass.inspectRecordBytes = function(bytes, budget) {
+            check(budget);
+            return original.call(this, bytes, budget);
+        };
+    }
     sample.free();
 }
 
@@ -48,6 +79,9 @@ extern "C" {
     #[wasm_bindgen(js_name = installOrSetSelfMergeGuard)]
     fn install_orset_self_merge_guard(sample: JsValue);
 
+    #[wasm_bindgen(js_name = installCollectionBudgetGuard)]
+    fn install_collection_budget_guard(sample: JsValue);
+
     #[wasm_bindgen(constructor)]
     fn new(code: u32, message: &str) -> SafeMeshError;
 
@@ -60,6 +94,14 @@ extern "C" {
 #[wasm_bindgen(start)]
 pub fn initialize_bindings() {
     install_orset_self_merge_guard(SafeMeshOrSet::new().into());
+    install_collection_budget_guard(SafeMeshGCounterReplica::new(0, 1).into());
+    install_collection_budget_guard(SafeMeshEnableWinsFlagReplica::new(0).into());
+    install_collection_budget_guard(SafeMeshLwwMapReplica::new(0).into());
+    install_collection_budget_guard(SafeMeshLwwRegisterReplica::new(0).into());
+    install_collection_budget_guard(SafeMeshStringOrSetReplica::new(0).into());
+    install_collection_budget_guard(SafeMeshPnCounterReplica::new(0, 1).into());
+    install_collection_budget_guard(SafeMeshGSetReplica::new().into());
+    install_collection_budget_guard(SafeMeshRgaReplica::new().into());
 }
 
 fn safe_mesh_error(code: u32, message: &str) -> JsValue {
@@ -1441,6 +1483,7 @@ impl SafeMeshStringOrSetReplica {
         }
     }
 
+    #[cfg(test)]
     fn decode_record(bytes: &[u8]) -> Result<Record<OrSetDelta<String, u64>>, BindingError> {
         Self::decode_record_with_limits(bytes, None)
     }
@@ -1462,6 +1505,7 @@ impl SafeMeshStringOrSetReplica {
         })
     }
 
+    #[cfg(test)]
     fn try_merge_record_bytes(&mut self, bytes: &[u8]) -> Result<&'static str, BindingError> {
         self.try_merge_record_bytes_with_limits(bytes, None)
     }
@@ -1482,6 +1526,7 @@ impl SafeMeshStringOrSetReplica {
         })
     }
 
+    #[cfg(test)]
     fn try_merge_log_bytes(&mut self, bytes: &[u8]) -> Result<Vec<String>, BindingError> {
         self.try_merge_log_bytes_with_limits(bytes, None)
     }
@@ -1513,6 +1558,7 @@ impl SafeMeshStringOrSetReplica {
             .collect())
     }
 
+    #[cfg(test)]
     fn try_inspect_record_bytes(bytes: &[u8]) -> Result<SafeMeshStringOrSetRecord, BindingError> {
         Self::try_inspect_record_bytes_with_limits(bytes, None)
     }

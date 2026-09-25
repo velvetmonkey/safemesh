@@ -79,7 +79,10 @@ throw before any record is applied.
 collection. A larger state throws `SafeMeshError` code 3 with
 `maxCollectionElements` and the refused budget in its message. Pass a larger
 budget as the second argument, such as `replica.mergeStateBytes(bytes, 4097)`,
-when the larger state is expected. The Record and EventLog byte decoders
+when the larger state is expected. The optional budget accepts only `null`/`undefined`
+(for the 4,096 default) or a nonnegative integer at most 4,294,967,295; invalid
+values throw `SafeMeshError` code 2 before decoding. Zero is valid and refuses
+any nonempty collection. The Record and EventLog byte decoders
 (`mergeRecordBytes`, `mergeLogBytes`, and `inspectRecordBytes` where available)
 accept the same optional second argument for nested collections. Code 1
 continues to identify other decode failures. Raising a decode budget does not

@@ -21,6 +21,14 @@ fn numeric<'py, T: FromPyObject<'py>>(value: &Bound<'py, PyAny>) -> PyResult<T> 
     value.extract()
 }
 
+fn collection_budget(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<usize>> {
+    match value {
+        None => Ok(None),
+        Some(value) if value.is_none() => Ok(None),
+        Some(value) => numeric(value).map(Some),
+    }
+}
+
 // Capacity is a byte limit, not just a usize limit. Checking it here keeps
 // an unrepresentable Vec allocation from escaping as a PyO3 PanicException.
 fn numeric_replicas(value: &Bound<'_, PyAny>) -> PyResult<usize> {
@@ -1130,8 +1138,9 @@ mod py_gset_python {
         #[pyo3(signature = (bytes, *, max_collection_elements = None))]
         pub fn from_wire_bytes(
             bytes: &[u8],
-            max_collection_elements: Option<usize>,
+            max_collection_elements: Option<&Bound<'_, PyAny>>,
         ) -> PyResult<Self> {
+            let max_collection_elements = collection_budget(max_collection_elements)?;
             GSet::<u64>::from_wire_bytes_with_limits(
                 bytes,
                 CollectionLimits {
@@ -1205,8 +1214,9 @@ mod py_rga_python {
         #[pyo3(signature = (bytes, *, max_collection_elements = None))]
         pub fn from_wire_bytes(
             bytes: &[u8],
-            max_collection_elements: Option<usize>,
+            max_collection_elements: Option<&Bound<'_, PyAny>>,
         ) -> PyResult<Self> {
+            let max_collection_elements = collection_budget(max_collection_elements)?;
             Rga::<u64, u64>::from_wire_bytes_with_limits(
                 bytes,
                 CollectionLimits {
