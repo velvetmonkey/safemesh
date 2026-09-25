@@ -21,6 +21,144 @@ where
 }
 
 #[test]
+fn remaining_collection_counts_are_bounded_before_elements() {
+    use safemesh_crdt::CollectionLimits;
+    fn planted<
+        T: WireEncode + WireDecode + safemesh_crdt::WireSchema + Clone + PartialEq + Debug,
+    >(
+        value: T,
+    ) {
+        let bytes = value.to_wire_bytes().unwrap();
+        assert_eq!(
+            T::from_wire_bytes(&bytes),
+            Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+        );
+        let raised = T::from_wire_bytes_with_collection_limits(
+            &bytes,
+            CollectionLimits {
+                max_elements: Some(4097),
+            },
+        )
+        .unwrap();
+        assert_eq!(raised, value);
+        assert_eq!(raised.to_wire_bytes().unwrap(), bytes);
+        let record = Record {
+            id: RecordId {
+                replica: 0,
+                sequence: 1,
+            },
+            delta: value,
+        };
+        let mut log_bytes = Vec::new();
+        EventLog::<T>::encode_records(None, &[record], &mut log_bytes).unwrap();
+        assert_eq!(
+            EventLog::<T>::from_wire_bytes(&log_bytes),
+            Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+        );
+        let log = EventLog::<T>::from_wire_bytes_with_limits(
+            &log_bytes,
+            safemesh_crdt::DecodeLimits {
+                max_records: Some(1),
+                max_collection_elements: Some(4097),
+            },
+        )
+        .unwrap();
+        assert_eq!(log.to_wire_bytes().unwrap(), log_bytes);
+    }
+    let tokens: Vec<u64> = (0..4097).collect();
+    planted(safemesh_crdt::OrSetDelta::<u64, u64>::Remove {
+        tokens: tokens.clone(),
+    });
+    planted(safemesh_crdt::OrSetDelta::<String, u64>::Remove {
+        tokens: tokens.clone(),
+    });
+    planted(EnableWinsFlagDelta::<u64>::Disable {
+        tokens: tokens.clone(),
+    });
+
+    let mut set = OrSet::<u64, u64>::new();
+    let mut string_set = OrSet::<String, u64>::new();
+    let mut flag = EnableWinsFlag::<u64>::new();
+    let mut map = LwwMap::<u64, u64>::new();
+    for token in 0..4097 {
+        set.add(token, token);
+        string_set.add(token.to_string(), token);
+        flag.enable(token);
+        map.set(token, token, 0, token);
+    }
+    planted(set);
+    planted(string_set);
+    planted(flag);
+    planted(map);
+
+    let mut set = OrSet::<u64, u64>::new();
+    let mut string_set = OrSet::<String, u64>::new();
+    let mut flag = EnableWinsFlag::<u64>::new();
+    let mut map = LwwMap::<u64, u64>::new();
+    for token in 0..4097 {
+        set.apply_remove([token]);
+        string_set.apply_remove([token]);
+        flag.disable([token]);
+        map.remove(token, token, 0);
+    }
+    planted(set);
+    planted(string_set);
+    planted(flag);
+    planted(map);
+}
+
+#[test]
+fn outer_record_budget_reaches_nested_event_logs() {
+    use safemesh_crdt::{DecodeError, DecodeLimits};
+    let inner_records: Vec<_> = (1..=2)
+        .map(|sequence| Record {
+            id: RecordId {
+                replica: 0,
+                sequence,
+            },
+            delta: GCounterDelta {
+                replica: 0,
+                tally: sequence,
+            },
+        })
+        .collect();
+    let mut inner_bytes = Vec::new();
+    EventLog::encode_records(Some(1), &inner_records, &mut inner_bytes).unwrap();
+    let inner = EventLog::<GCounterDelta>::from_wire_bytes(&inner_bytes).unwrap();
+    let outer_records = [Record {
+        id: RecordId {
+            replica: 1,
+            sequence: 1,
+        },
+        delta: inner,
+    }];
+    let mut outer_bytes = Vec::new();
+    EventLog::encode_records(None, &outer_records, &mut outer_bytes).unwrap();
+    assert_eq!(
+        EventLog::<EventLog<GCounterDelta>>::from_wire_bytes_with_limits(
+            &outer_bytes,
+            DecodeLimits {
+                max_records: Some(1),
+                max_collection_elements: None
+            }
+        ),
+        Err(DecodeError::Wire(WireError::NestedRecordLimitExceeded {
+            max_records: 1
+        }))
+    );
+    assert!(
+        EventLog::<EventLog<GCounterDelta>>::from_wire_bytes_with_limits(
+            &outer_bytes,
+            DecodeLimits {
+                max_records: Some(2),
+                max_collection_elements: None
+            }
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn gcounter_delta_has_stable_canonical_bytes() {
     let delta = GCounterDelta {
         replica: 2,
@@ -744,7 +882,7 @@ fn orset_delta_rejects_trailing_bytes_and_oversized_counts() {
     }
     assert_eq!(
         safemesh_crdt::OrSetDelta::<u64, u64>::from_wire_bytes(&[0x32, 0xff, 0xff, 0xff, 0xff]),
-        Err(WireError::UnexpectedEof),
+        Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 }),
     );
 }
 
@@ -850,7 +988,14 @@ fn orset_utf8_rejects_length_lies_tags_and_trailing_bytes() {
             let result =
                 std::panic::catch_unwind(|| OrSetDelta::<String, u64>::from_wire_bytes(&bytes));
             assert!(result.is_ok());
-            assert_eq!(result.unwrap(), Err(WireError::UnexpectedEof));
+            assert_eq!(
+                result.unwrap(),
+                Err(if tag == 0x34 && length > 4096 {
+                    WireError::CollectionElementLimitExceeded { max_elements: 4096 }
+                } else {
+                    WireError::UnexpectedEof
+                })
+            );
         }
     }
     for tag in 0..=u8::MAX {
