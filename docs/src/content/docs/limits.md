@@ -37,22 +37,25 @@ you can own the application work; convergence alone does not close these gaps.
 
 SafeMesh's convergence claim is conditional on missing deltas eventually being recovered. It does not prove network or radio delivery. A partition-and-heal example exercises modeled delivery faults; it cannot establish that your real transport will repair every gap. [Evidence: `CLAIMS.md`](https://github.com/velvetmonkey/safemesh/blob/main/CLAIMS.md) and [example scope](/safemesh/examples/).
 
-## You decode G-Set or RGA state from untrusted input
+## You decode collection state from untrusted input
 
-Core G-Set and RGA wire decoding each default to a **4,096-entry ceiling**.
-G-Set checks its element count; RGA checks its placement count and tombstone
-count separately. A declared count of 4,097 is rejected before decoding or
-allocating those entries. Rust callers with larger trusted states can use
-`GSet::<u64>::from_wire_bytes_with_limits` or
-`Rga::<u64, u64>::from_wire_bytes_with_limits` with `CollectionLimits {
-max_elements: Some(n) }`. `None` removes the ceiling. These controls change
+Core collection wire decoding defaults to a **4,096-entry ceiling per count**.
+G-Set checks elements; RGA checks placements and tombstones; both OR-Set state
+types check add pairs and tombstones; LWW Map checks entries and removals;
+Enable-wins Flag checks enables and tombstones. OR-Set Remove and Enable-wins
+Disable deltas check token counts. A declared count of 4,097 is rejected before
+decoding or allocating those entries. Rust callers with larger trusted states
+can use `WireDecode::from_wire_bytes_with_collection_limits` with
+`CollectionLimits { max_elements: Some(n) }` (G-Set and RGA also have inherent
+methods). `None` removes the ceiling for direct collection decoding. These controls change
 decoding only; canonical encoded bytes are unchanged. Cap input bytes as well,
 since the element ceiling does not bound the size of the input buffer.
 
-An `EventLog<GSet<u64>>` or `EventLog<Rga<u64, u64>>` whose record payload
+An EventLog whose built-in collection record payload
 exceeds the default fails to decode before replay. Rust callers can use
 `EventLog::from_wire_bytes_with_limits` with `DecodeLimits::max_collection_elements`
-to raise the nested ceiling. The record budget remains independent:
+to raise the nested ceiling. `max_records` also bounds records in a nested
+EventLog payload. Each record count is checked separately:
 
 ```rust
 use safemesh_crdt::{DecodeLimits, EventLog, GSet, Record, RecordId};
@@ -71,8 +74,20 @@ assert_eq!(log.records().len(), 1);
 
 For a destination CRDT, use `EventLog::from_wire_bytes_for_with_limits`
 to validate its shape before replay. `None` for `max_collection_elements`
-retains the 4,096 default. The supplied durable Rust adapters use
-G-Counter and OR-Set logs, so their ordinary restart paths are unaffected.
+retains the 4,096 default for peer bytes. The Linux durable adapter's ordinary
+`restart_utf8_set(root, config)` and `restart_counter(root, config)` instead
+budget locally committed history from its stored byte length. This lets stores
+written before the collection ceiling restart even when a historical OR-Set
+Remove contains more than 4,096 tokens. The explicit
+`restart_utf8_set_with_max_collection_elements(root, config, n)` remains available
+to set a smaller or larger local restart ceiling. A state with more than 4,096
+live tokens built from individual Add records also restarts normally: the log
+stores those Add deltas, not a serialized whole-state collection. Treat a copied
+or imported store file as trusted local input only after validating its source;
+the restart budget does not authenticate store provenance. Likewise, a caller
+that constructs a `Record` directly or explicitly raises peer decode limits
+can pass a larger delta to `DurableReplica::receive`; it is then committed as
+local history and ordinary restart will replay it.
 
 ## You exchange peer versions from untrusted input
 
