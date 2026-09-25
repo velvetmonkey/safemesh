@@ -11,4 +11,4 @@ assert.equal(new Set(expected).size, expected.length, 'assurance case names must
 const tap = fs.readFileSync(process.argv[2], 'utf8');
 const actual = [...tap.matchAll(/^ok (\d+) - (.+)$/gm)];
 assert.deepEqual(actual.map(match => Number(match[1])), expected.map((_, index) => index + 1), 'TAP case numbering');
-assert.deepEqual(actual.map(match => match[2]), expected, 'TAP assurance case names');
+assert.deepEqual(actual.map(match => match[2]), expected.map(name => name.replaceAll('\\', '\\\\')), 'TAP assurance case names');
