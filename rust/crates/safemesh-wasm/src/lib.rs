@@ -156,9 +156,7 @@ fn event_log_decode_js_error(error: DecodeError) -> JsValue {
             safe_mesh_error(1, "delta type mismatch")
         }
         DecodeError::Wire(WireError::MissingShape) => safe_mesh_error(1, "event log missing shape"),
-        DecodeError::RecordLimitExceeded { .. } => {
-            safe_mesh_error(1, "failed to decode event log")
-        }
+        DecodeError::RecordLimitExceeded { .. } => safe_mesh_error(1, "failed to decode event log"),
         DecodeError::Wire(cause) => {
             safe_mesh_error(1, &format!("failed to decode event log: {cause}"))
         }
