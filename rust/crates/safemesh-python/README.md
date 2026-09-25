@@ -169,4 +169,13 @@ These three classes have no durable `Replica` companion: the Rust core does not
 expose public `DurableReplica` construction and restart for these types.
 `GSet` and `Rga` expose the Rust core's canonical full-state bytes through
 `to_wire_bytes()` and `from_wire_bytes(bytes)`; malformed input raises `ValueError`.
+The default decode budget is 4,096 elements per G-Set or RGA collection. An
+oversized state raises `ValueError` naming `CollectionElementLimitExceeded` and
+the budget. For a trusted larger state, pass an explicit keyword, for example
+`GSet.from_wire_bytes(data, max_collection_elements=4097)` or
+`Rga.from_wire_bytes(data, max_collection_elements=4097)`. The same canonical
+bytes are used at either budget. The keyword accepts `None` (the default) or
+a non-bool integer from zero through the platform `usize` maximum. Invalid
+values raise a Python type or range error before decoding; zero refuses any
+nonempty collection.
 Full-state `PnCounter` has no canonical wire form in this version.
