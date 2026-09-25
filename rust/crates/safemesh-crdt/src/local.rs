@@ -524,6 +524,20 @@ where
     C::Delta: OwnedDelta + Clone + PartialEq + WireEncode + WireDecode + WireSchema,
 {
     fn restart(root: &Path, config: WriterConfig, state: C) -> Result<Self, LocalError> {
+        Self::restart_with_collection_limits(
+            root,
+            config,
+            state,
+            crate::CollectionLimits { max_elements: None },
+        )
+    }
+
+    fn restart_with_collection_limits(
+        root: &Path,
+        config: WriterConfig,
+        state: C,
+        limits: crate::CollectionLimits,
+    ) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
         let root = root.canonicalize()?;
         // Opening without create is deliberate: missing ownership is not a new store.
@@ -551,8 +565,29 @@ where
         }
         // The lock covers reading, checking and replaying the complete transaction.
         let transaction = CommittedTransaction::read(&root, config)?;
-        let log = EventLog::<C::Delta>::from_wire_bytes_for(&transaction.log_bytes, &state)
-            .map_err(LocalError::History)?;
+        // This is the locally committed transaction, whose bytes are already in
+        // memory. Every wire collection element occupies at least one byte, so
+        // its length bounds any count without imposing a new writer-lifetime
+        // limit on stores created before collection ceilings were introduced.
+        // Peer wire decoders retain their independent 4,096-element default.
+        let max_elements = limits.max_elements.unwrap_or_else(|| {
+            transaction
+                .log_bytes
+                .len()
+                .max(crate::CollectionLimits::WIRE_DEFAULT.max_elements.unwrap())
+        });
+        let log = EventLog::<C::Delta>::from_wire_bytes_for_with_limits(
+            &transaction.log_bytes,
+            &state,
+            crate::DecodeLimits {
+                max_records: None,
+                max_collection_elements: Some(max_elements),
+            },
+        )
+        .map_err(|error| match error {
+            crate::DecodeError::Wire(error) => LocalError::History(error),
+            crate::DecodeError::RecordLimitExceeded { .. } => unreachable!("no record limit"),
+        })?;
         let mut inner = LocalReplica {
             config,
             fence,
@@ -608,8 +643,25 @@ impl DurableReplica<GCounter> {
 }
 impl DurableReplica<OrSet<String, u64>> {
     /// Checked ordinary restart, including tombstones and token allocation.
+    /// Budgets stored collection counts from the committed transaction length.
     pub fn restart_utf8_set(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
         Self::restart(root, config, OrSet::new())
+    }
+    /// Restart a stored set with an explicit collection ceiling instead of the
+    /// ordinary stored-byte budget.
+    pub fn restart_utf8_set_with_max_collection_elements(
+        root: &Path,
+        config: WriterConfig,
+        max_elements: usize,
+    ) -> Result<Self, LocalError> {
+        Self::restart_with_collection_limits(
+            root,
+            config,
+            OrSet::new(),
+            crate::CollectionLimits {
+                max_elements: Some(max_elements),
+            },
+        )
     }
     pub fn utf8_set(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
         Self::fresh(root, config, OrSet::new())
@@ -883,6 +935,43 @@ mod durable_tests {
             writers: 2,
             writer: 0,
         }
+    }
+    #[test]
+    fn oversized_stored_orset_restarts_ordinary() {
+        let root = self::root();
+        let mut replica = DurableReplica::utf8_set(&root, config()).unwrap();
+        let element = "bulk".to_string();
+        for _ in 0..4097 {
+            replica.add(replica.ticket(), element.clone()).unwrap();
+        }
+        assert_eq!(replica.state().observed_tokens(&element).len(), 4097);
+        replica.remove(replica.ticket(), &element).unwrap();
+        drop(replica);
+        let mut restored = DurableReplica::restart_utf8_set(&root, config()).unwrap();
+        assert_eq!(restored.state().observed_tokens(&element).len(), 0);
+        assert_eq!(restored.state().tombstones().len(), 4097);
+        assert_eq!(
+            restored
+                .receive(
+                    restored.ticket(),
+                    Record {
+                        id: RecordId {
+                            replica: 1,
+                            sequence: 1,
+                        },
+                        delta: OrSetDelta::Add {
+                            element: "peer".into(),
+                            token: 3,
+                        },
+                    },
+                )
+                .unwrap(),
+            Admission::Accepted
+        );
+        drop(restored);
+        let restored = DurableReplica::restart_utf8_set(&root, config()).unwrap();
+        assert_eq!(restored.state().tombstones().len(), 4097);
+        assert!(restored.state().contains(&"peer".to_string()));
     }
     #[test]
     fn duplicate_and_replay_do_not_clone_history() {

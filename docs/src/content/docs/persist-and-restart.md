@@ -95,7 +95,12 @@ cleaned exercise stores
 
 `DurableReplica::counter` / `utf8_set` create the stores. Each successful edit
 commits its own transaction; `restart_counter` / `restart_utf8_set` validate and
-replay the existing store while reacquiring the writer. After restart, a tally of
+replay the existing store while reacquiring the writer. Their collection budget
+comes from the locally stored transaction length, so an existing OR-Set store
+with a Remove of more than 4,096 tokens still uses ordinary `restart_utf8_set`.
+Peer wire decoding keeps the 4,096-element default. A copied store file has no
+authenticated provenance; validate its source before using it as local history.
+After restart, a tally of
 `4` and the peer's `2` yield `6`. The membership writer allocates a fresh token for
 each add. Counter and membership use separate stores; there is no transaction
 across both objects.

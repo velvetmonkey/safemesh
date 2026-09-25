@@ -63,6 +63,9 @@ pub enum WireError {
     CollectionElementLimitExceeded {
         max_elements: usize,
     },
+    NestedRecordLimitExceeded {
+        max_records: usize,
+    },
     NonCanonicalVersionVector,
 }
 
@@ -105,6 +108,9 @@ impl core::fmt::Display for WireError {
             Self::CollectionElementLimitExceeded { max_elements } => {
                 write!(f, "wire collection exceeds element limit {max_elements}")
             }
+            Self::NestedRecordLimitExceeded { max_records } => {
+                write!(f, "nested wire log exceeds record limit {max_records}")
+            }
             Self::NonCanonicalVersionVector => f.write_str("noncanonical wire version vector"),
         }
     }
@@ -112,7 +118,7 @@ impl core::fmt::Display for WireError {
 
 impl core::error::Error for WireError {}
 
-/// Optional count budget for G-Set elements and each RGA collection.
+/// Optional count budget for each built-in collection and collection delta.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CollectionLimits {
     /// Maximum declared count per collection. `None` removes the ceiling.
@@ -120,7 +126,7 @@ pub struct CollectionLimits {
 }
 
 impl CollectionLimits {
-    /// Default G-Set and RGA wire ceiling; callers may explicitly raise it.
+    /// Default collection wire ceiling; callers may explicitly raise it.
     pub const WIRE_DEFAULT: Self = Self {
         max_elements: Some(4096),
     };
@@ -129,11 +135,11 @@ impl CollectionLimits {
 /// Optional limits for [`EventLog::from_wire_bytes_with_limits`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DecodeLimits {
-    /// Maximum top-level record occurrences decoded, including duplicates.
-    /// `None` is unbounded; `Some(0)` admits only empty logs.
-    /// This does not bound bytes, nested records, or collection entries in a payload.
+    /// Maximum record occurrences in each EventLog frame, including nested
+    /// frames and duplicates. `None` is unbounded; `Some(0)` admits only empty logs.
+    /// This does not bound bytes or collection entries in a payload.
     pub max_records: Option<usize>,
-    /// Maximum elements in each nested G-Set or RGA collection. `None` uses
+    /// Maximum elements in each nested built-in collection. `None` uses
     /// the default ceiling of 4,096; use `Some(n)` to set an explicit ceiling.
     pub max_collection_elements: Option<usize>,
 }
@@ -227,7 +233,7 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
     /// `max_records + 1`, counting duplicate occurrences before deduplication.
     /// Returns [`DecodeError::RecordLimitExceeded`] without a partial result.
     /// CRC verification still scans the entire frame; callers must separately
-    /// cap input bytes and payload complexity (including nested logs).
+    /// cap input bytes and payload complexity.
     /// As with [`WireDecode::from_wire_bytes`], this does not validate a destination
     /// CRDT for replay. The option is currently exposed only in Rust.
     ///
@@ -258,6 +264,7 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
                     .max_collection_elements
                     .or(CollectionLimits::WIRE_DEFAULT.max_elements),
             },
+            limits.max_records,
             |_| {},
             |index| {
                 if let Some(max_records) = limits.max_records {
@@ -313,6 +320,7 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
         let log = Self::decode_with(
             &mut cursor,
             CollectionLimits::WIRE_DEFAULT,
+            None,
             |record| records.push(record.clone()),
             |_| Ok::<(), WireError>(()),
         )?;
@@ -342,6 +350,7 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
                     .max_collection_elements
                     .or(CollectionLimits::WIRE_DEFAULT.max_elements),
             },
+            limits.max_records,
             |record| records.push(record.clone()),
             |index| {
                 if let Some(max_records) = limits.max_records {
@@ -413,6 +422,28 @@ pub trait WireDecode: Sized {
         _limits: CollectionLimits,
     ) -> Result<Self, WireError> {
         Self::decode_wire(cursor)
+    }
+
+    /// Decode a payload nested in an EventLog with its record budget.
+    fn decode_wire_with_limits(
+        cursor: &mut WireCursor<'_>,
+        collections: CollectionLimits,
+        _max_records: Option<usize>,
+    ) -> Result<Self, WireError> {
+        Self::decode_wire_with_collection_limits(cursor, collections)
+    }
+
+    /// Decode a complete wire value with an explicit collection ceiling.
+    fn from_wire_bytes_with_collection_limits(
+        bytes: &[u8],
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
+        let mut cursor = WireCursor::new(bytes);
+        let value = Self::decode_wire_with_collection_limits(&mut cursor, limits)?;
+        if !cursor.is_empty() {
+            return Err(WireError::TrailingBytes);
+        }
+        Ok(value)
     }
 
     fn from_wire_bytes(bytes: &[u8]) -> Result<Self, WireError> {
@@ -615,6 +646,7 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
     pub(super) fn decode_with<E: From<WireError>>(
         cursor: &mut WireCursor<'_>,
         collection_limits: CollectionLimits,
+        nested_max_records: Option<usize>,
         mut occurrence: impl FnMut(&Record<D>),
         mut before_record: impl FnMut(usize) -> Result<(), E>,
     ) -> Result<Self, E> {
@@ -654,9 +686,10 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
             let record_len = body.read_len()?;
             let record_bytes = body.read_exact(record_len)?;
             let mut record_cursor = WireCursor::new(record_bytes);
-            let record = Record::<D>::decode_wire_with_collection_limits(
+            let record = Record::<D>::decode_wire_with_limits(
                 &mut record_cursor,
                 collection_limits,
+                nested_max_records,
             )?;
             if !record_cursor.is_empty() {
                 return Err(WireError::TrailingBytes.into());
