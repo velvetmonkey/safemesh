@@ -63,7 +63,7 @@ export default defineConfig({
         const outDir = resolve(options.dir ?? 'dist')
         const worker = readFileSync(resolve(outDir, 'sw.js'), 'utf8')
         // Every precached URL is absolute under the build's base, which is also the worker's scope.
-        const shell = ['', 'manifest.webmanifest', 'pwa-icon.svg', 'favicon.svg']
+        const shell = ['', 'README.md', 'manifest.webmanifest', 'pwa-icon.svg', 'favicon.svg']
         const assets = [...new Set([...shell, ...Object.keys(bundle)].map((name) => base + name))].sort()
         // Version the complete artifact, including public files, with the build's own bytes.
         const hash = createHash('sha256').update(worker)

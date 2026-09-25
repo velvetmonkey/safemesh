@@ -95,7 +95,15 @@ cleaned exercise stores
 
 `DurableReplica::counter` / `utf8_set` create the stores. Each successful edit
 commits its own transaction; `restart_counter` / `restart_utf8_set` validate and
-replay the existing store while reacquiring the writer. After restart, a tally of
+replay the existing store while reacquiring the writer. For an existing counter,
+`restart_counter_from_store(root, writer)` reads the committed count under that
+writer's lock and runs the same checked replay, while explicit `restart_counter`
+still rejects a mismatched count. Their collection budget
+comes from the locally stored transaction length, so an existing OR-Set store
+with a Remove of more than 4,096 tokens still uses ordinary `restart_utf8_set`.
+Peer wire decoding keeps the 4,096-element default. A copied store file has no
+authenticated provenance; validate its source before using it as local history.
+After restart, a tally of
 `4` and the peer's `2` yield `6`. The membership writer allocates a fresh token for
 each add. Counter and membership use separate stores; there is no transaction
 across both objects.
@@ -110,15 +118,75 @@ Read the [complete Rust source and storage boundary](/safemesh/using-safemesh/#r
 ## Diagnose a failed Rust exercise
 
 The fixture uses `expect`/`unwrap`, so failures appear as a Rust panic (exit 101).
-`AlreadyExists` on a second `persist` means the exercise store already exists:
-keep it and run `restart` with its original writer configuration, or use a fresh
-checkout for a separate exercise. Never reset an existing writer's fence/history.
-`History(UnexpectedEof)` on restart means the stored transaction is truncated or
-incomplete. Retain the damaged store for inspection; restart does not salvage a
-torn record. Investigate the failed write/transfer and recover only from a known
-consistent history with its original identity and allocation metadata. Do not
-initialize over the damaged store. These are tested engineering outcomes, not
-proofs of crash safety. See the [recovery evidence](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md).
+On a second `persist`, an existing store returns `RecoveryRequired` (Display:
+`local store requires recovery`). Check whether `.gold-rust` existed before this
+run: if it did, keep that store and run `restart` with its original writer
+configuration, or use a fresh checkout for a separate exercise.
+
+A truncated writer fence on `restart` returns the same `RecoveryRequired` and
+`local store requires recovery`. If the store was already present and this was
+a `restart`, inspect its `writer-0.fence` files: each must be 24 bytes. Retain a
+damaged store for inspection and recover only from a known consistent copy with
+its original writer identity and allocation metadata. Never reset an existing
+writer's fence/history.
+
+`Configuration` on `restart` (Display: `invalid or mismatched local writer
+configuration`) means the requested writer configuration disagrees with stored
+identity or allocation metadata. Check the writer flag and writer count used at
+restart against those used when the store was created, then retry with the
+original settings. If the stored fence or transaction metadata itself differs,
+retain the store for inspection and recover only from a known consistent copy
+with its original writer identity and allocation metadata. Do not initialize
+over the affected store.
+
+`Io(Os { code: 20, kind: NotADirectory, message: "Not a directory" })` on
+`restart` (Display: `local store I/O failed: Not a directory (os error 20)`)
+can mean an expected store directory is a file on Linux. Check that the store
+path is a directory. Retain the affected path for inspection and recover the
+directory only from a known consistent copy with its original writer identity
+and allocation metadata; then retry `restart`. Do not initialize over it.
+
+`Io(Os { code: 2, kind: NotFound, message: "No such file or directory" })`
+on `restart` (Display: `local store I/O failed: No such file or directory
+(os error 2)`) can mean a stored writer transaction is missing. Check that
+both the writer fence and transaction are present in each store. Retain what
+remains for inspection and recover the missing file only from a known consistent
+copy with its original writer identity and allocation metadata; then retry
+`restart`. Do not initialize over the store.
+
+`InvalidHistory` on `restart` (Display: `local history failed replay or
+sequence validation`) can mean the transaction's stored sequence does not
+match its replayed history. Retain the store for inspection; recover only from
+a known consistent copy with its original writer identity and allocation
+metadata, then retry `restart`. Do not initialize over the store.
+
+`Exhausted` on `restart` (Display: `local writer sequence, generation, or token
+allocation exhausted`) can mean the stored fence generation cannot advance.
+Retain the store for inspection and check its generation and allocation
+metadata. Recover only from a known consistent copy with its original writer
+identity and allocation metadata, then retry `restart`; do not reset the fence
+or initialize over the store.
+
+`History(UnexpectedEof)` on `restart` (Display: `local history wire validation
+failed: unexpected end of wire input`) means the stored transaction is truncated
+or incomplete. `History(IntegrityMismatch)` (Display: `local history wire
+validation failed: wire frame integrity check failed`) means a stored
+transaction failed its integrity check. Retain either damaged store for
+inspection; restart does not salvage a torn or corrupted record. Investigate
+the failed write or transfer, and recover only from a known consistent history
+with its original identity and allocation metadata. Do not initialize over the
+damaged store. These are tested engineering outcomes, not proofs of crash safety.
+`History(TrailingBytes)` (Display: `local history wire validation failed:
+unexpected trailing bytes after wire value`) means the stored transaction has
+bytes after its complete wire value. `History(InvalidTag)` (Display: `local
+history wire validation failed: unexpected wire tag`) means its wire tag is
+invalid. `History(DeltaTypeMismatch)` (Display: `local history wire validation
+failed: wire delta schema does not match the expected type`) means the stored
+transaction has the wrong delta schema. For each, retain the damaged store for
+inspection; restart does not salvage the record. Investigate the failed write
+or transfer, and recover only from a known consistent history with its original
+identity and allocation metadata. Do not initialize over the damaged store.
+See the [recovery evidence](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md).
 
 <a id="predict-then-run-a-concurrent-add-and-remove"></a>
 

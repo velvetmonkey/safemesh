@@ -4,20 +4,105 @@
 
 //! Canonical wire codec implementations for the CRDT types.
 
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec::Vec;
 
 use super::{
-    read_tag, write_bytes, write_len, write_u64, write_u8, EnableWinsFlag, EnableWinsFlagDelta,
-    EventLog, GCounterDelta, GSet, LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet,
-    OrSetDelta, PnCounterDelta, Record, RecordId, Rga, RgaDelta, WireCursor, WireDecode,
+    read_tag, write_bytes, write_len, write_u64, write_u8, CollectionLimits, EnableWinsFlag,
+    EnableWinsFlagDelta, EventLog, GCounterDelta, GSet, LwwMap, LwwMapDelta, LwwRegister,
+    LwwRegisterDelta, OrSet, OrSetDelta, PnCounterDelta, Record, RecordId, Rga, RgaDelta,
+    VersionVector, VersionVectorLimitError, VersionVectorLimits, WireCursor, WireDecode,
     WireEncode, WireError, WireSchema, TAG_ENABLE_WINS_FLAG_DISABLE_U64,
     TAG_ENABLE_WINS_FLAG_ENABLE_U64, TAG_ENABLE_WINS_FLAG_U64, TAG_GCOUNTER_DELTA, TAG_GSET_U64,
     TAG_LWW_MAP_REMOVE_U64, TAG_LWW_MAP_SET_U64, TAG_LWW_MAP_U64, TAG_LWW_REGISTER_DELTA_U64,
     TAG_LWW_REGISTER_U64, TAG_ORSET_ADD_STRING, TAG_ORSET_ADD_U64, TAG_ORSET_REMOVE_STRING,
     TAG_ORSET_REMOVE_U64, TAG_ORSET_STRING, TAG_ORSET_U64, TAG_PNCOUNTER_DEC, TAG_PNCOUNTER_INC,
-    TAG_RECORD, TAG_RGA_DELETE_U64, TAG_RGA_INSERT_U64, TAG_RGA_U64,
+    TAG_RECORD, TAG_RGA_DELETE_U64, TAG_RGA_INSERT_U64, TAG_RGA_U64, TAG_VERSION_VECTOR,
 };
+
+impl WireEncode for VersionVector {
+    fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+        write_u8(out, TAG_VERSION_VECTOR);
+        write_len(out, self.entries().len())?;
+        for (&replica, &prefix) in self.entries() {
+            write_u64(out, replica);
+            write_u64(out, prefix);
+        }
+        write_len(out, self.zero_replicas().len())?;
+        for &replica in self.zero_replicas() {
+            write_u64(out, replica);
+        }
+        Ok(())
+    }
+}
+
+impl VersionVector {
+    /// Decode with explicit author and sequence-zero acknowledgement budgets.
+    /// Claimed entry counts are checked before reading or allocating entries.
+    pub fn from_wire_bytes_with_limits(
+        bytes: &[u8],
+        limits: VersionVectorLimits,
+    ) -> Result<Self, WireError> {
+        let mut cursor = WireCursor::new(bytes);
+        let value = Self::decode_with_limits(&mut cursor, limits)?;
+        if cursor.is_empty() {
+            Ok(value)
+        } else {
+            Err(WireError::TrailingBytes)
+        }
+    }
+
+    fn decode_with_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: VersionVectorLimits,
+    ) -> Result<Self, WireError> {
+        read_tag(cursor, TAG_VERSION_VECTOR)?;
+        let author_count = cursor.read_len()?;
+        if let Some(max_authors) = limits.max_authors {
+            if author_count > max_authors {
+                return Err(WireError::VersionAuthorLimitExceeded { max_authors });
+            }
+        }
+        let mut entries = BTreeMap::new();
+        for _ in 0..author_count {
+            let replica = cursor.read_u64()?;
+            let prefix = cursor.read_u64()?;
+            if prefix == 0 || entries.insert(replica, prefix).is_some() {
+                return Err(WireError::NonCanonicalVersionVector);
+            }
+        }
+        let zero_count = cursor.read_len()?;
+        if let Some(max_zero_replicas) = limits.max_zero_replicas {
+            if zero_count > max_zero_replicas {
+                return Err(WireError::VersionZeroReplicaLimitExceeded { max_zero_replicas });
+            }
+        }
+        let mut zeros = BTreeSet::new();
+        for _ in 0..zero_count {
+            if !zeros.insert(cursor.read_u64()?) {
+                return Err(WireError::NonCanonicalVersionVector);
+            }
+        }
+        Self::from_peer_prefixes_with_limits(&entries, &zeros, limits).map_err(
+            |error| match error {
+                VersionVectorLimitError::AuthorLimitExceeded { max_authors } => {
+                    WireError::VersionAuthorLimitExceeded { max_authors }
+                }
+                VersionVectorLimitError::ZeroReplicaLimitExceeded { max_zero_replicas } => {
+                    WireError::VersionZeroReplicaLimitExceeded { max_zero_replicas }
+                }
+                VersionVectorLimitError::Prefix(_) => WireError::NonCanonicalVersionVector,
+            },
+        )
+    }
+}
+
+impl WireDecode for VersionVector {
+    fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        Self::decode_with_limits(cursor, VersionVectorLimits::WIRE_DEFAULT)
+    }
+}
 
 impl WireEncode for GCounterDelta {
     fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
@@ -90,9 +175,49 @@ impl WireEncode for GSet<u64> {
 
 impl WireDecode for GSet<u64> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        Self::decode_with_limits(cursor, CollectionLimits::WIRE_DEFAULT)
+    }
+    fn decode_wire_with_collection_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
+        Self::decode_with_limits(cursor, limits)
+    }
+}
+
+fn check_collection_count(count: usize, limits: CollectionLimits) -> Result<(), WireError> {
+    if let Some(max_elements) = limits.max_elements {
+        if count > max_elements {
+            return Err(WireError::CollectionElementLimitExceeded { max_elements });
+        }
+    }
+    Ok(())
+}
+
+impl GSet<u64> {
+    /// Decode with an explicit element count budget, checked before reading elements.
+    pub fn from_wire_bytes_with_limits(
+        bytes: &[u8],
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
+        let mut cursor = WireCursor::new(bytes);
+        let value = Self::decode_with_limits(&mut cursor, limits)?;
+        if cursor.is_empty() {
+            Ok(value)
+        } else {
+            Err(WireError::TrailingBytes)
+        }
+    }
+
+    fn decode_with_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
         read_tag(cursor, TAG_GSET_U64)?;
+        let count = cursor.read_len()?;
+        check_collection_count(count, limits)?;
         let mut set = GSet::new();
-        for _ in 0..cursor.read_len()? {
+        for _ in 0..count {
             set.insert(cursor.read_u64()?);
         }
         Ok(set)
@@ -122,6 +247,13 @@ impl WireEncode for OrSetDelta<u64, u64> {
 
 impl WireDecode for OrSetDelta<u64, u64> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        Self::decode_wire_with_collection_limits(cursor, CollectionLimits::WIRE_DEFAULT)
+    }
+
+    fn decode_wire_with_collection_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
         match cursor.read_u8()? {
             TAG_ORSET_ADD_U64 => Ok(OrSetDelta::Add {
                 element: cursor.read_u64()?,
@@ -129,7 +261,9 @@ impl WireDecode for OrSetDelta<u64, u64> {
             }),
             TAG_ORSET_REMOVE_U64 => {
                 let mut tokens = Vec::new();
-                for _ in 0..cursor.read_len()? {
+                let count = cursor.read_len()?;
+                check_collection_count(count, limits)?;
+                for _ in 0..count {
                     tokens.push(cursor.read_u64()?);
                 }
                 Ok(OrSetDelta::Remove { tokens })
@@ -164,6 +298,13 @@ impl WireEncode for OrSetDelta<String, u64> {
 
 impl WireDecode for OrSetDelta<String, u64> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        Self::decode_wire_with_collection_limits(cursor, CollectionLimits::WIRE_DEFAULT)
+    }
+
+    fn decode_wire_with_collection_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
         match cursor.read_u8()? {
             TAG_ORSET_ADD_STRING => {
                 let len = cursor.read_len()?;
@@ -177,7 +318,9 @@ impl WireDecode for OrSetDelta<String, u64> {
             }
             TAG_ORSET_REMOVE_STRING => {
                 let mut tokens = Vec::new();
-                for _ in 0..cursor.read_len()? {
+                let count = cursor.read_len()?;
+                check_collection_count(count, limits)?;
+                for _ in 0..count {
                     tokens.push(cursor.read_u64()?);
                 }
                 Ok(OrSetDelta::Remove { tokens })
@@ -205,15 +348,26 @@ impl WireEncode for OrSet<u64, u64> {
 
 impl WireDecode for OrSet<u64, u64> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        Self::decode_wire_with_collection_limits(cursor, CollectionLimits::WIRE_DEFAULT)
+    }
+
+    fn decode_wire_with_collection_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
         read_tag(cursor, TAG_ORSET_U64)?;
         let mut set = OrSet::new();
-        for _ in 0..cursor.read_len()? {
+        let count = cursor.read_len()?;
+        check_collection_count(count, limits)?;
+        for _ in 0..count {
             let element = cursor.read_u64()?;
             let token = cursor.read_u64()?;
             set.add(element, token);
         }
         let mut tombstones = Vec::new();
-        for _ in 0..cursor.read_len()? {
+        let count = cursor.read_len()?;
+        check_collection_count(count, limits)?;
+        for _ in 0..count {
             tombstones.push(cursor.read_u64()?);
         }
         set.apply_remove(tombstones);
@@ -239,9 +393,18 @@ impl WireEncode for OrSet<String, u64> {
 
 impl WireDecode for OrSet<String, u64> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        Self::decode_wire_with_collection_limits(cursor, CollectionLimits::WIRE_DEFAULT)
+    }
+
+    fn decode_wire_with_collection_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
         read_tag(cursor, TAG_ORSET_STRING)?;
         let mut set = OrSet::new();
-        for _ in 0..cursor.read_len()? {
+        let count = cursor.read_len()?;
+        check_collection_count(count, limits)?;
+        for _ in 0..count {
             let len = cursor.read_len()?;
             let element = core::str::from_utf8(cursor.read_exact(len)?)
                 .map_err(|_| WireError::InvalidUtf8)?;
@@ -252,7 +415,9 @@ impl WireDecode for OrSet<String, u64> {
             }
         }
         let mut tombstones = Vec::new();
-        for _ in 0..cursor.read_len()? {
+        let count = cursor.read_len()?;
+        check_collection_count(count, limits)?;
+        for _ in 0..count {
             tombstones.push(cursor.read_u64()?);
         }
         set.apply_remove(tombstones);
@@ -310,14 +475,47 @@ impl WireEncode for Rga<u64, u64> {
 
 impl WireDecode for Rga<u64, u64> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        Self::decode_with_limits(cursor, CollectionLimits::WIRE_DEFAULT)
+    }
+    fn decode_wire_with_collection_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
+        Self::decode_with_limits(cursor, limits)
+    }
+}
+
+impl Rga<u64, u64> {
+    /// Decode with an explicit per-list count budget for placements and tombstones.
+    pub fn from_wire_bytes_with_limits(
+        bytes: &[u8],
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
+        let mut cursor = WireCursor::new(bytes);
+        let value = Self::decode_with_limits(&mut cursor, limits)?;
+        if cursor.is_empty() {
+            Ok(value)
+        } else {
+            Err(WireError::TrailingBytes)
+        }
+    }
+
+    fn decode_with_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
         read_tag(cursor, TAG_RGA_U64)?;
+        let placed_count = cursor.read_len()?;
+        check_collection_count(placed_count, limits)?;
         let mut rga = Rga::new();
-        for _ in 0..cursor.read_len()? {
+        for _ in 0..placed_count {
             let position = cursor.read_u64()?;
             let value = cursor.read_u64()?;
             rga.insert(position, value);
         }
-        for _ in 0..cursor.read_len()? {
+        let tombstone_count = cursor.read_len()?;
+        check_collection_count(tombstone_count, limits)?;
+        for _ in 0..tombstone_count {
             rga.delete(cursor.read_u64()?);
         }
         Ok(rga)
@@ -336,6 +534,21 @@ impl<D: WireEncode> WireEncode for Record<D> {
 
 impl<D: WireDecode> WireDecode for Record<D> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        Self::decode_wire_with_collection_limits(cursor, CollectionLimits::WIRE_DEFAULT)
+    }
+
+    fn decode_wire_with_collection_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
+        Self::decode_wire_with_limits(cursor, limits, None)
+    }
+
+    fn decode_wire_with_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+        max_records: Option<usize>,
+    ) -> Result<Self, WireError> {
         read_tag(cursor, TAG_RECORD)?;
         let id = RecordId {
             replica: cursor.read_u64()?,
@@ -343,7 +556,11 @@ impl<D: WireDecode> WireDecode for Record<D> {
         };
         let delta_len = cursor.read_len()?;
         let delta_bytes = cursor.read_exact(delta_len)?;
-        let delta = D::from_wire_bytes(delta_bytes)?;
+        let mut delta_cursor = WireCursor::new(delta_bytes);
+        let delta = D::decode_wire_with_limits(&mut delta_cursor, limits, max_records)?;
+        if !delta_cursor.is_empty() {
+            return Err(WireError::TrailingBytes);
+        }
         Ok(Record { id, delta })
     }
 }
@@ -362,7 +579,41 @@ impl<D: WireEncode + WireSchema> WireEncode for EventLog<D> {
 
 impl<D: WireDecode + WireSchema + PartialEq> WireDecode for EventLog<D> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
-        Self::decode_with(cursor, |_| {}, |_| Ok::<(), WireError>(()))
+        Self::decode_with(
+            cursor,
+            CollectionLimits::WIRE_DEFAULT,
+            None,
+            |_| {},
+            |_| Ok::<(), WireError>(()),
+        )
+    }
+
+    fn decode_wire_with_collection_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
+        Self::decode_wire_with_limits(cursor, limits, None)
+    }
+
+    fn decode_wire_with_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+        max_records: Option<usize>,
+    ) -> Result<Self, WireError> {
+        Self::decode_with(
+            cursor,
+            limits,
+            max_records,
+            |_| {},
+            |index| {
+                if let Some(max_records) = max_records {
+                    if index >= max_records {
+                        return Err(WireError::NestedRecordLimitExceeded { max_records });
+                    }
+                }
+                Ok(())
+            },
+        )
     }
 }
 
@@ -440,6 +691,13 @@ impl WireEncode for EnableWinsFlagDelta<u64> {
 
 impl WireDecode for EnableWinsFlagDelta<u64> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        Self::decode_wire_with_collection_limits(cursor, CollectionLimits::WIRE_DEFAULT)
+    }
+
+    fn decode_wire_with_collection_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
         let tag = cursor.read_u8()?;
         match tag {
             TAG_ENABLE_WINS_FLAG_ENABLE_U64 => Ok(EnableWinsFlagDelta::Enable {
@@ -447,6 +705,7 @@ impl WireDecode for EnableWinsFlagDelta<u64> {
             }),
             TAG_ENABLE_WINS_FLAG_DISABLE_U64 => {
                 let len = cursor.read_len()?;
+                check_collection_count(len, limits)?;
                 let mut tokens = Vec::new();
                 for _ in 0..len {
                     tokens.push(cursor.read_u64()?);
@@ -475,13 +734,22 @@ impl WireEncode for EnableWinsFlag<u64> {
 
 impl WireDecode for EnableWinsFlag<u64> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        Self::decode_wire_with_collection_limits(cursor, CollectionLimits::WIRE_DEFAULT)
+    }
+
+    fn decode_wire_with_collection_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
         read_tag(cursor, TAG_ENABLE_WINS_FLAG_U64)?;
         let enable_len = cursor.read_len()?;
+        check_collection_count(enable_len, limits)?;
         let mut flag = EnableWinsFlag::new();
         for _ in 0..enable_len {
             flag.enable(cursor.read_u64()?);
         }
         let tombstone_len = cursor.read_len()?;
+        check_collection_count(tombstone_len, limits)?;
         for _ in 0..tombstone_len {
             flag.disable([cursor.read_u64()?]);
         }
@@ -561,8 +829,16 @@ impl WireEncode for LwwMap<u64, u64> {
 
 impl WireDecode for LwwMap<u64, u64> {
     fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+        Self::decode_wire_with_collection_limits(cursor, CollectionLimits::WIRE_DEFAULT)
+    }
+
+    fn decode_wire_with_collection_limits(
+        cursor: &mut WireCursor<'_>,
+        limits: CollectionLimits,
+    ) -> Result<Self, WireError> {
         read_tag(cursor, TAG_LWW_MAP_U64)?;
         let entry_len = cursor.read_len()?;
+        check_collection_count(entry_len, limits)?;
         let mut map = LwwMap::new();
         for _ in 0..entry_len {
             map.set(
@@ -573,9 +849,96 @@ impl WireDecode for LwwMap<u64, u64> {
             );
         }
         let removal_len = cursor.read_len()?;
+        check_collection_count(removal_len, limits)?;
         for _ in 0..removal_len {
             map.remove(cursor.read_u64()?, cursor.read_u64()?, cursor.read_u64()?);
         }
         Ok(map)
+    }
+}
+
+#[cfg(test)]
+mod version_vector_wire_tests {
+    use super::*;
+    use alloc::vec;
+
+    #[test]
+    fn test_module_follows_wire_implementations() {
+        let source = include_str!("wire.rs");
+        let test_module = source
+            .find("\n#[cfg(test)]\nmod version_vector_wire_tests")
+            .unwrap();
+        let last_impl = source.rfind("\nimpl ").unwrap();
+        assert!(last_impl < test_module);
+    }
+
+    #[test]
+    fn version_vector_round_trip_is_structural_and_deterministic() {
+        let first = VersionVector::from_peer_prefixes(
+            &BTreeMap::from([(9, 3), (2, 7), (5, u64::MAX)]),
+            &BTreeSet::from([9, 1, 5]),
+        )
+        .unwrap();
+        let second = VersionVector::from_peer_prefixes(
+            &[(5, u64::MAX), (9, 3), (2, 7)].into_iter().collect(),
+            &[5, 1, 9].into_iter().collect(),
+        )
+        .unwrap();
+        let bytes = first.to_wire_bytes().unwrap();
+        assert_eq!(bytes, second.to_wire_bytes().unwrap());
+        assert_eq!(VersionVector::from_wire_bytes(&bytes).unwrap(), first);
+    }
+
+    #[test]
+    fn version_vector_claimed_author_count_exceeding_default_is_rejected() {
+        let mut tampered = vec![TAG_VERSION_VECTOR];
+        write_len(
+            &mut tampered,
+            VersionVectorLimits::WIRE_DEFAULT.max_authors.unwrap() + 1,
+        )
+        .unwrap();
+        assert_eq!(
+            VersionVector::from_wire_bytes(&tampered),
+            Err(WireError::VersionAuthorLimitExceeded { max_authors: 4096 })
+        );
+        let valid = VersionVector::from_peer_prefixes(
+            &BTreeMap::from([(1, 2), (3, 4)]),
+            &BTreeSet::from([1]),
+        )
+        .unwrap();
+        assert_eq!(
+            VersionVector::from_wire_bytes(&valid.to_wire_bytes().unwrap()).unwrap(),
+            valid
+        );
+    }
+
+    #[test]
+    fn version_vector_custom_limits_reject_zeros_and_duplicate_authors() {
+        let value =
+            VersionVector::from_peer_prefixes(&BTreeMap::from([(1, 2)]), &BTreeSet::from([1, 2]))
+                .unwrap();
+        assert_eq!(
+            VersionVector::from_wire_bytes_with_limits(
+                &value.to_wire_bytes().unwrap(),
+                VersionVectorLimits {
+                    max_authors: Some(1),
+                    max_zero_replicas: Some(1)
+                },
+            ),
+            Err(WireError::VersionZeroReplicaLimitExceeded {
+                max_zero_replicas: 1
+            })
+        );
+        let mut duplicates = vec![TAG_VERSION_VECTOR];
+        write_len(&mut duplicates, 2).unwrap();
+        write_u64(&mut duplicates, 7);
+        write_u64(&mut duplicates, 1);
+        write_u64(&mut duplicates, 7);
+        write_u64(&mut duplicates, 2);
+        write_len(&mut duplicates, 0).unwrap();
+        assert_eq!(
+            VersionVector::from_wire_bytes(&duplicates),
+            Err(WireError::NonCanonicalVersionVector)
+        );
     }
 }

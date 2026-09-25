@@ -21,6 +21,144 @@ where
 }
 
 #[test]
+fn remaining_collection_counts_are_bounded_before_elements() {
+    use safemesh_crdt::CollectionLimits;
+    fn planted<
+        T: WireEncode + WireDecode + safemesh_crdt::WireSchema + Clone + PartialEq + Debug,
+    >(
+        value: T,
+    ) {
+        let bytes = value.to_wire_bytes().unwrap();
+        assert_eq!(
+            T::from_wire_bytes(&bytes),
+            Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+        );
+        let raised = T::from_wire_bytes_with_collection_limits(
+            &bytes,
+            CollectionLimits {
+                max_elements: Some(4097),
+            },
+        )
+        .unwrap();
+        assert_eq!(raised, value);
+        assert_eq!(raised.to_wire_bytes().unwrap(), bytes);
+        let record = Record {
+            id: RecordId {
+                replica: 0,
+                sequence: 1,
+            },
+            delta: value,
+        };
+        let mut log_bytes = Vec::new();
+        EventLog::<T>::encode_records(None, &[record], &mut log_bytes).unwrap();
+        assert_eq!(
+            EventLog::<T>::from_wire_bytes(&log_bytes),
+            Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+        );
+        let log = EventLog::<T>::from_wire_bytes_with_limits(
+            &log_bytes,
+            safemesh_crdt::DecodeLimits {
+                max_records: Some(1),
+                max_collection_elements: Some(4097),
+            },
+        )
+        .unwrap();
+        assert_eq!(log.to_wire_bytes().unwrap(), log_bytes);
+    }
+    let tokens: Vec<u64> = (0..4097).collect();
+    planted(safemesh_crdt::OrSetDelta::<u64, u64>::Remove {
+        tokens: tokens.clone(),
+    });
+    planted(safemesh_crdt::OrSetDelta::<String, u64>::Remove {
+        tokens: tokens.clone(),
+    });
+    planted(EnableWinsFlagDelta::<u64>::Disable {
+        tokens: tokens.clone(),
+    });
+
+    let mut set = OrSet::<u64, u64>::new();
+    let mut string_set = OrSet::<String, u64>::new();
+    let mut flag = EnableWinsFlag::<u64>::new();
+    let mut map = LwwMap::<u64, u64>::new();
+    for token in 0..4097 {
+        set.add(token, token);
+        string_set.add(token.to_string(), token);
+        flag.enable(token);
+        map.set(token, token, 0, token);
+    }
+    planted(set);
+    planted(string_set);
+    planted(flag);
+    planted(map);
+
+    let mut set = OrSet::<u64, u64>::new();
+    let mut string_set = OrSet::<String, u64>::new();
+    let mut flag = EnableWinsFlag::<u64>::new();
+    let mut map = LwwMap::<u64, u64>::new();
+    for token in 0..4097 {
+        set.apply_remove([token]);
+        string_set.apply_remove([token]);
+        flag.disable([token]);
+        map.remove(token, token, 0);
+    }
+    planted(set);
+    planted(string_set);
+    planted(flag);
+    planted(map);
+}
+
+#[test]
+fn outer_record_budget_reaches_nested_event_logs() {
+    use safemesh_crdt::{DecodeError, DecodeLimits};
+    let inner_records: Vec<_> = (1..=2)
+        .map(|sequence| Record {
+            id: RecordId {
+                replica: 0,
+                sequence,
+            },
+            delta: GCounterDelta {
+                replica: 0,
+                tally: sequence,
+            },
+        })
+        .collect();
+    let mut inner_bytes = Vec::new();
+    EventLog::encode_records(Some(1), &inner_records, &mut inner_bytes).unwrap();
+    let inner = EventLog::<GCounterDelta>::from_wire_bytes(&inner_bytes).unwrap();
+    let outer_records = [Record {
+        id: RecordId {
+            replica: 1,
+            sequence: 1,
+        },
+        delta: inner,
+    }];
+    let mut outer_bytes = Vec::new();
+    EventLog::encode_records(None, &outer_records, &mut outer_bytes).unwrap();
+    assert_eq!(
+        EventLog::<EventLog<GCounterDelta>>::from_wire_bytes_with_limits(
+            &outer_bytes,
+            DecodeLimits {
+                max_records: Some(1),
+                max_collection_elements: None
+            }
+        ),
+        Err(DecodeError::Wire(WireError::NestedRecordLimitExceeded {
+            max_records: 1
+        }))
+    );
+    assert!(
+        EventLog::<EventLog<GCounterDelta>>::from_wire_bytes_with_limits(
+            &outer_bytes,
+            DecodeLimits {
+                max_records: Some(2),
+                max_collection_elements: None
+            }
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn gcounter_delta_has_stable_canonical_bytes() {
     let delta = GCounterDelta {
         replica: 2,
@@ -97,6 +235,246 @@ fn canonical_state_encodings_are_sorted() {
     rga.insert(10, 1);
     rga.delete(30);
     roundtrip(rga);
+}
+
+#[test]
+fn gset_and_rga_collection_limits() {
+    use safemesh_crdt::{CollectionLimits, WireError};
+    let count = 4097u32;
+    let raised = CollectionLimits {
+        max_elements: Some(count as usize),
+    };
+    let mut bytes = vec![0x20];
+    bytes.extend_from_slice(&count.to_le_bytes());
+    for value in 0..u64::from(count) {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    assert_eq!(
+        GSet::<u64>::from_wire_bytes(&bytes),
+        Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+    );
+    let decoded = GSet::<u64>::from_wire_bytes_with_limits(&bytes, raised).unwrap();
+    assert_eq!(decoded.elements().len(), count as usize);
+    assert_eq!(decoded.to_wire_bytes().unwrap(), bytes);
+    let mut local = GSet::new();
+    local.insert(9000);
+    local.merge(&decoded);
+    assert!(local.contains(&9000) && local.contains(&4096));
+
+    let record = Record {
+        id: RecordId {
+            replica: 7,
+            sequence: 1,
+        },
+        delta: decoded,
+    };
+    let record_bytes = record.to_wire_bytes().unwrap();
+    assert_eq!(
+        Record::<GSet<u64>>::from_wire_bytes(&record_bytes),
+        Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+    );
+    let mut log_bytes = Vec::new();
+    EventLog::encode_records(None, &[record], &mut log_bytes).unwrap();
+    assert_eq!(
+        EventLog::<GSet<u64>>::from_wire_bytes(&log_bytes),
+        Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+    );
+
+    let mut placed = vec![0x40];
+    placed.extend_from_slice(&count.to_le_bytes());
+    for value in 0..u64::from(count) {
+        placed.extend_from_slice(&value.to_le_bytes());
+        placed.extend_from_slice(&value.to_le_bytes());
+    }
+    placed.extend_from_slice(&0u32.to_le_bytes());
+    assert_eq!(
+        Rga::<u64, u64>::from_wire_bytes(&placed),
+        Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+    );
+    assert_eq!(
+        Rga::<u64, u64>::from_wire_bytes_with_limits(&placed, raised)
+            .unwrap()
+            .to_wire_bytes()
+            .unwrap(),
+        placed
+    );
+
+    let mut tombstones = vec![0x40];
+    tombstones.extend_from_slice(&0u32.to_le_bytes());
+    tombstones.extend_from_slice(&count.to_le_bytes());
+    for position in 0..u64::from(count) {
+        tombstones.extend_from_slice(&position.to_le_bytes());
+    }
+    assert_eq!(
+        Rga::<u64, u64>::from_wire_bytes(&tombstones),
+        Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+    );
+    assert_eq!(
+        Rga::<u64, u64>::from_wire_bytes_with_limits(&tombstones, raised)
+            .unwrap()
+            .to_wire_bytes()
+            .unwrap(),
+        tombstones
+    );
+}
+
+#[test]
+fn event_log_nested_collection_budget_preserves_persisted_bytes() {
+    use safemesh_crdt::{Crdt, DecodeError, DecodeLimits, MergeError, Mergeable, WireError};
+    struct SetCarrier(GSet<u64>);
+    impl Mergeable for SetCarrier {
+        fn merge(&mut self, other: &Self) -> Result<(), MergeError> {
+            self.0.merge(&other.0);
+            Ok(())
+        }
+    }
+    impl Crdt for SetCarrier {
+        type Delta = GSet<u64>;
+        fn validate_record(&self, _: RecordId, _: &Self::Delta) -> Result<(), WireError> {
+            Ok(())
+        }
+        fn apply_delta(&mut self, delta: Self::Delta) {
+            self.0.merge(&delta);
+        }
+    }
+    let mut state = GSet::new();
+    for value in 0..5000 {
+        state.insert(value);
+    }
+    let record = Record {
+        id: RecordId {
+            replica: 7,
+            sequence: 1,
+        },
+        delta: state.clone(),
+    };
+    let mut persisted = Vec::new();
+    EventLog::encode_records(None, &[record], &mut persisted).unwrap();
+    assert_eq!(persisted.len(), 40076);
+    let default_error =
+        DecodeError::Wire(WireError::CollectionElementLimitExceeded { max_elements: 4096 });
+    assert_eq!(
+        EventLog::<GSet<u64>>::from_wire_bytes(&persisted),
+        Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+    );
+    assert_eq!(
+        EventLog::<GSet<u64>>::from_wire_bytes_with_limits(&persisted, DecodeLimits::default()),
+        Err(default_error)
+    );
+    assert_eq!(
+        EventLog::<GSet<u64>>::from_wire_bytes_with_limits(
+            &persisted,
+            DecodeLimits {
+                max_records: Some(1),
+                max_collection_elements: Some(4999)
+            }
+        ),
+        Err(DecodeError::Wire(
+            WireError::CollectionElementLimitExceeded { max_elements: 4999 }
+        ))
+    );
+    let loaded = EventLog::<GSet<u64>>::from_wire_bytes_with_limits(
+        &persisted,
+        DecodeLimits {
+            max_records: Some(1),
+            max_collection_elements: Some(5000),
+        },
+    )
+    .unwrap();
+    assert_eq!(loaded.records().len(), 1);
+    let destination = SetCarrier(GSet::new());
+    assert_eq!(
+        EventLog::<GSet<u64>>::from_wire_bytes_for(&persisted, &destination),
+        Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+    );
+    assert_eq!(
+        EventLog::<GSet<u64>>::from_wire_bytes_for_with_limits(
+            &persisted,
+            &destination,
+            DecodeLimits {
+                max_records: Some(1),
+                max_collection_elements: Some(5000)
+            },
+        )
+        .unwrap()
+        .to_wire_bytes()
+        .unwrap(),
+        persisted
+    );
+    assert_eq!(
+        EventLog::<GSet<u64>>::records_from_wire_bytes_for_with_limits(
+            &persisted,
+            &destination,
+            DecodeLimits {
+                max_records: Some(1),
+                max_collection_elements: Some(5000)
+            },
+        )
+        .unwrap()
+        .len(),
+        1
+    );
+    let mut replayed = GSet::new();
+    for record in loaded.records() {
+        replayed.merge(&record.delta);
+    }
+    assert_eq!(replayed, state);
+    assert_eq!(loaded.to_wire_bytes().unwrap(), persisted);
+    assert_eq!(
+        EventLog::<GSet<u64>>::from_wire_bytes_with_limits(
+            &persisted,
+            DecodeLimits {
+                max_records: Some(0),
+                max_collection_elements: Some(5000)
+            }
+        ),
+        Err(DecodeError::RecordLimitExceeded { max_records: 0 })
+    );
+}
+
+#[test]
+fn event_log_rga_payload_uses_collection_budget() {
+    use safemesh_crdt::{DecodeError, DecodeLimits};
+    let mut state = Rga::<u64, u64>::new();
+    for value in 0..5000 {
+        state.insert(value, value);
+        state.delete(value);
+    }
+    let records = [Record {
+        id: RecordId {
+            replica: 7,
+            sequence: 1,
+        },
+        delta: state.clone(),
+    }];
+    let mut bytes = Vec::new();
+    EventLog::encode_records(None, &records, &mut bytes).unwrap();
+    assert_eq!(
+        EventLog::<Rga<u64, u64>>::from_wire_bytes(&bytes),
+        Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 })
+    );
+    let loaded = EventLog::<Rga<u64, u64>>::from_wire_bytes_with_limits(
+        &bytes,
+        DecodeLimits {
+            max_records: Some(1),
+            max_collection_elements: Some(5000),
+        },
+    )
+    .unwrap();
+    assert_eq!(loaded.records()[0].delta, state);
+    assert_eq!(loaded.to_wire_bytes().unwrap(), bytes);
+    assert_eq!(
+        EventLog::<Rga<u64, u64>>::from_wire_bytes_with_limits(
+            &bytes,
+            DecodeLimits {
+                max_records: Some(1),
+                max_collection_elements: Some(4999)
+            }
+        ),
+        Err(DecodeError::Wire(
+            WireError::CollectionElementLimitExceeded { max_elements: 4999 }
+        ))
+    );
 }
 
 #[test]
@@ -504,7 +882,7 @@ fn orset_delta_rejects_trailing_bytes_and_oversized_counts() {
     }
     assert_eq!(
         safemesh_crdt::OrSetDelta::<u64, u64>::from_wire_bytes(&[0x32, 0xff, 0xff, 0xff, 0xff]),
-        Err(WireError::UnexpectedEof),
+        Err(WireError::CollectionElementLimitExceeded { max_elements: 4096 }),
     );
 }
 
@@ -610,7 +988,14 @@ fn orset_utf8_rejects_length_lies_tags_and_trailing_bytes() {
             let result =
                 std::panic::catch_unwind(|| OrSetDelta::<String, u64>::from_wire_bytes(&bytes));
             assert!(result.is_ok());
-            assert_eq!(result.unwrap(), Err(WireError::UnexpectedEof));
+            assert_eq!(
+                result.unwrap(),
+                Err(if tag == 0x34 && length > 4096 {
+                    WireError::CollectionElementLimitExceeded { max_elements: 4096 }
+                } else {
+                    WireError::UnexpectedEof
+                })
+            );
         }
     }
     for tag in 0..=u8::MAX {
@@ -992,6 +1377,7 @@ fn decode_budget_stops_planted_frame() {
         &bytes,
         safemesh_crdt::DecodeLimits {
             max_records: Some(8),
+            ..Default::default()
         },
     );
     assert_eq!(
@@ -1011,7 +1397,10 @@ fn decode_budget_boundaries_duplicates_and_default() {
             BUDGET_PAYLOAD_READS.with(|reads| reads.set(0));
             let decoded = EventLog::<BudgetPayload>::from_wire_bytes_with_limits(
                 &bytes,
-                DecodeLimits { max_records: limit },
+                DecodeLimits {
+                    max_records: limit,
+                    ..Default::default()
+                },
             )
             .unwrap();
             assert_eq!(decoded, old);
@@ -1025,7 +1414,8 @@ fn decode_budget_boundaries_duplicates_and_default() {
                     EventLog::<BudgetPayload>::from_wire_bytes_with_limits(
                         &bytes,
                         DecodeLimits {
-                            max_records: Some(max_records)
+                            max_records: Some(max_records),
+                            ..Default::default()
                         }
                     ),
                     Err(DecodeError::RecordLimitExceeded { max_records })
@@ -1051,7 +1441,8 @@ fn decode_budget_boundaries_duplicates_and_default() {
             EventLog::<BudgetPayload>::from_wire_bytes_with_limits(
                 &corrupt,
                 DecodeLimits {
-                    max_records: Some(0)
+                    max_records: Some(0),
+                    ..Default::default()
                 }
             ),
             Err(DecodeError::Wire(WireError::IntegrityMismatch))

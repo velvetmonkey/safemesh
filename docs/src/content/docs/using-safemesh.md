@@ -84,9 +84,6 @@ fn main() {
     let counter_dir = root.join("counter");
     let members_dir = root.join("members");
     if step == "persist" {
-        fs::create_dir(root).expect("use a fresh directory; never reset an existing writer");
-        fs::create_dir(&counter_dir).unwrap();
-        fs::create_dir(&members_dir).unwrap();
         let mut counter = Counter::counter(&counter_dir, config).unwrap();
         let mut members = Members::utf8_set(&members_dir, config).unwrap();
         // Each call commits its own transaction before returning.
@@ -208,6 +205,10 @@ All instances for the same primitive and writer configuration must use the same
 store directory. Preserve the fence and transaction files of real stores; the
 fixture deletes only its disposable exercise after releasing every writer. Use
 restart constructors for existing stores. A failed restart grants no writer.
+Ordinary `restart_utf8_set` budgets collection counts from the locally committed
+transaction length, including old stores with a Remove of more than 4,096 tokens.
+Peer wire decoding still rejects collections above 4,096 elements by default;
+check the provenance of a copied store file before treating it as local history.
 These are tested engineering contracts, not a proof of storage durability.
 See the [longer durable walkthrough](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md#persist-restore-partition-and-reconcile)
 and the [generated Rust reference](/safemesh/reference/).
@@ -228,7 +229,9 @@ Add this dependency to the generated `Cargo.toml` (it already has a `[dependenci
 safemesh-crdt = { git = "https://github.com/velvetmonkey/safemesh.git", rev = "6172d7ad7b950e3238f372f378cf8617dcd86984" }
 ```
 
-The pinned rev `6172d7ad` is older than current `main` and the gold path, which uses the current checkout.
+The pinned rev `6172d7ad` is older than the CI-tested revision in the
+[pinned-source install recipe](/safemesh/pinned-source/), current `main`, and
+the gold path, which uses the current checkout.
 This is a historical, reproducible G-Counter example. The site's generated rustdoc
 uses the site's build commit and can describe APIs absent from this pin. For the
 canonical current-source install and matching APIs, follow [Getting started](https://velvetmonkey.github.io/safemesh/getting-started/)
@@ -611,6 +614,6 @@ record even when a later record collides.
 
 Here the Python calls hand bytes directly between two in-process objects; your application must move those bytes across its actual transport. `GCounter.try_apply_bump` raises `IndexError` for an invalid coordinate without changing state. Numeric `OrSet` operations take unsigned 64-bit elements and tokens; allocate fresh replica-unique tokens for adds. [Evidence: Python quickstart and token contract](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-python/README.md).
 
-The CI distribution check installs a local wheel on Linux x64 with CPython 3.11. The `abi3-py38` setting describes artifact reach, not evidence that every Python version or platform was tested. The documented data-mule demo is an in-memory partition-and-heal walk; a Python disk/process restore walk is not documented in the root surface map. [Evidence: Python distribution scope](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-python/README.md) and [root walkthrough map](https://github.com/velvetmonkey/safemesh/blob/main/README.md#persist-restore-partition-and-reconcile-rust-and-typescriptnode).
+The Python CI matrix builds and installs a local wheel and runs binding and demo/sync tests on Linux x64 with CPython 3.8–3.14; the full distribution check also runs on CPython 3.11. The `abi3-py38` setting describes artifact reach, not evidence that every Python version or platform was tested. The documented data-mule demo is an in-memory partition-and-heal walk; a Python disk/process restore walk is not documented in the root surface map. [Evidence: Python distribution scope](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-python/README.md) and [root walkthrough map](https://github.com/velvetmonkey/safemesh/blob/main/README.md#persist-restore-partition-and-reconcile-rust-and-typescriptnode).
 
 Before committing to an integration, compare the [limits](/safemesh/limits/) with your requirements and read the [proof boundary](/safemesh/proof/#what-remains-outside).

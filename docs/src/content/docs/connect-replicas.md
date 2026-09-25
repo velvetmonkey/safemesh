@@ -7,10 +7,30 @@ SafeMesh gives you records and merge rules; your application moves the bytes.
 After [Persist and restart](/safemesh/persist-and-restart/), this in-memory exercise
 shows that boundary without pretending to test a physical network.
 
+## Use it in your own project
+
+SafeMesh is unreleased; use this pinned Git source instead of a crates.io package.
+This example's pin is older than the CI-tested revision in the
+[pinned-source install recipe](/safemesh/pinned-source/); use that page for the
+current tested source install.
+With Git and Rust 1.96.1 installed, run `cargo new --bin --vcs none connect-replicas`
+outside the SafeMesh checkout. Replace the generated `Cargo.toml` dependency
+section with this block. The example needs no optional crate features.
+
+<!-- consumer:dependency -->
+```toml
+[dependencies]
+safemesh-crdt = { git = "https://github.com/velvetmonkey/safemesh.git", rev = "1321bf576dcc0e71cfe765b0dae0de518a5ae934" }
+```
+<!-- /consumer:dependency -->
+
+Paste the complete Rust example below into `src/main.rs`, then run `cargo run --quiet`
+from your new project. It prints the expected output shown below.
+
 ## Exchange and repair
 
-Run the complete example below from the source checkout described in
-[Try a merge](/safemesh/getting-started/#before-you-start).
+Inside the SafeMesh checkout, you can instead run the checkout command below;
+[Try a merge](/safemesh/getting-started/#before-you-start) explains how to get the source.
 `to_wire_bytes()` produces each outgoing record. At the receiving boundary,
 check its byte length, decode it, then use `admit_with` to apply only an accepted
 record. A duplicate must not apply the edit again.
@@ -22,8 +42,12 @@ and `VersionVectorLimits`: the opt-in author and zero-replica budgets are checke
 **before prefix validation and before either collection is cloned**. `None` is
 unbounded. These budgets do not bound the version message's decoding allocation:
 your decoder must enforce byte and entry limits before constructing either collection.
-There is no built-in version wire codec. This exercise passes the collections
-directly between objects; it does not implement that application decoder.
+The built-in version wire codec defaults to a maximum of 4,096 authors and
+4,096 zero acknowledgements. These are configurable defaults: callers can
+choose tighter or larger entry budgets with
+`VersionVector::from_wire_bytes_with_limits` and should bound encoded bytes
+before decoding. This exercise passes the collections directly between objects;
+it does not use that codec.
 
 <!-- gold:source rust:rust/examples/connect_replicas.rs -->
 ```rust
@@ -65,7 +89,7 @@ fn main() {
         Admission::Accepted
     );
     assert_eq!(received.version().get(0), 0);
-    // The app carries BOTH version collections; no built-in version wire codec.
+    // This example passes both version collections directly between objects.
     // Enforce byte/entry budgets in that decoder before allocating these collections.
     let peer = VersionVector::from_peer_prefixes_with_limits(
         received.version().entries(),

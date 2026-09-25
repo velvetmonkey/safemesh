@@ -74,6 +74,20 @@ console.log(left.value(), right.value());
 verdict per input record, in order. Decode and whole-batch validation errors
 throw before any record is applied.
 
+`SafeMeshGSetReplica.mergeStateBytes(bytes)` and
+`SafeMeshRgaReplica.mergeStateBytes(bytes)` default to 4,096 elements per
+collection. A larger state throws `SafeMeshError` code 3 with
+`maxCollectionElements` and the refused budget in its message. Pass a larger
+budget as the second argument, such as `replica.mergeStateBytes(bytes, 4097)`,
+when the larger state is expected. The optional budget accepts only `null`/`undefined`
+(for the 4,096 default) or a nonnegative integer at most 4,294,967,295; invalid
+values throw `SafeMeshError` code 2 before decoding. Zero is valid and refuses
+any nonempty collection. The Record and EventLog byte decoders
+(`mergeRecordBytes`, `mergeLogBytes`, and `inspectRecordBytes` where available)
+accept the same optional second argument for nested collections. Code 1
+continues to identify other decode failures. Raising a decode budget does not
+change the canonical bytes.
+
 Stdout:
 
 ```text
@@ -144,8 +158,8 @@ The set delegates to Rust `OrSet<u64, u64>`: elements and tokens are unsigned
 64-bit integers (JavaScript uses `bigint`). Tokens are global to the set; use a
 fresh, replica-unique token for every add to obtain add-wins behavior. Removal
 persists tombstones even before an add arrives, and a reused token affects every
-element carrying it. Observed tokens include tombstoned adds. Merge unions all
-adds and tombstones, and reads return sorted unique live members. This is the
+element carrying it. Observed tokens include only live adds, excluding tombstoned
+tokens. Merge unions all adds and tombstones, and reads return sorted unique live members. This is the
 core's token semantics, including token reuse; the binding does not allocate IDs.
 
 ## String OR-Set replica with an event log
