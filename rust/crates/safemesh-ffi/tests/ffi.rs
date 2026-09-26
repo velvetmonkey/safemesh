@@ -170,3 +170,19 @@ fn orset_c_abi_matches_core() {
         safemesh_orset_free(right);
     }
 }
+
+#[test]
+fn c_abi_unallocatable_width_returns_null() {
+    assert!(safemesh_gcounter_new(usize::MAX).is_null());
+    let counter = safemesh_gcounter_new(2);
+    assert!(!counter.is_null());
+    // SAFETY: live handle, exclusive access, released once below.
+    unsafe {
+        assert!(safemesh_gcounter_apply_bump(counter, 0, 7));
+        assert_eq!(read_total(counter), 7);
+        let bytes = safemesh_gcounter_delta_to_wire(0, 7);
+        assert_eq!(bytes.len, 17);
+        safemesh_bytes_free(bytes);
+        safemesh_gcounter_free(counter);
+    }
+}

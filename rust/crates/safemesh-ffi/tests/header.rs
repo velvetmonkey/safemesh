@@ -52,6 +52,9 @@ typedef struct SafeMeshU64s {
 extern "C" {
 #endif // __cplusplus
 
+/**
+ * Fresh counter. Returns NULL if the replica vector or handle cannot be allocated.
+ */
 struct SafeMeshGCounter *safemesh_gcounter_new(size_t replicas);
 
 /**
