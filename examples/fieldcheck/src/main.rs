@@ -188,8 +188,10 @@ fn run() -> Result<(), RunError> {
     .map_err(|e| {
         let kind = match e {
             LocalError::Refused => "owned",
+            LocalError::PeerWriterAhead => "writer_ahead",
             LocalError::Io(_) => "storage",
             LocalError::Configuration => "configuration",
+            LocalError::CounterWidth(_) => "counter_width",
             // Only `_with_limits` restarts, which fieldcheck does not use, refuse by budget.
             LocalError::Exhausted | LocalError::RecordLimitExceeded { .. } => "storage",
             LocalError::RecoveryRequired
