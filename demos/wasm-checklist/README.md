@@ -40,11 +40,32 @@ process can import it, reuse its next sequence and produce a record collision.
 The library explicitly requires application-owned cross-process fencing. This
 example has no fencing; never run its clone experiment on production data.
 
+Acceptance after partition, SIGKILL, restart and reordered plus duplicated
+delivery is documented convergence, not byte-identical logs. The two apps must
+agree on `elements()`, `addEntries()`, `tombstones()` and both writers' version
+vectors, and every record either app holds must be admitted as a duplicate by
+the other (whole-log merge in both directions returns `duplicate` for every
+record). A single record missing on one side, or a late extra record on one
+side after the snapshot, fails `CONVERGENCE_WHOLE_LOG_DUPLICATES`. Raw
+`logBytes()` are printed as `OBSERVE log-bytes-equal=<true|false>` and are not
+a pass or fail condition: logs keep arrival order
+(`docs/src/content/docs/using-safemesh.md` lines 502-505).
+
 **Current expected result:** `SECOND_ORDER PASS ...` followed by
-`FAIL CONVERGENCE_LOG_BYTES` and exit 1. The package retains log arrival order;
-identical record sets, members and vectors do not yield byte-identical logs after
-reordered delivery. This oracle is deliberately retained: this journey does not
-claim the brief's byte-identical convergence invariant passes. It is not a CI gate.
+`PASS records=2006 ...` and exit 0. Arrival-order log bytes may differ; that is
+an observation, not a failure. This journey is not a CI gate.
+
+Planted known-bad modes keep the same oracle and must fail it by name:
+
+```sh
+/home/monkey/bin/suiterun -- node demos/wasm-checklist/journey.mjs --plant drop-one-record
+/home/monkey/bin/suiterun -- node demos/wasm-checklist/journey.mjs --plant extra-record
+```
+
+`--plant drop-one-record` withholds exactly one record from one app's delivery.
+`--plant extra-record` appends one late record on one app after the convergence
+snapshot. Both exit 1 with `FAIL CONVERGENCE_WHOLE_LOG_DUPLICATES`. The extra
+record is `accepted` by the other side rather than ignored or compared by count.
 
 Physical tamper modes each use a disposable store copy after SIGKILL:
 

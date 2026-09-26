@@ -9,6 +9,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = mkdtempSync(resolve(process.env.CHECKLIST_SCRATCH || process.env.TMPDIR, 'checklist-'));
 const live = new Set();
 const tamper = process.env.CHECKLIST_TAMPER;
+const plantIdx = process.argv.indexOf('--plant');
+const plant = plantIdx >= 0 ? process.argv[plantIdx + 1] : '';
 function check(condition, name) { assert.ok(condition, name); }
 async function start(dir, author, fresh = false) {
   const child = spawn(process.execPath, [resolve(here, 'app.mjs'), dir, String(author)], {
@@ -36,7 +38,23 @@ async function merge(app, body, duplicate = false) {
   if (duplicate) check(verdicts.every(v => v === 'duplicate'), 'SECOND_ORDER_DUPLICATES');
   return verdicts;
 }
+function allDuplicate(verdicts) {
+  return verdicts.length > 0 && verdicts.every(v => v === 'duplicate');
+}
+// Whole-log duplicate admission in BOTH directions. A missing record on one
+// side is `accepted` by that side, not `duplicate`; a late extra record on
+// one side is `accepted` by the other. Either case fails this named oracle.
+// Verdicts, not counts: equal lengths can still hide a distinct record.
+async function assertWholeLogDuplicates(left, right, name) {
+  const toRight = await merge(right, await request(left, '/log'));
+  const toLeft = await merge(left, await request(right, '/log'));
+  check(allDuplicate(toRight) && allDuplicate(toLeft), name);
+  return { toRight, toLeft };
+}
 try {
+  if (plantIdx >= 0 && plant !== 'drop-one-record' && plant !== 'extra-record') {
+    throw Error(`UNKNOWN_PLANT ${plant || ''}`);
+  }
   let a = await start(resolve(root, 'a'), 0), b = await start(resolve(root, 'b'), 1);
   check(a.pid !== b.pid && a.port !== b.port, 'INDEPENDENT_APPS');
   check(a.package.includes('/node_modules/safemesh-wasm/') && b.package === a.package, 'INSTALLED_PACKAGE');
@@ -60,11 +78,19 @@ try {
   check(BigInt(after.state.versions[0]) === BigInt(before.versions[0]) + 1n, 'RESTART_SEQUENCE');
   check(after.state.adds.find(e => e[0] === 'restart-✅')[1] !== before.adds.at(-1)[1], 'RESTART_TOKEN');
   // Explicit later-before-earlier record batches, followed by duplicate delivery.
-  const aRecords = [...ar.records, ...after.records].reverse();
+  let aRecords = [...ar.records, ...after.records].reverse();
   const bRecords = [...br.records].reverse();
+  if (plant === 'drop-one-record') {
+    check(aRecords.length > 1, 'PLANT_HAS_RECORD_TO_DROP');
+    aRecords = aRecords.slice(1);
+  }
   await merge(b, { records: aRecords }); await merge(b, { records: aRecords }, true);
   await merge(a, { records: bRecords }); await merge(a, { records: bRecords }, true);
-  await merge(a, await request(b, '/log'), true); await merge(b, await request(a, '/log'), true);
+  const observedA = await state(a), observedB = await state(b);
+  // using-safemesh.md:502-505: logs retain arrival order. Compare records by
+  // duplicate admission and carrier metadata separately, rather than byte order.
+  console.log(`OBSERVE log-bytes-equal=${observedA.log === observedB.log}`);
+  await assertWholeLogDuplicates(a, b, 'CONVERGENCE_WHOLE_LOG_DUPLICATES');
   const sa = await state(a), sb = await state(b);
   assert.deepEqual(sa.elements, sb.elements, 'CONVERGENCE_ELEMENTS');
   assert.deepEqual(sa.versions, sb.versions, 'CONVERGENCE_VECTORS');
@@ -75,7 +101,12 @@ try {
     !sa.tombstones.includes(conflict[1][1]) && sa.elements.includes('naïve'), 'CONFLICT_INSPECTION');
   const count = (await merge(a, await request(b, '/log'), true)).length;
   check(count >= 2000, 'RETAINED_HISTORY');
-  // Run independent second-order measurements even if the byte oracle later fails.
+  if (plant === 'extra-record') {
+    await edit(a, [{ item: 'late-extra' }]);
+    console.log('PLANTED extra-record on app a after convergence snapshot');
+    await assertWholeLogDuplicates(a, b, 'CONVERGENCE_WHOLE_LOG_DUPLICATES');
+    throw Error('ORACLE_MISSED_EXTRA_RECORD');
+  }
   await kill(a); await kill(b); a = await start(a.dir, 0); b = await start(b.dir, 1);
   await merge(a, await request(b, '/log'), true); await merge(b, await request(a, '/log'), true);
   assert.deepEqual(await state(a), sa, 'SECOND_ORDER_A_UNCHANGED');
@@ -88,7 +119,6 @@ try {
   const cloneAdmission = await request(a, '/merge', { records: cloneEdit.records });
   assert.deepEqual(cloneAdmission.verdicts, ['collision'], 'CLONE_RECORD_COLLISION');
   console.log(`SECOND_ORDER PASS records=${count} clone-start=allowed clone-sequence=reused clone-merge=collision`);
-  check(sa.log === sb.log, 'CONVERGENCE_LOG_BYTES');
   console.log(`PASS records=${count} elements=${sa.elements.length} versions=${sa.versions.join(',')}`);
 } catch (error) { console.error(`FAIL ${error.message}`); process.exitCode = 1; }
 finally { for (const child of live) child.kill('SIGKILL'); }
