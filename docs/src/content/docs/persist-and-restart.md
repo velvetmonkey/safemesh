@@ -94,12 +94,12 @@ cleaned exercise stores
 <!-- /gold -->
 
 `DurableReplica::counter` / `utf8_set` create the stores. Each successful edit
-commits its own transaction; `restart_counter` / `restart_utf8_set` validate and
+appends and syncs its own record; `restart_counter` / `restart_utf8_set` validate and
 replay the existing store while reacquiring the writer. For an existing counter,
 `restart_counter_from_store(root, writer)` reads the committed count under that
 writer's lock and runs the same checked replay, while explicit `restart_counter`
 still rejects a mismatched count. Their collection budget
-comes from the locally stored transaction length, so an existing OR-Set store
+comes from the locally stored history length, so an existing OR-Set store
 with a Remove of more than 4,096 tokens still uses ordinary `restart_utf8_set`.
 Peer wire decoding keeps the 4,096-element default. A copied store file has no
 authenticated provenance; validate its source before using it as local history.
@@ -517,31 +517,66 @@ restore and merge replay (the `retention_*_all_5000` tests in
 [`record_admission.rs`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/tests/record_admission.rs)).
 There is no compaction in the first release, so a durable store only grows; a
 store that a restart budget refused still reopens with every record
-([`restart_budget_opens_supported_size_and_refuses_one_more`](https://github.com/velvetmonkey/safemesh/blob/0db39d63d076a6e6d85ff2712355ffadac05be20/rust/crates/safemesh-crdt/src/local.rs)).
+([`restart_budget_opens_supported_size_and_refuses_one_more`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
+
+### Append cost
+
+A fresh store keeps an append-only `writer-<id>.journal`, and each acknowledged
+edit appends only its own record after the existing bytes and syncs the file
+([`append_log_writes_one_entry_per_record`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
+An append therefore writes the same bytes at any history size: 58 bytes for a
+G-Counter record and 68 for a UTF-8 OR-Set add, from 1,000 to 1,000,000 records
+([benchmark results](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/evidence/retention/results.md)).
+On the benchmark machine the median append took 0.18 to 0.46 ms and the slowest
+of ten took at most 2.93 ms at every size, where rewriting the whole history took
+50 to 61 ms per append at 100,000 records and 589 to 645 ms at 1,000,000
+([benchmark results](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/evidence/retention/results.md)).
+The journal takes 58 bytes per G-Counter record and 68 per UTF-8 OR-Set add;
+the whole-history format takes about 42 and 52, the 42.0 MB and 52.0 MB it
+rewrote per append at 1,000,000 records
+([benchmark results](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/evidence/retention/results.md)).
+A crash at any step of an append restarts to the history before or after that
+append, never a mix ([`durable_crash_boundaries`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
+An append cut short by a crash never reached its sync, so it was never
+acknowledged; restart truncates it and reports its offset and size through
+[`torn_tail`](/safemesh/reference/rust/safemesh_crdt/local/struct.DurableReplica.html#method.torn_tail)
+([`append_log_torn_tail_is_truncated_and_reported`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
+A damaged record followed by other records is not a torn tail: restart refuses
+it as `History(IntegrityMismatch)` and leaves the journal unchanged
+([`append_log_damage_before_the_tail_is_refused`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
+
+A store written before the append log keeps its whole-history
+`writer-<id>.transaction`: restart still opens it, each append still rewrites it
+whole, and restart never converts it
+([`transaction_store_opens_appends_in_place_and_migrates_explicitly`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
+[`migrate_counter_to_append_log`](/safemesh/reference/rust/safemesh_crdt/local/struct.DurableReplica.html#method.migrate_counter_to_append_log)
+and
+[`migrate_utf8_set_to_append_log`](/safemesh/reference/rust/safemesh_crdt/local/struct.DurableReplica.html#method.migrate_utf8_set_to_append_log)
+move such a store to the append log explicitly and keep every record, including
+the stores the archived library wrote
+([`transaction_store_opens_appends_in_place_and_migrates_explicitly`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
+If a crash interrupts a migration after its journal is complete, both files
+remain; restart refuses them as `RecoveryRequired`, and repeating the migration
+completes it ([`interrupted_migration_is_refused_then_completed`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
 
 ### Supported size
 
 The supported history is **100,000 records per writer store**, exported as
 [`local::SUPPORTED_MAX_RECORDS`](/safemesh/reference/rust/safemesh_crdt/local/constant.SUPPORTED_MAX_RECORDS.html); a
 store of exactly 100,000 records restarts under that budget
-([`restart_budget_opens_supported_size_and_refuses_one_more`](https://github.com/velvetmonkey/safemesh/blob/0db39d63d076a6e6d85ff2712355ffadac05be20/rust/crates/safemesh-crdt/src/local.rs)).
-The limit comes from write amplification: each durable append rewrites the
-whole committed transaction, so one appended record writes the whole store,
-about 4.2 MB for a G-Counter and 5.2 MB for a UTF-8 OR-Set at 100,000 records
-and ten times that at 1,000,000 ([benchmark results](https://github.com/velvetmonkey/safemesh/blob/0db39d63d076a6e6d85ff2712355ffadac05be20/evidence/retention/results.md)).
-On the benchmark machine one acknowledged append at 100,000 records took 50 ms
-(G-Counter) and 64 ms (UTF-8 OR-Set); at 1,000,000 records it took 582 ms and
-741 ms ([benchmark results](https://github.com/velvetmonkey/safemesh/blob/0db39d63d076a6e6d85ff2712355ffadac05be20/evidence/retention/results.md)).
-Restart at 100,000 records took 85 ms and 153 ms with a peak RSS of 22 MiB and
-42 MiB; at 1,000,000 records it took 0.9 s and 1.6 s with 199 MiB and 394 MiB
-([benchmark results](https://github.com/velvetmonkey/safemesh/blob/0db39d63d076a6e6d85ff2712355ffadac05be20/evidence/retention/results.md)).
-Every measured cost grows linearly with the record count, and 100,000 is the
-largest measured size at which an acknowledged append stays under a tenth of a
-second, so it is the supported size ([benchmark results](https://github.com/velvetmonkey/safemesh/blob/0db39d63d076a6e6d85ff2712355ffadac05be20/evidence/retention/results.md)).
-The store occupies 42 bytes per G-Counter record and 52 bytes per UTF-8 OR-Set
-add of a 14-byte element ([benchmark results](https://github.com/velvetmonkey/safemesh/blob/0db39d63d076a6e6d85ff2712355ffadac05be20/evidence/retention/results.md)).
+([`restart_budget_opens_supported_size_and_refuses_one_more`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
+It stays 100,000 because restart still replays every committed record: 66 ms
+with a peak RSS of 14 MiB (G-Counter) and 114 ms with 30 MiB (UTF-8 OR-Set) at
+100,000 records, against 0.7 s with 119 MiB and 1.3 s with 274 MiB at 1,000,000
+([benchmark results](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/evidence/retention/results.md)).
+A store not yet migrated also still rewrites its whole history on every append,
+50 to 61 ms at 100,000 records and 589 to 645 ms at 1,000,000
+([benchmark results](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/evidence/retention/results.md)).
+The append log removes the append cost that first set the limit, so raising it
+for append-log stores is now a project decision about restart time and memory,
+not a measured append cost ([benchmark results](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/evidence/retention/results.md)).
 These figures come from one machine and toolchain, which the results file
-records; run [`retention_bench`](https://github.com/velvetmonkey/safemesh/blob/0db39d63d076a6e6d85ff2712355ffadac05be20/rust/crates/safemesh-crdt/examples/retention_bench.rs) to measure your own.
+records; run [`retention_bench`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/examples/retention_bench.rs) to measure your own.
 
 ### Above the supported size
 
@@ -555,22 +590,22 @@ return
 [`LocalError::RecordLimitExceeded`](/safemesh/reference/rust/safemesh_crdt/local/enum.LocalError.html#variant.RecordLimitExceeded)
 `{ max_records: 100000 }` for a store of 100,001 records (Display: `local
 history exceeds restart record budget: RecordLimitExceeded: 100000`)
-([`restart_budget_opens_supported_size_and_refuses_one_more`](https://github.com/velvetmonkey/safemesh/blob/0db39d63d076a6e6d85ff2712355ffadac05be20/rust/crates/safemesh-crdt/src/local.rs)).
-The check reads only the record count the committed transaction declares,
-before any record is read, decoded or replayed
-([`restart_budget_refuses_before_reading_records`](https://github.com/velvetmonkey/safemesh/blob/0db39d63d076a6e6d85ff2712355ffadac05be20/rust/crates/safemesh-crdt/src/local.rs)).
-The refused store's fence and transaction keep their bytes and modification
-times ([`restart_budget_opens_supported_size_and_refuses_one_more`](https://github.com/velvetmonkey/safemesh/blob/0db39d63d076a6e6d85ff2712355ffadac05be20/rust/crates/safemesh-crdt/src/local.rs)).
-The count is read before the frame's integrity check, so a damaged count can be
-refused by budget; within budget, the full checked read reports the damage as a
-`History` error ([`restart_budget_refuses_before_reading_records`](https://github.com/velvetmonkey/safemesh/blob/0db39d63d076a6e6d85ff2712355ffadac05be20/rust/crates/safemesh-crdt/src/local.rs)).
+([`restart_budget_opens_supported_size_and_refuses_one_more`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
+The check counts records from headers alone, a transaction frame's declared
+count or a journal's base frame count and entry lengths, before any record is
+decoded or replayed ([`restart_budget_refuses_before_reading_records`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs), [`restart_budget_counts_append_log_without_decoding`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
+The refused store's fence and history file keep their bytes and modification
+times ([`restart_budget_opens_supported_size_and_refuses_one_more`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
+Counts are read before integrity checks, so a damaged count can be refused by
+budget; within budget, the full checked read reports the damage as a `History`
+error ([`restart_budget_refuses_before_reading_records`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs), [`restart_budget_counts_append_log_without_decoding`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
 The budget is opt-in: `restart_counter`, `restart_counter_from_store` and
 `restart_utf8_set` apply no record budget and still open a store above 100,000
 records, outside the supported size
-([`restart_budget_opens_supported_size_and_refuses_one_more`](https://github.com/velvetmonkey/safemesh/blob/0db39d63d076a6e6d85ff2712355ffadac05be20/rust/crates/safemesh-crdt/src/local.rs)).
+([`restart_budget_opens_supported_size_and_refuses_one_more`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
 SafeMesh deletes no record to get under the limit; keep a refused store, and
 restart it without the budget only if you accept costs beyond those measured
-([`restart_budget_opens_supported_size_and_refuses_one_more`](https://github.com/velvetmonkey/safemesh/blob/0db39d63d076a6e6d85ff2712355ffadac05be20/rust/crates/safemesh-crdt/src/local.rs)).
+([`restart_budget_opens_supported_size_and_refuses_one_more`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
 Python and WASM expose no durable restart, so this budget has no binding
 surface; their log loaders already take `max_records`
 ([Python binding tests](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-python/src/lib.rs), [WASM binding tests](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-wasm/src/lib.rs)).
@@ -579,13 +614,13 @@ surface; their log loaders already take `max_records`
 
 - **Compaction.** No API folds committed records into a smaller history; a
   refused store reopens with every record
-  ([`restart_budget_opens_supported_size_and_refuses_one_more`](https://github.com/velvetmonkey/safemesh/blob/0db39d63d076a6e6d85ff2712355ffadac05be20/rust/crates/safemesh-crdt/src/local.rs)).
+  ([`restart_budget_opens_supported_size_and_refuses_one_more`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
 - **Pruning.** No API drops records by age, count or acknowledgement; the
   retention tests assert every record identity survives
   ([`bootstrap.rs`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/tests/bootstrap.rs), [`record_admission.rs`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/tests/record_admission.rs)).
 - **Snapshots.** Restart writes and reads no state snapshot; it replays the full
   history, and each benchmark restart asserts it replayed every retained record
-  ([`retention_bench`](https://github.com/velvetmonkey/safemesh/blob/0db39d63d076a6e6d85ff2712355ffadac05be20/rust/crates/safemesh-crdt/examples/retention_bench.rs)).
+  ([`retention_bench`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/examples/retention_bench.rs)).
 
 Continue to [Connect replicas](/safemesh/connect-replicas/), or review the
 [proof boundary](/safemesh/evaluate-guarantees/#proof-boundary).

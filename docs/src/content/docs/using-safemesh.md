@@ -34,7 +34,7 @@ Choose a Rust API layer by the task and the storage/identity responsibilities yo
 | --- | --- | --- | --- |
 | Raw carriers, such as `GCounter` | Merge in-memory state directly with `try_apply_bump` and `try_merge`. | The caller chooses counter width and writer coordinates (or fresh OR-Set tokens), and supplies any persistence. No event log or writer fencing is added. | [Direct G-Counter merge below](#pinned-git-dependency-for-a-separate-application) (historically pinned example). |
 | Caller-managed `EventLog` plus a carrier | Add record sequencing, duplicate/collision admission and history exchange with `append_with` / `admit_with`. | The log assigns record sequences; the caller owns writer identities, OR-Set tokens, storage and replay into the correctly shaped state. Admission is an in-memory transition. | [`m2slice.rs` caller-managed journey](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/examples/m2slice.rs). |
-| Linux `local::DurableReplica` (`local-writer` feature) | Use the supported Linux restart path for G-Counter or UTF-8 OR-Set, with `bump`, `add` and `receive` over a carrier and event log. | The caller fixes `WriterConfig` and a shared store directory. The adapter fences writers, allocates sequences/add tokens, commits transactions with file/directory sync before acknowledging accepted edits, and validates/replays on restart. | [Rust gold path below](#rust) and [durable process walkthrough](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md#persist-restore-partition-and-reconcile). |
+| Linux `local::DurableReplica` (`local-writer` feature) | Use the supported Linux restart path for G-Counter or UTF-8 OR-Set, with `bump`, `add` and `receive` over a carrier and event log. | The caller fixes `WriterConfig` and a shared store directory. The adapter fences writers, allocates sequences/add tokens, appends and syncs each accepted edit before acknowledging it, and validates/replays on restart. | [Rust gold path below](#rust) and [durable process walkthrough](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md#persist-restore-partition-and-reconcile). |
 
 The `Replica<C>` in `m2slice.rs` is an example-defined helper, not a public library type. It combines public carrier and `EventLog` APIs; the same file's Linux durable journey uses the public `local::DurableReplica` instead. All three layers leave transport to the application.
 
@@ -202,11 +202,11 @@ fn main() {
 
 The Linux durable adapter requires filesystem locks and file/directory sync.
 All instances for the same primitive and writer configuration must use the same
-store directory. Preserve the fence and transaction files of real stores; the
+store directory. Preserve the fence and journal (or older transaction) files of real stores; the
 fixture deletes only its disposable exercise after releasing every writer. Use
 restart constructors for existing stores. A failed restart grants no writer.
 Ordinary `restart_utf8_set` budgets collection counts from the locally committed
-transaction length, including old stores with a Remove of more than 4,096 tokens.
+history length, including old stores with a Remove of more than 4,096 tokens.
 Peer wire decoding still rejects collections above 4,096 elements by default;
 check the provenance of a copied store file before treating it as local history.
 These are tested engineering contracts, not a proof of storage durability.
@@ -263,7 +263,7 @@ fn main() {
 
 This is an in-process state merge. Tallies are cumulative, so resending the same bump does not increment again. `try_apply_bump` rejects an out-of-range coordinate; `try_merge` rejects incompatible replica counts. Handle these errors at your input boundary rather than copying the example's `unwrap` into an untrusted-input path. [Evidence: `GCounter` API](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/lib.rs) and [counter model](https://github.com/velvetmonkey/safemesh/blob/main/lean/SafeMesh/DeltaGCounter.lean).
 
-For record exchange, persistence, a child-process exit and restart, follow the [durable Rust walkthrough](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md#persist-restore-partition-and-reconcile). It uses `local::DurableReplica` with `local-writer` on Linux and requires filesystem locks and file/directory sync. Preserve its fence and transaction files; use restart for an existing store, not a fresh constructor. This engineering evidence does not prove storage durability. The [generated reference](/safemesh/reference/) covers the Rust API present in this build.
+For record exchange, persistence, a child-process exit and restart, follow the [durable Rust walkthrough](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md#persist-restore-partition-and-reconcile). It uses `local::DurableReplica` with `local-writer` on Linux and requires filesystem locks and file/directory sync. Preserve its fence and journal files; use restart for an existing store, not a fresh constructor. This engineering evidence does not prove storage durability. The [generated reference](/safemesh/reference/) covers the Rust API present in this build.
 
 ### OR-Set tokens across restart without `local-writer`
 
