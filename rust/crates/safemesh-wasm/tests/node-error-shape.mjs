@@ -506,14 +506,26 @@ for (const foreign of [1n, 99n, 2n ** 32n, 2n ** 64n - 1n]) {
       : new wasm.SafeMeshLwwMapReplica(0n);
     const author = make();
     const receiver = make();
+    const beforeAppend = author.logBytes();
+    assertSafeMeshError(() => kind === "register" ? author.appendSet(1n, foreign, 7n)
+      : kind === "map-set" ? author.appendSet(1n, 1n, foreign, 7n)
+      : author.appendRemove(1n, 1n, foreign), 1, "writer replica does not match record author");
+    assert.deepEqual(author.logBytes(), beforeAppend);
+    assert.equal(author.versionFor(0n), 0n);
     const valid = kind === "register" ? author.appendSet(1n, 0n, 7n)
       : kind === "map-set" ? author.appendSet(1n, 1n, 0n, 7n)
       : author.appendRemove(1n, 1n, 0n);
+    const offered = author.sinceLogBytes(receiver.versionVector());
+    assert.deepEqual(Array.from(author.recordIds()), [0n, 1n]);
+    const peer = make();
+    assert.deepEqual(peer.mergeLogBytes(offered), ["accepted"]);
+    assert.deepEqual(Array.from(peer.recordIds()), [0n, 1n]);
+    peer.free();
     const invalid = Uint8Array.from(valid);
     new DataView(invalid.buffer).setBigUint64(kind === "register" ? 30 : 38, foreign, true);
     const before = receiver.logBytes();
     const beforeState = snapshot(receiver);
-    assertSafeMeshError(() => receiver.mergeRecordBytes(invalid), 1, "invalid record");
+    assertSafeMeshError(() => receiver.mergeRecordBytes(invalid), 1, "writer replica does not match record author");
     caughtError(() => receiver.mergeLogBytes(replaceRecordInLog(author.logBytes(), valid, invalid)));
     assert.deepEqual(receiver.logBytes(), before);
     assert.deepEqual(snapshot(receiver), beforeState);

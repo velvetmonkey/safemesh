@@ -139,10 +139,24 @@ fn record_verdict(admission: safemesh_crdt::Admission) -> PyResult<String> {
             cause @ (safemesh_crdt::WireError::ZeroSequenceAdd { .. }
             | safemesh_crdt::WireError::ZeroSequenceRemove { .. }),
         ) => Err(pyo3::exceptions::PyValueError::new_err(cause.to_string())),
+        safemesh_crdt::Admission::Invalid(safemesh_crdt::WireError::OwnershipViolation) => Err(
+            pyo3::exceptions::PyValueError::new_err("writer replica does not match record author"),
+        ),
         safemesh_crdt::Admission::Invalid(_) => {
             Err(pyo3::exceptions::PyValueError::new_err("invalid record"))
         }
         admission => Ok(admission_name(admission)),
+    }
+}
+
+fn append_error(error: safemesh_crdt::AppendError) -> PyErr {
+    match error {
+        safemesh_crdt::AppendError::SequenceExhausted => {
+            pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
+        }
+        safemesh_crdt::AppendError::InvalidRecord(cause) => {
+            record_verdict(safemesh_crdt::Admission::Invalid(cause)).unwrap_err()
+        }
     }
 }
 
@@ -547,9 +561,7 @@ mod py_g_counter_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -679,9 +691,7 @@ mod py_enable_wins_flag_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -706,9 +716,7 @@ mod py_enable_wins_flag_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -831,9 +839,7 @@ mod py_lww_map_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -863,9 +869,7 @@ mod py_lww_map_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -997,9 +1001,7 @@ mod py_lww_register_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
