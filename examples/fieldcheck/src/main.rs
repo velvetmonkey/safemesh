@@ -190,7 +190,8 @@ fn run() -> Result<(), RunError> {
             LocalError::Refused => "owned",
             LocalError::Io(_) => "storage",
             LocalError::Configuration => "configuration",
-            LocalError::Exhausted => "storage",
+            // Only `_with_limits` restarts, which fieldcheck does not use, refuse by budget.
+            LocalError::Exhausted | LocalError::RecordLimitExceeded { .. } => "storage",
             LocalError::RecoveryRequired
             | LocalError::InvalidRecord(_)
             | LocalError::History(_)
