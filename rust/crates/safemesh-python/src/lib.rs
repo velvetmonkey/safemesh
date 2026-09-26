@@ -8,7 +8,8 @@ use safemesh_crdt::ownership::{allocate_token, WriterConfig};
 use safemesh_crdt::{
     CollectionLimits, Crdt, DecodeError, DecodeLimits, EnableWinsFlag, EnableWinsFlagDelta,
     EventLog, GCounter, GCounterDelta, GSet, LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta,
-    OrSet, OrSetDelta, PnCounter, Record, Rga, WireDecode, WireEncode, WireError,
+    OrSet, OrSetDelta, PnCounter, Record, Replica, ReplicaError, Rga, WireDecode, WireEncode,
+    WireError,
 };
 
 // Reject bool at the Python boundary before any method body can mutate state.
@@ -57,6 +58,28 @@ fn encode_bytes<'py>(
     bytes
         .map(|bytes| PyBytes::new_bound(py, &bytes))
         .map_err(|_| pyo3::exceptions::PyValueError::new_err(message))
+}
+
+// Preserve the binding's existing mappings for each core operation.
+fn replica_wire_error(error: ReplicaError) -> WireError {
+    match error {
+        ReplicaError::RecordDecode(error) | ReplicaError::LogEncode(error) => error,
+        _ => unreachable!("wire operation returned a different error stage"),
+    }
+}
+
+fn replica_log_error(error: ReplicaError) -> DecodeError {
+    match error {
+        ReplicaError::LogDecode(error) => error,
+        _ => unreachable!("log decode returned a different error stage"),
+    }
+}
+
+fn replica_append_error(error: ReplicaError) -> PyErr {
+    match error {
+        ReplicaError::Append(error) => append_error(error),
+        _ => unreachable!("append returned a different error stage"),
+    }
 }
 
 // Each decode path keeps one stable prefix and names the core `WireError` as
@@ -503,8 +526,7 @@ pub use enable_wins_flag_disable_delta_to_wire_python::enable_wins_flag_disable_
 #[pyclass(name = "GCounterReplica")]
 pub struct PyGCounterReplica {
     replica_id: u64,
-    state: GCounter,
-    log: EventLog<GCounterDelta>,
+    replica: Replica<GCounter>,
 }
 
 // PyO3 0.22 generates redundant PyErr conversions outside the annotated item.
@@ -524,9 +546,9 @@ mod py_g_counter_replica_python {
         ) -> PyResult<Self> {
             Ok(PyGCounterReplica {
                 replica_id,
-                state: GCounter::try_new(replicas)
-                    .map_err(|error| pyo3::exceptions::PyMemoryError::new_err(error.to_string()))?,
-                log: EventLog::with_replica_count(replicas),
+                replica: Replica::new(GCounter::try_new(replicas).map_err(|error| {
+                    pyo3::exceptions::PyMemoryError::new_err(error.to_string())
+                })?),
             })
         }
 
@@ -537,7 +559,7 @@ mod py_g_counter_replica_python {
             #[pyo3(from_py_with = "numeric")] tally: u64,
         ) -> PyResult<Bound<'py, PyBytes>> {
             if safemesh_crdt::ownership::check_counter_record(
-                self.state.len(),
+                self.replica.state().len(),
                 safemesh_crdt::RecordId {
                     replica: self.replica_id,
                     sequence: 1,
@@ -557,31 +579,21 @@ mod py_g_counter_replica_python {
                 replica: counter_replica,
                 tally,
             };
-            let id = self
-                .log
-                .append_with(
-                    &mut self.state,
-                    self.replica_id,
-                    delta.clone(),
-                    |state, delta| {
-                        state.apply_delta(delta.clone());
-                    },
-                )
-                .map_err(append_error)?;
-            encode_bytes(
-                py,
-                Record { id, delta }.to_wire_bytes(),
-                "failed to encode record",
-            )
+            let record = self
+                .replica
+                .append(self.replica_id, delta)
+                .map_err(replica_append_error)?;
+            encode_bytes(py, record.to_wire_bytes(), "failed to encode record")
         }
 
         /// Return the core admission verdict for the decoded input record, as
         /// `merge_log_bytes` does per record. Only "accepted" changes state.
         pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<String> {
             let record =
-                Record::<GCounterDelta>::from_wire_bytes(bytes).map_err(record_decode_error)?;
+                Replica::<GCounter>::inspect_record_bytes(bytes, CollectionLimits::WIRE_DEFAULT)
+                    .map_err(|error| record_decode_error(replica_wire_error(error)))?;
             if safemesh_crdt::ownership::check_counter_record(
-                self.state.len(),
+                self.replica.state().len(),
                 record.id,
                 &record.delta,
             )
@@ -591,12 +603,7 @@ mod py_g_counter_replica_python {
                     "counter coordinate out of range or not owned by record author",
                 ));
             }
-            record_verdict(
-                self.log
-                    .admit_with(&mut self.state, record, |state, delta| {
-                        state.apply_delta(delta.clone());
-                    }),
-            )
+            record_verdict(self.replica.admit(record))
         }
 
         /// Return one core admission verdict for every decoded input record.
@@ -611,15 +618,17 @@ mod py_g_counter_replica_python {
                 max_records,
                 ..DecodeLimits::default()
             };
-            let log = EventLog::<GCounterDelta>::records_from_wire_bytes_for_with_limits(
-                bytes,
-                &self.state,
-                limits,
-            )
-            .map_err(bounded_event_log_decode_error)?;
+            let log = self
+                .replica
+                .decode_log_bytes(bytes, limits)
+                .map_err(|error| bounded_event_log_decode_error(replica_log_error(error)))?;
             if log.iter().any(|r| {
-                safemesh_crdt::ownership::check_counter_record(self.state.len(), r.id, &r.delta)
-                    .is_err()
+                safemesh_crdt::ownership::check_counter_record(
+                    self.replica.state().len(),
+                    r.id,
+                    &r.delta,
+                )
+                .is_err()
             }) {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "counter coordinate out of range or not owned by record author",
@@ -628,31 +637,30 @@ mod py_g_counter_replica_python {
             Ok(log
                 .iter()
                 .cloned()
-                .map(|record| {
-                    self.log
-                        .admit_with(&mut self.state, record, |state, delta| {
-                            state.apply_delta(delta.clone());
-                        })
-                })
+                .map(|record| self.replica.admit(record))
                 .map(admission_name)
                 .collect())
         }
 
         pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-            encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
+            encode_bytes(
+                py,
+                self.replica.log_bytes().map_err(replica_wire_error),
+                "failed to encode event log",
+            )
         }
 
         pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
-            self.log.version().get(replica)
+            self.replica.version().get(replica)
         }
 
         /// The counter total as a Python `int`, exact past the 64-bit boundary.
         pub fn value(&self) -> u128 {
-            self.state.value()
+            self.replica.state().value()
         }
 
         pub fn state(&self) -> Vec<u64> {
-            self.state.state().to_vec()
+            self.replica.state().state().to_vec()
         }
     }
 }
@@ -1284,8 +1292,7 @@ impl PyStringOrSetRecord {
 pub struct PyStringOrSetReplica {
     replica_id: u64,
     allocated_writers: Option<u64>,
-    state: OrSet<String, u64>,
-    log: EventLog<OrSetDelta<String, u64>>,
+    replica: Replica<OrSet<String, u64>>,
 }
 
 // WASM keeps this registry `thread_local`, which is one WASM instance. A Python
@@ -1318,8 +1325,7 @@ impl PyStringOrSetReplica {
         PyStringOrSetReplica {
             replica_id,
             allocated_writers: None,
-            state: OrSet::new(),
-            log: EventLog::new(),
+            replica: Replica::new(OrSet::new()),
         }
     }
 
@@ -1371,7 +1377,7 @@ impl PyStringOrSetReplica {
         .map_err(|_| "invalid writer configuration".to_owned())?;
         let mut last = 0;
         let mut count = 0;
-        for record in self.log.records() {
+        for record in self.replica.log().records() {
             Self::check_owned_record(writers, record)?;
             if record.id.replica == self.replica_id {
                 last = last.max(record.id.sequence);
@@ -1399,7 +1405,12 @@ impl PyStringOrSetReplica {
         if let Some(writers) = self.allocated_writers {
             Self::check_owned_record(writers, record)?;
             if record.id.replica == self.replica_id
-                && !self.log.records().iter().any(|known| known.id == record.id)
+                && !self
+                    .replica
+                    .log()
+                    .records()
+                    .iter()
+                    .any(|known| known.id == record.id)
             {
                 return Err("incoming record claims the local author".to_owned());
             }
@@ -1430,8 +1441,9 @@ impl PyStringOrSetReplica {
             bytes.extend_from_slice(&word.to_le_bytes());
         }
         bytes.extend(
-            self.log
-                .to_wire_bytes()
+            self.replica
+                .log_bytes()
+                .map_err(replica_wire_error)
                 .map_err(|error| format!("failed to encode event log: {error:?}"))?,
         );
         Ok(bytes)
@@ -1448,13 +1460,11 @@ impl PyStringOrSetReplica {
         };
         let (writers, author, next) = (word(5), word(13), word(21));
         let mut candidate = Self::unallocated(author);
-        candidate.log = EventLog::from_wire_bytes_for(&bytes[29..], &candidate.state)
-            .map_err(|error| string_orset_log_decode_error(DecodeError::Wire(error)))?;
+        candidate.replica =
+            Replica::restore(OrSet::new(), &bytes[29..], DecodeLimits::default())
+                .map_err(|error| string_orset_log_decode_error(replica_log_error(error)))?;
         if candidate.checked_next(writers)? != next {
             return Err("allocation/history consistency: next sequence mismatch".to_owned());
-        }
-        for record in candidate.log.records() {
-            candidate.state.apply_delta(record.delta.clone());
         }
         // Claim only after all checks; a failed import creates no live writer.
         candidate.claim(writers)?;
@@ -1462,18 +1472,11 @@ impl PyStringOrSetReplica {
     }
 
     fn append(&mut self, delta: OrSetDelta<String, u64>) -> Result<Vec<u8>, String> {
-        let id = self
-            .log
-            .append_with(
-                &mut self.state,
-                self.replica_id,
-                delta.clone(),
-                |state, delta| {
-                    state.apply_delta(delta.clone());
-                },
-            )
+        let record = self
+            .replica
+            .append(self.replica_id, delta)
             .map_err(|_| "event log sequence exhausted".to_owned())?;
-        Record { id, delta }
+        record
             .to_wire_bytes()
             .map_err(|error| format!("failed to encode record: {error:?}"))
     }
@@ -1492,7 +1495,12 @@ impl PyStringOrSetReplica {
         if let Some(writers) = self.allocated_writers {
             self.checked_write_next(writers)?;
         }
-        let tokens = self.state.observed_tokens(&element).into_iter().collect();
+        let tokens = self
+            .replica
+            .state()
+            .observed_tokens(&element)
+            .into_iter()
+            .collect();
         self.append(OrSetDelta::Remove { tokens })
     }
 
@@ -1500,14 +1508,14 @@ impl PyStringOrSetReplica {
         bytes: &[u8],
         max_collection_elements: Option<usize>,
     ) -> Result<Record<OrSetDelta<String, u64>>, String> {
-        Record::<OrSetDelta<String, u64>>::from_wire_bytes_with_collection_limits(
+        Replica::<OrSet<String, u64>>::inspect_record_bytes(
             bytes,
             CollectionLimits {
                 max_elements: max_collection_elements
                     .or(CollectionLimits::WIRE_DEFAULT.max_elements),
             },
         )
-        .map_err(string_orset_record_decode_error)
+        .map_err(|error| string_orset_record_decode_error(replica_wire_error(error)))
     }
 
     // A duplicate or collision is a verdict, not an error, as on the log path.
@@ -1519,11 +1527,7 @@ impl PyStringOrSetReplica {
     ) -> Result<String, String> {
         let record = Self::decode_record(bytes, max_collection_elements)?;
         self.check_incoming(&record)?;
-        match self
-            .log
-            .admit_with(&mut self.state, record, |state, delta| {
-                state.apply_delta(delta.clone());
-            }) {
+        match self.replica.admit(record) {
             safemesh_crdt::Admission::Invalid(_) => Err("invalid record".to_owned()),
             admission => Ok(admission_name(admission)),
         }
@@ -1534,15 +1538,16 @@ impl PyStringOrSetReplica {
         bytes: &[u8],
         max_collection_elements: Option<usize>,
     ) -> Result<Vec<String>, String> {
-        let log = EventLog::<OrSetDelta<String, u64>>::records_from_wire_bytes_for_with_limits(
-            bytes,
-            &self.state,
-            DecodeLimits {
-                max_collection_elements,
-                ..DecodeLimits::default()
-            },
-        )
-        .map_err(string_orset_log_decode_error)?;
+        let log = self
+            .replica
+            .decode_log_bytes(
+                bytes,
+                DecodeLimits {
+                    max_collection_elements,
+                    ..DecodeLimits::default()
+                },
+            )
+            .map_err(|error| string_orset_log_decode_error(replica_log_error(error)))?;
         // Every record passes the ownership check before any is admitted.
         for record in &log {
             self.check_incoming(record)?;
@@ -1550,19 +1555,15 @@ impl PyStringOrSetReplica {
         Ok(log
             .iter()
             .cloned()
-            .map(|record| {
-                self.log
-                    .admit_with(&mut self.state, record, |state, delta| {
-                        state.apply_delta(delta.clone());
-                    })
-            })
+            .map(|record| self.replica.admit(record))
             .map(admission_name)
             .collect())
     }
 
     fn try_log_bytes(&self) -> Result<Vec<u8>, String> {
-        self.log
-            .to_wire_bytes()
+        self.replica
+            .log_bytes()
+            .map_err(replica_wire_error)
             .map_err(|error| format!("failed to encode event log: {error:?}"))
     }
 
@@ -1695,26 +1696,30 @@ mod py_string_or_set_replica_python {
         }
 
         pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
-            self.log.version().get(replica)
+            self.replica.version().get(replica)
         }
 
         /// Live members, sorted and unique, as the core computes them.
         pub fn elements(&self) -> Vec<String> {
-            self.state.elements().into_iter().collect()
+            self.replica.state().elements().into_iter().collect()
         }
 
         /// Live add tokens for `element`, excluding tombstoned tokens.
         pub fn observed_tokens(&self, element: String) -> Vec<u64> {
-            self.state.observed_tokens(&element).into_iter().collect()
+            self.replica
+                .state()
+                .observed_tokens(&element)
+                .into_iter()
+                .collect()
         }
 
         pub fn tombstones(&self) -> Vec<u64> {
-            self.state.tombstones().iter().copied().collect()
+            self.replica.state().tombstones().iter().copied().collect()
         }
 
         /// Every `(element, token)` add pair the core holds, tombstoned or not.
         pub fn add_entries(&self) -> Vec<(String, u64)> {
-            self.state.adds().iter().cloned().collect()
+            self.replica.state().adds().iter().cloned().collect()
         }
 
         /// Decode record bytes through the core without admitting them anywhere.
@@ -2878,7 +2883,7 @@ for make, append, read in [
                 }
                 println!("Python {frame}: {expected}");
                 assert_eq!(c.value(), 0);
-                assert!(c.log.records().is_empty());
+                assert!(c.replica.log().records().is_empty());
                 assert!(f.log.records().is_empty());
                 assert!(m.log.records().is_empty());
                 assert!(r.log.records().is_empty());
@@ -2916,8 +2921,8 @@ mod admission_tests {
                             .unwrap(),
                         "accepted"
                     );
-                    let state = replica.state.clone();
-                    let log = replica.log.clone();
+                    let state = replica.test_state().clone();
+                    let log = replica.test_log().clone();
                     // Both paths name the same core verdict for the same record. A
                     // redelivery or a conflicting payload never raises or moves state.
                     for (record, verdict) in [(first, "duplicate"), (second, "collision")] {
@@ -2927,11 +2932,11 @@ mod admission_tests {
                                 .unwrap(),
                             verdict
                         );
-                        assert_eq!(replica.state, state);
-                        assert_eq!(replica.log, log);
-                        let mut incoming = EventLog::for_crdt(&replica.state);
+                        assert_eq!(*replica.test_state(), state);
+                        assert_eq!(*replica.test_log(), log);
+                        let mut incoming = EventLog::for_crdt(replica.test_state());
                         assert_eq!(
-                            incoming.insert_record(&replica.state, record),
+                            incoming.insert_record(replica.test_state(), record),
                             safemesh_crdt::Admission::Accepted
                         );
                         assert_eq!(
@@ -2940,21 +2945,21 @@ mod admission_tests {
                                 .unwrap(),
                             vec![verdict]
                         );
-                        assert_eq!(replica.state, state);
-                        assert_eq!(replica.log, log);
+                        assert_eq!(*replica.test_state(), state);
+                        assert_eq!(*replica.test_log(), log);
                     }
                     // Conflicting entries inside a single wire log must not be silently deduped.
                     // Generated by safemesh-crdt's product EventLog encoder.
                     let bytes = include_bytes!($fixture);
                     let mut empty = $replica;
-                    let state = empty.state.clone();
+                    let state = empty.test_state().clone();
                     assert!(empty
                         .merge_log_bytes(bytes, None)
                         .unwrap_err()
                         .to_string()
                         .contains("record ID collision"));
-                    assert_eq!(empty.state, state);
-                    assert!(empty.log.records().is_empty());
+                    assert_eq!(*empty.test_state(), state);
+                    assert!(empty.test_log().records().is_empty());
                 }};
             }
             check!(
@@ -3033,9 +3038,9 @@ mod admission_tests {
                     delta: $delta,
                 };
                 let record_bytes = record.to_wire_bytes().unwrap();
-                let mut log = EventLog::for_crdt(&replica.state);
+                let mut log = EventLog::for_crdt(replica.test_state());
                 assert_eq!(
-                    log.insert_record(&replica.state, record),
+                    log.insert_record(replica.test_state(), record),
                     safemesh_crdt::Admission::Accepted
                 );
                 let log_bytes = log.to_wire_bytes().unwrap();
@@ -3077,7 +3082,7 @@ mod admission_tests {
                         "{} {case}: not the core error",
                         $name
                     );
-                    assert!(target.log.records().is_empty());
+                    assert!(target.test_log().records().is_empty());
                 }
             }};
         }
@@ -3321,20 +3326,20 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
             let mut second_writer = PyGCounterReplica::new(1, 2).unwrap();
             let second = second_writer.append_bump(py, 1, 20).unwrap();
             source.merge_record_bytes(second.as_bytes()).unwrap();
-            let bytes = source.log.to_wire_bytes().unwrap();
+            let bytes = source.replica.log().to_wire_bytes().unwrap();
             let mut target = PyGCounterReplica::new(0, 3).unwrap();
-            let state = target.state.clone();
-            let log = target.log.clone();
+            let state = target.replica.state().clone();
+            let log = target.replica.log().clone();
             assert!(target
                 .merge_log_bytes(&bytes, None)
                 .unwrap_err()
                 .to_string()
                 .contains("replica count mismatch"));
-            assert_eq!(target.state, state);
-            assert_eq!(target.log, log);
+            assert_eq!(*target.replica.state(), state);
+            assert_eq!(*target.replica.log(), log);
             let mut matching = PyGCounterReplica::new(0, 2).unwrap();
             matching.merge_log_bytes(&bytes, None).unwrap();
-            assert_eq!(matching.state, source.state);
+            assert_eq!(*matching.replica.state(), *source.replica.state());
         });
     }
 
@@ -3377,7 +3382,7 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
                 );
             }
             assert_eq!(replica.value(), 0);
-            assert!(replica.log.records().is_empty());
+            assert!(replica.replica.log().records().is_empty());
         });
     }
 
@@ -3416,7 +3421,7 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
             replica.value()
         );
         assert_eq!(replica.value(), 0);
-        assert!(replica.log.records().is_empty());
+        assert!(replica.replica.log().records().is_empty());
     }
 }
 
@@ -3504,32 +3509,26 @@ mod string_orset_tests {
     fn python_allocated_history_refuses_gaps_zero_and_max_sequence() {
         let mut zero = replica(0);
         assert_eq!(
-            zero.log.insert_record(
-                &zero.state,
-                Record {
-                    id: RecordId {
-                        replica: 0,
-                        sequence: 0,
-                    },
-                    delta: OrSetDelta::Remove { tokens: vec![] },
+            zero.replica.admit(Record {
+                id: RecordId {
+                    replica: 0,
+                    sequence: 0,
                 },
-            ),
+                delta: OrSetDelta::Remove { tokens: vec![] },
+            }),
             safemesh_crdt::Admission::Invalid(WireError::ZeroSequenceRemove { replica: 0 })
         );
-        assert!(zero.log.records().is_empty());
+        assert!(zero.replica.log().records().is_empty());
         assert_eq!(zero.checked_next(1), Ok(1));
         for sequence in [2, u64::MAX] {
             let mut replica = replica(0);
-            replica.log.insert_record(
-                &replica.state,
-                Record {
-                    id: RecordId {
-                        replica: 0,
-                        sequence,
-                    },
-                    delta: OrSetDelta::Remove { tokens: vec![] },
+            replica.replica.admit(Record {
+                id: RecordId {
+                    replica: 0,
+                    sequence,
                 },
-            );
+                delta: OrSetDelta::Remove { tokens: vec![] },
+            });
             assert!(replica.checked_next(1).is_err());
         }
     }
@@ -3612,7 +3611,7 @@ mod string_orset_tests {
                 .unwrap_err(),
             "allocation/history consistency: invalid record author or sequence"
         );
-        assert!(writer.log.records().is_empty());
+        assert!(writer.replica.log().records().is_empty());
         assert!(writer.elements().is_empty());
     }
 
@@ -3634,14 +3633,14 @@ mod string_orset_tests {
             reader.try_merge_record_bytes(&from_first, None).unwrap(),
             "accepted"
         );
-        let state = reader.state.clone();
-        let log = reader.log.clone();
+        let state = reader.replica.state().clone();
+        let log = reader.replica.log().clone();
         assert_eq!(
             reader.try_merge_record_bytes(&from_second, None).unwrap(),
             "collision"
         );
-        assert_eq!(reader.state, state);
-        assert_eq!(reader.log, log);
+        assert_eq!(*reader.replica.state(), state);
+        assert_eq!(*reader.replica.log(), log);
     }
 
     fn fields(
@@ -3732,14 +3731,14 @@ mod string_orset_tests {
             reader.elements(),
             reader.tombstones(),
             reader.version_for(1),
-            reader.log.records().len(),
+            reader.replica.log().records().len(),
         );
         let second = reader.try_merge_record_bytes(&bytes, None).unwrap();
         let after = (
             reader.elements(),
             reader.tombstones(),
             reader.version_for(1),
-            reader.log.records().len(),
+            reader.replica.log().records().len(),
         );
         assert_eq!(first, "accepted");
         assert_eq!(second, "duplicate");
@@ -3763,9 +3762,9 @@ mod string_orset_tests {
             .try_merge_record_bytes(&forged.to_wire_bytes().unwrap(), None)
             .unwrap();
         assert_eq!(verdict, "collision");
-        let mut incoming = EventLog::for_crdt(&reader.state);
+        let mut incoming = EventLog::for_crdt(reader.replica.state());
         assert_eq!(
-            incoming.insert_record(&reader.state, forged),
+            incoming.insert_record(reader.replica.state(), forged),
             safemesh_crdt::Admission::Accepted
         );
         assert_eq!(
@@ -3776,7 +3775,7 @@ mod string_orset_tests {
         );
         assert_eq!(reader.elements(), before.0);
         assert_eq!(reader.tombstones(), before.1);
-        assert_eq!(reader.log.records().len(), 1);
+        assert_eq!(reader.replica.log().records().len(), 1);
     }
 
     #[test]
@@ -3805,11 +3804,11 @@ mod string_orset_tests {
                 .unwrap(),
             "accepted"
         );
-        let state = replica.state.clone();
-        let log = replica.log.clone();
-        let mut incoming = EventLog::for_crdt(&replica.state);
+        let state = replica.replica.state().clone();
+        let log = replica.replica.log().clone();
+        let mut incoming = EventLog::for_crdt(replica.replica.state());
         assert_eq!(
-            incoming.insert_record(&replica.state, second),
+            incoming.insert_record(replica.replica.state(), second),
             safemesh_crdt::Admission::Accepted
         );
         assert_eq!(
@@ -3818,8 +3817,8 @@ mod string_orset_tests {
                 .unwrap(),
             vec!["collision"]
         );
-        assert_eq!(replica.state, state);
-        assert_eq!(replica.log, log);
+        assert_eq!(*replica.replica.state(), state);
+        assert_eq!(*replica.replica.log(), log);
     }
 
     #[test]
@@ -3840,7 +3839,7 @@ mod string_orset_tests {
         let error = reader.try_merge_record_bytes(&planted, None).unwrap_err();
         assert_eq!(error, "failed to decode record: unexpected wire tag");
         assert!(reader.elements().is_empty());
-        assert_eq!(reader.log.records().len(), 0);
+        assert_eq!(reader.replica.log().records().len(), 0);
 
         // Every single-byte change on the bare record path either errors or
         // decodes as a visibly different record. None panics, none is absorbed
@@ -3855,7 +3854,7 @@ mod string_orset_tests {
                 Err(_) => {
                     errored += 1;
                     assert!(reader.elements().is_empty());
-                    assert_eq!(reader.log.records().len(), 0);
+                    assert_eq!(reader.replica.log().records().len(), 0);
                 }
                 Ok(_) => {
                     decoded_differently += 1;
@@ -4001,7 +4000,10 @@ mod string_orset_tests {
             let globals = pyo3::types::PyDict::new_bound(py);
             globals.set_item("sm", module).unwrap();
             py.run_bound(
-                include_str!("../tests/string_orset_replica.py"),
+                include_str!("../tests/string_orset_replica.py")
+                    .split("# REPLICA_DIFFERENTIAL")
+                    .next()
+                    .unwrap(),
                 Some(&globals),
                 None,
             )
@@ -4009,3 +4011,58 @@ mod string_orset_tests {
         });
     }
 }
+
+#[cfg(test)]
+#[test]
+fn python_replica_differential_frozen_main() {
+    pyo3::prepare_freethreaded_python();
+    Python::with_gil(|py| {
+        let module = PyModule::new_bound(py, "safemesh_python").unwrap();
+        safemesh_python(&module).unwrap();
+        let globals = pyo3::types::PyDict::new_bound(py);
+        globals.set_item("sm", module).unwrap();
+        let source = include_str!("../tests/string_orset_replica.py")
+            .split("# REPLICA_DIFFERENTIAL")
+            .nth(1)
+            .unwrap();
+        py.run_bound(source, Some(&globals), None).unwrap();
+    });
+}
+
+// Shared read-only test views keep the cross-carrier assertions intact.
+#[cfg(test)]
+trait ReplicaTestViews {
+    type State: Crdt;
+    fn test_state(&self) -> &Self::State;
+    fn test_log(&self) -> &EventLog<<Self::State as Crdt>::Delta>;
+}
+#[cfg(test)]
+impl ReplicaTestViews for PyGCounterReplica {
+    type State = GCounter;
+    fn test_state(&self) -> &GCounter {
+        self.replica.state()
+    }
+    fn test_log(&self) -> &EventLog<GCounterDelta> {
+        self.replica.log()
+    }
+}
+#[cfg(test)]
+macro_rules! legacy_replica_test_views {
+    ($binding:ty, $state:ty) => {
+        impl ReplicaTestViews for $binding {
+            type State = $state;
+            fn test_state(&self) -> &Self::State {
+                &self.state
+            }
+            fn test_log(&self) -> &EventLog<<Self::State as Crdt>::Delta> {
+                &self.log
+            }
+        }
+    };
+}
+#[cfg(test)]
+legacy_replica_test_views!(PyEnableWinsFlagReplica, EnableWinsFlag<u64>);
+#[cfg(test)]
+legacy_replica_test_views!(PyLwwMapReplica, LwwMap<u64, u64>);
+#[cfg(test)]
+legacy_replica_test_views!(PyLwwRegisterReplica, LwwRegister<u64>);
