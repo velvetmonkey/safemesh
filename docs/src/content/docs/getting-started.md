@@ -84,8 +84,9 @@ The [Rust journey](/safemesh/persist-and-restart/#rust-gold-path) and
 <a id="predict-then-run-a-concurrent-add-and-remove"></a>
 [Concurrent add and remove](/safemesh/persist-and-restart/#predict-then-run-a-concurrent-add-and-remove).
 
+<a id="decrement-with-v0-focus-types"></a>
 <a id="decrement-with-supported-types"></a>
-[Decrement with supported types](/safemesh/persist-and-restart/#decrement-with-supported-types).
+[Decrement with v0-focus types](/safemesh/persist-and-restart/#decrement-with-v0-focus-types).
 
 <a id="environments-run"></a>
 [Environments run](/safemesh/evaluate-guarantees/#environments-run).

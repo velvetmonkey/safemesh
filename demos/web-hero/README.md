@@ -1,6 +1,6 @@
 # SafeMesh for builders: interactive web convergence hero
 
-**v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](https://velvetmonkey.github.io/safemesh/#v0-support).
+**v0 scope:** G-Counter and OR-Set are the **v0 focus** types, within the [language-path limits](https://velvetmonkey.github.io/safemesh/#v0-support).
 
 
 SafeMesh's Rust crate floor for consumers is **Rust 1.89**. For the source builds,

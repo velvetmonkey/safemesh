@@ -3,7 +3,7 @@ title: Persist and restart — main (unreleased)
 description: Add SafeMesh to a Rust or TypeScript program, save an edit, restart and sync a second replica.
 ---
 
-**v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
+**v0 scope:** G-Counter and OR-Set are the **v0 focus** types, within the [language-path limits](/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
 
 
 Build a small field kit: an observation counter and a membership set. Save `3` and
@@ -218,7 +218,7 @@ is the policy for that refusal, the explicit migration, the toolchains current
 Predict whether `milk` remains after one replica removes its observed token while
 another adds `milk` with a fresh token. Then run this complete
 program from the checkout root with the command below.
-It uses the same supported OR-Set carrier without touching the exercise stores.
+It uses the same v0-focus OR-Set carrier without touching the exercise stores.
 
 <!-- gold:source rust:rust/examples/concurrent_add_remove.rs -->
 ```rust
@@ -259,11 +259,12 @@ are fixed for this one-shot example. A real mutable writer must allocate unique
 tokens and preserve identity/allocation on restart as described in the
 [OR-Set lifecycle guide](/safemesh/using-safemesh/#rust).
 
+<a id="decrement-with-v0-focus-types"></a>
 <a id="decrement-with-supported-types"></a>
 
-## Decrement with supported types (optional)
+## Decrement with v0-focus types (optional)
 
-PN-Counter is **experimental** in v0. Use two supported G-Counters for stock:
+PN-Counter is **experimental** in v0. Use two v0-focus G-Counters for stock:
 one totals additions and the other totals removals. Run this complete
 program with its command below.
 Each writer owns a distinct coordinate; each bump is its cumulative tally, not
@@ -317,7 +318,7 @@ added=12 removed=4 stock=8
 ```
 <!-- /gold -->
 
-This demonstrates supported carrier semantics, not a proven inventory schema.
+This demonstrates v0-focus carrier semantics, not a proven inventory schema.
 Persist and exchange both totals; two durable stores do not commit atomically.
 Keyed stock, membership policy, overflow handling and nonnegative-stock enforcement
 remain application responsibilities. Offline decrements can oversell: convergence
