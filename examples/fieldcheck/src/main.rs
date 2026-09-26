@@ -194,9 +194,7 @@ fn run() -> Result<(), RunError> {
             LocalError::RecoveryRequired
             | LocalError::InvalidRecord(_)
             | LocalError::History(_)
-            | LocalError::InvalidHistory => {
-                "replay"
-            }
+            | LocalError::InvalidHistory => "replay",
         };
         RunError::Recovery {
             kind,
