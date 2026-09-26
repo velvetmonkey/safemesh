@@ -6,10 +6,13 @@ use safemesh_crdt::ownership::{allocate_token, WriterConfig};
 use safemesh_crdt::{
     CollectionLimits, Crdt, DecodeError, DecodeLimits, EnableWinsFlag, EnableWinsFlagDelta,
     EventLog, GCounter, GCounterDelta, GSet, LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta,
-    OrSet, OrSetDelta, PnCounter, PnCounterDelta, Record, Replica, ReplicaError, Rga, WireEncode,
-    WireError,
+    OrSet, OrSetDelta, PnCounter, PnCounterDelta, Record, Replica, ReplicaError, Rga,
+    VersionVector, VersionVectorLimits, WireDecode, WireEncode, WireError, WireSchema,
 };
-use std::{cell::RefCell, collections::BTreeSet};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(inline_js = r#"
@@ -46,9 +49,11 @@ export function installCollectionBudgetGuard(sample) {
             return original.call(this, bytes, budget);
         };
     }
-    if (typeof prototype.mergeLogBytes === 'function') {
-        const original = prototype.mergeLogBytes;
-        prototype.mergeLogBytes = function(bytes, collectionBudget, recordBudget) {
+    // A since batch takes the budgets its receiver's mergeLogBytes takes.
+    for (const name of ['mergeLogBytes', 'sinceLogBytes']) {
+        if (typeof prototype[name] !== 'function') continue;
+        const original = prototype[name];
+        prototype[name] = function(input, collectionBudget, recordBudget) {
             check(collectionBudget);
             if (recordBudget != null &&
                 (typeof recordBudget !== 'number' || !Number.isSafeInteger(recordBudget) ||
@@ -56,7 +61,7 @@ export function installCollectionBudgetGuard(sample) {
                 throw new SafeMeshError(2,
                     'maxRecords must be a nonnegative integer at most 4294967295');
             }
-            return original.call(this, bytes, collectionBudget, recordBudget);
+            return original.call(this, input, collectionBudget, recordBudget);
         };
     }
     const klass = sample.constructor;
@@ -98,6 +103,15 @@ export function checkedTokens(value) {
     }
     return value;
 }
+
+// The same check for a peer version, named by its parameter.
+export function checkedVersionPairs(value) {
+    if (!(value instanceof BigUint64Array)) {
+        throw new SafeMeshError(2,
+            'peerVersion must be a BigUint64Array of (author, prefix) pairs');
+    }
+    return value;
+}
 "#)]
 extern "C" {
     pub type SafeMeshError;
@@ -113,6 +127,9 @@ extern "C" {
 
     #[wasm_bindgen(catch, js_name = checkedTokens)]
     fn checked_tokens(value: JsValue) -> Result<Vec<u64>, JsValue>;
+
+    #[wasm_bindgen(catch, js_name = checkedVersionPairs)]
+    fn checked_version_pairs(value: JsValue) -> Result<Vec<u64>, JsValue>;
 }
 
 // Exporting the sample uses wasm-bindgen's own class wrapper on every target.
@@ -266,6 +283,156 @@ fn record_verdict(admission: safemesh_crdt::Admission) -> Result<String, Binding
         admission => Ok(admission_name(admission)),
     }
 }
+
+// Record listing and since batches share one flat pair shape: `recordIds` is
+// `[author, sequence, ...]` and a version is `[author, prefix, ...]`, where
+// each prefix is the value `versionFor(author)` returns for that author.
+
+/// Every admitted record ID in log order. Reads IDs only: no payload is
+/// encoded, decoded or copied.
+fn record_id_pairs<D>(log: &EventLog<D>) -> Vec<u64> {
+    log.records()
+        .iter()
+        .flat_map(|record| [record.id.replica, record.id.sequence])
+        .collect()
+}
+
+/// The core version's positive prefixes, sorted by author. An author whose
+/// `versionFor` is zero has no entry, as in the core.
+fn version_pairs<D>(log: &EventLog<D>) -> Vec<u64> {
+    log.version()
+        .entries()
+        .iter()
+        .flat_map(|(&author, &prefix)| [author, prefix])
+        .collect()
+}
+
+/// Rebuild a peer version with the core's checked constructor and its wire
+/// author budget. The pair shape carries no sequence-zero acknowledgement.
+fn peer_version(pairs: &[u64]) -> Result<VersionVector, BindingError> {
+    if !pairs.len().is_multiple_of(2) {
+        return Err(binding_error(
+            2,
+            format!(
+                "peerVersion must hold (author, prefix) pairs; got {} values",
+                pairs.len()
+            ),
+        ));
+    }
+    let mut entries = BTreeMap::new();
+    for pair in pairs.chunks_exact(2) {
+        if entries.insert(pair[0], pair[1]).is_some() {
+            return Err(binding_error(
+                2,
+                format!("peerVersion repeats author {}", pair[0]),
+            ));
+        }
+    }
+    VersionVector::from_peer_prefixes_with_limits(
+        &entries,
+        &BTreeSet::new(),
+        VersionVectorLimits::WIRE_DEFAULT,
+    )
+    .map_err(|error| binding_error(2, format!("peerVersion: {error}")))
+}
+
+fn checked_peer_version(value: JsValue) -> Result<VersionVector, JsValue> {
+    Ok(peer_version(&checked_version_pairs(value)?)?)
+}
+
+/// The core's `since` selection for `peer`, framed as `logBytes` frames a log.
+/// The batch is then decoded under `limits` exactly as the receiver's
+/// `mergeLogBytes` decodes it, so an over-budget batch is refused here.
+fn since_log_bytes<C>(
+    state: &C,
+    log: &EventLog<C::Delta>,
+    peer: &VersionVector,
+    limits: DecodeLimits,
+) -> Result<Vec<u8>, ReplicaError>
+where
+    C: Crdt,
+    C::Delta: Clone + PartialEq + WireEncode + WireDecode + WireSchema,
+{
+    let mut bytes = Vec::new();
+    EventLog::encode_records(log.replica_count(), &log.since(peer), &mut bytes)
+        .map_err(ReplicaError::LogEncode)?;
+    EventLog::records_from_wire_bytes_for_with_limits(&bytes, state, limits)
+        .map_err(ReplicaError::LogDecode)?;
+    Ok(bytes)
+}
+
+fn since_js_error(error: ReplicaError) -> JsValue {
+    match error {
+        ReplicaError::LogDecode(error) => event_log_decode_js_error(error),
+        _ => safe_mesh_error(1, "failed to encode event log"),
+    }
+}
+
+/// Record listing and since batches for a replica class with an event log.
+/// `$parts` names the replica's core state and log.
+macro_rules! record_exchange_methods {
+    ($class:ty, |$this:ident| $parts:expr) => {
+        #[wasm_bindgen]
+        impl $class {
+            /// Every record ID in log order, as `[author, sequence, ...]` pairs.
+            /// Reads IDs only; no record payload is decoded.
+            #[wasm_bindgen(js_name = recordIds)]
+            pub fn record_ids(&self) -> Vec<u64> {
+                let $this = self;
+                record_id_pairs($parts.1)
+            }
+
+            /// `[author, versionFor(author), ...]` for every author with a
+            /// nonzero prefix, sorted by author: a peer's `sinceLogBytes` input.
+            #[wasm_bindgen(js_name = versionVector)]
+            pub fn version_vector(&self) -> Vec<u64> {
+                let $this = self;
+                version_pairs($parts.1)
+            }
+
+            /// The records a peer at `peerVersion` is missing, as one log batch
+            /// for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
+            /// as `versionVector` returns it; sequence-zero records are always
+            /// included. The budgets are `mergeLogBytes`'s, in the same places,
+            /// and a batch over them throws the error that merge would throw.
+            #[wasm_bindgen(js_name = sinceLogBytes)]
+            #[allow(non_snake_case)]
+            pub fn since_log_bytes(
+                &self,
+                #[wasm_bindgen(unchecked_param_type = "BigUint64Array")] peerVersion: JsValue,
+                max_collection_elements: Option<u32>,
+                maxRecords: Option<u32>,
+            ) -> Result<Vec<u8>, JsValue> {
+                let peer = checked_peer_version(peerVersion)?;
+                let $this = self;
+                let (state, log) = $parts;
+                since_log_bytes(
+                    state,
+                    log,
+                    &peer,
+                    decode_limits(max_collection_elements, maxRecords),
+                )
+                .map_err(since_js_error)
+            }
+        }
+    };
+}
+
+record_exchange_methods!(SafeMeshGCounterReplica, |this| (
+    this.replica.state(),
+    this.replica.log()
+));
+record_exchange_methods!(SafeMeshEnableWinsFlagReplica, |this| (
+    &this.state,
+    &this.log
+));
+record_exchange_methods!(SafeMeshLwwMapReplica, |this| (&this.state, &this.log));
+record_exchange_methods!(SafeMeshLwwRegisterReplica, |this| (&this.state, &this.log));
+record_exchange_methods!(SafeMeshStringOrSetReplica, |this| (
+    this.replica.state(),
+    this.replica.log()
+));
+record_exchange_methods!(SafeMeshPnCounterReplica, |this| (&this.state, &this.log));
 
 #[wasm_bindgen]
 pub struct SafeMeshGCounter {
@@ -3740,6 +3907,72 @@ mod tests {
         let record = SafeMeshStringOrSetReplica::try_inspect_record_bytes(&remove).unwrap();
         assert_eq!(record.delta_kind(), "remove");
         assert_eq!(record.tokens(), vec![7]);
+    }
+
+    #[test]
+    fn since_batch_is_the_core_since_selection_for_a_checked_peer_version() {
+        let mut writer = SafeMeshGCounterReplica::new(0, 2);
+        let mut ahead = SafeMeshGCounterReplica::new(8, 2);
+        let mut behind = SafeMeshGCounterReplica::new(9, 2);
+        for tally in 1..=10 {
+            let record = writer.append_bump(0, tally).unwrap();
+            ahead.merge_record_bytes(&record, None).unwrap();
+            if tally <= 6 {
+                behind.merge_record_bytes(&record, None).unwrap();
+            }
+        }
+        let peer = peer_version(&version_pairs(behind.replica.log())).unwrap();
+        assert_eq!(&peer, behind.replica.version());
+        let unbounded = DecodeLimits::default();
+        let batch =
+            since_log_bytes(ahead.replica.state(), ahead.replica.log(), &peer, unbounded).unwrap();
+        let mut expected = Vec::new();
+        EventLog::encode_records(Some(2), &ahead.replica.since(&peer), &mut expected).unwrap();
+        assert_eq!(batch, expected);
+        assert_eq!(
+            behind.merge_log_bytes(&batch, None, None).unwrap(),
+            vec!["accepted"; 4]
+        );
+        assert_eq!(behind.log_bytes().unwrap(), ahead.log_bytes().unwrap());
+        assert_eq!(
+            record_id_pairs(behind.replica.log()),
+            (1..=10)
+                .flat_map(|sequence| [0, sequence])
+                .collect::<Vec<_>>()
+        );
+        let three = DecodeLimits {
+            max_records: Some(3),
+            ..unbounded
+        };
+        assert_eq!(
+            since_log_bytes(ahead.replica.state(), ahead.replica.log(), &peer, three),
+            Err(ReplicaError::LogDecode(DecodeError::RecordLimitExceeded {
+                max_records: 3
+            }))
+        );
+    }
+
+    #[test]
+    fn peer_version_refuses_malformed_pairs_by_name() {
+        assert_eq!(peer_version(&[]).unwrap(), VersionVector::new());
+        let too_many: Vec<u64> = (0..4097).flat_map(|author| [author, 1]).collect();
+        for (pairs, message) in [
+            (
+                &[7][..],
+                "peerVersion must hold (author, prefix) pairs; got 1 values",
+            ),
+            (&[7, 1, 7, 2][..], "peerVersion repeats author 7"),
+            (
+                &[7, 0][..],
+                "peerVersion: replica 7 has a noncanonical zero prefix",
+            ),
+            (
+                &too_many[..],
+                "peerVersion: peer version exceeds author limit 4096",
+            ),
+        ] {
+            assert_eq!(peer_version(pairs), Err(binding_error(2, message)));
+        }
     }
 
     #[test]
