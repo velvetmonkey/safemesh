@@ -15,7 +15,7 @@ import EvidenceBridge from '../../components/home/EvidenceBridge.astro';
 </div>
 
 <div class="sm-guarantees">
-  <p>Lean proves merge models. Rust is tested against generated cases.<br />Bindings, storage and transport sit outside those proofs.</p>
+  <p>Lean proves <a href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/concepts/#crdt`}>merge</a> models. Rust is tested against generated cases.<br />Bindings, storage and transport sit outside those proofs.</p>
   <a href={`${import.meta.env.BASE_URL.replace(/\/$/, '')}/claims/`}>Guarantees &amp; limits →</a>
 </div>
 
@@ -23,8 +23,19 @@ import EvidenceBridge from '../../components/home/EvidenceBridge.astro';
 
 ## What it does
 
-SafeMesh provides **Lean-backed CRDT convergence for small, embeddable state sync**.
-It is for developers building state-sync systems who bring the transport and application schema.
+Build a field inspection checklist that records answers on two devices without a
+signal, then exchanges both answers for review after a connection returns.
+[Fieldcheck](https://github.com/velvetmonkey/safemesh/tree/main/examples/fieldcheck)
+shows this with a Rust application. You can also build a shared member list that
+accepts edits while devices are apart, or count received units at a clinic and a
+warehouse; the [two-app inventory demo](https://github.com/velvetmonkey/safemesh/tree/main/demos/two-app-inventory)
+shows that count. The count is for units received, not units left in stock.
+
+SafeMesh supplies the rules for combining those changes. It does not supply the
+connection between devices, your data layout, or sign-in and access control.
+A **merge** combines changes from separate copies. A **replica** is one device's
+copy of the data. A **CRDT** is a data type whose copies can accept separate edits
+and merge under a defined rule. See [how the rules work](/safemesh/concepts/).
 This page follows **main (unreleased)**, rather than a release manual.
 
 ## Get a result
@@ -58,6 +69,31 @@ selection is a separate question from its proof status. Compare
 The proof bridges to code in three steps:
 
 <EvidenceBridge />
+
+## Pick a data type
+
+Choose by what a value must do when people edit it on separate devices. The
+**G-Counter** only goes up; the **PN-Counter** goes up and down. The **G-Set**
+only adds items and never removes them; the **OR-Set** adds and removes items.
+Each OR-Set addition needs a fresh token, a unique marker for that addition.
+If one device removes an item while another adds it at the same time, the new
+add survives after a merge.
+
+| Type | In plain words and an everyday example | Cannot do |
+| --- | --- | --- |
+| G-Counter | A total that only rises, such as units received at two warehouses. | Subtract units or show current stock by itself. |
+| OR-Set | A shared list whose items can be added and removed, such as a team member list. | Make a removal win over a simultaneous new add. |
+| G-Set | A shared list that only grows, such as IDs of visits already logged. | Remove an ID. |
+| PN-Counter | A total that can rise or fall, such as the net change in one stock item. | Prevent two offline removals from overselling. |
+| RGA/Text | An ordered list of entries, such as steps in a checklist. | Move an entry as one built-in operation; the caller supplies positions. |
+| LWW Register | One value where the chosen timestamp decides which edit remains, such as a room label. | Preserve two competing labels. |
+| Enable-wins Flag | An on/off value where a new simultaneous switch-on stays on, such as an alert toggle. | Make a simultaneous switch-off win. |
+| LWW Map | Named values where timestamps decide each name's value, such as room names keyed by room ID. | Add competing numeric edits together. |
+
+The last six types in this list are **Experimental** in the v0 table below.
+The [concepts guide](/safemesh/concepts/#five-lean-backed-carriers) gives the
+precise merge rules for the five Lean-backed types. [Limits](/safemesh/limits/)
+explains where these choices do not fit.
 
 <h3 id="v0-support">v0 focus</h3>
 
