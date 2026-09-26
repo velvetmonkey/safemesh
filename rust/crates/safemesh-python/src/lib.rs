@@ -139,10 +139,24 @@ fn record_verdict(admission: safemesh_crdt::Admission) -> PyResult<String> {
             cause @ (safemesh_crdt::WireError::ZeroSequenceAdd { .. }
             | safemesh_crdt::WireError::ZeroSequenceRemove { .. }),
         ) => Err(pyo3::exceptions::PyValueError::new_err(cause.to_string())),
+        safemesh_crdt::Admission::Invalid(safemesh_crdt::WireError::OwnershipViolation) => Err(
+            pyo3::exceptions::PyValueError::new_err("writer replica does not match record author"),
+        ),
         safemesh_crdt::Admission::Invalid(_) => {
             Err(pyo3::exceptions::PyValueError::new_err("invalid record"))
         }
         admission => Ok(admission_name(admission)),
+    }
+}
+
+fn append_error(error: safemesh_crdt::AppendError) -> PyErr {
+    match error {
+        safemesh_crdt::AppendError::SequenceExhausted => {
+            pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
+        }
+        safemesh_crdt::AppendError::InvalidRecord(cause) => {
+            record_verdict(safemesh_crdt::Admission::Invalid(cause)).unwrap_err()
+        }
     }
 }
 
@@ -547,9 +561,7 @@ mod py_g_counter_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -679,9 +691,7 @@ mod py_enable_wins_flag_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -706,9 +716,7 @@ mod py_enable_wins_flag_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -831,9 +839,7 @@ mod py_lww_map_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -863,9 +869,7 @@ mod py_lww_map_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -997,9 +1001,7 @@ mod py_lww_register_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -2086,6 +2088,84 @@ for make, append, read in [
             assert_eq!(left.value_or(7, 0), right.value_or(7, 0));
             assert_eq!(left.visible_keys(), vec![7]);
             assert_eq!(left.removal_keys(), vec![7]);
+        });
+    }
+
+    #[test]
+    fn python_lww_foreign_writer_refused_in_single_and_log_merge() {
+        struct Unchecked<D>(std::marker::PhantomData<D>);
+        impl<D> safemesh_crdt::Mergeable for Unchecked<D> {
+            fn merge(&mut self, _: &Self) -> Result<(), safemesh_crdt::MergeError> {
+                Ok(())
+            }
+        }
+        impl<D> Crdt for Unchecked<D> {
+            type Delta = D;
+            fn validate_record(&self, _: RecordId, _: &D) -> Result<(), safemesh_crdt::WireError> {
+                Ok(())
+            }
+            fn apply_delta(&mut self, _: D) {}
+        }
+        with_python(|py| {
+            macro_rules! check {
+                ($replica:expr, $delta:expr) => {{
+                    let record = Record {
+                        id: RecordId {
+                            replica: 0,
+                            sequence: 1,
+                        },
+                        delta: $delta,
+                    };
+                    let mut replica = $replica;
+                    let state = replica.state.clone();
+                    let log = replica.log.clone();
+                    assert!(replica
+                        .merge_record_bytes(&record.to_wire_bytes().unwrap())
+                        .is_err());
+                    let unchecked = Unchecked(std::marker::PhantomData);
+                    let mut incoming = EventLog::new();
+                    assert_eq!(
+                        incoming.insert_record(&unchecked, record),
+                        safemesh_crdt::Admission::Accepted
+                    );
+                    assert!(replica
+                        .merge_log_bytes(&incoming.to_wire_bytes().unwrap(), None)
+                        .is_err());
+                    assert_eq!(replica.state, state);
+                    assert_eq!(replica.log, log);
+                    assert_eq!(replica.log.since(log.version()).len(), 0);
+                }};
+            }
+            for foreign in [1, 99, u32::MAX as u64 + 1, u64::MAX] {
+                check!(
+                    PyLwwRegisterReplica::new(0),
+                    LwwRegisterDelta {
+                        timestamp: 100,
+                        replica: foreign,
+                        value: 9
+                    }
+                );
+                check!(
+                    PyLwwMapReplica::new(0),
+                    LwwMapDelta::Set {
+                        key: 1,
+                        timestamp: 100,
+                        replica: foreign,
+                        value: 9
+                    }
+                );
+                check!(
+                    PyLwwMapReplica::new(0),
+                    LwwMapDelta::Remove {
+                        key: 1,
+                        timestamp: 100,
+                        replica: foreign
+                    }
+                );
+            }
+            let mut writer = PyLwwRegisterReplica::new(0);
+            writer.append_set(py, 1, 0, 7).unwrap();
+            assert_eq!(writer.value_or(0), 7);
         });
     }
 
