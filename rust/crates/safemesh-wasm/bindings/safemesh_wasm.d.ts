@@ -21,6 +21,7 @@ export class SafeMeshEnableWinsFlagReplica {
     logBytes(): Uint8Array;
     /**
      * Return one core admission verdict for every decoded input record.
+     * maxRecords is the third argument; the second limits collection elements.
      */
     mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate" | "collision")[];
     /**
@@ -57,6 +58,7 @@ export class SafeMeshGCounterReplica {
     logBytes(): Uint8Array;
     /**
      * Return one core admission verdict for every decoded input record.
+     * maxRecords is the third argument; the second limits collection elements.
      */
     mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate" | "collision")[];
     /**
@@ -113,6 +115,7 @@ export class SafeMeshLwwMapReplica {
     logBytes(): Uint8Array;
     /**
      * Return one core admission verdict for every decoded input record.
+     * maxRecords is the third argument; the second limits collection elements.
      */
     mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate" | "collision")[];
     /**
@@ -150,6 +153,7 @@ export class SafeMeshLwwRegisterReplica {
     logBytes(): Uint8Array;
     /**
      * Return one core admission verdict for every decoded input record.
+     * maxRecords is the third argument; the second limits collection elements.
      */
     mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate" | "collision")[];
     /**
@@ -194,6 +198,7 @@ export class SafeMeshPnCounterReplica {
     logBytes(): Uint8Array;
     /**
      * Return one core admission verdict for every decoded input record.
+     * maxRecords is the third argument; the second limits collection elements.
      */
     mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate" | "collision")[];
     /**
@@ -322,6 +327,7 @@ export class SafeMeshStringOrSetReplica {
     logBytes(): Uint8Array;
     /**
      * Return one core admission verdict for every decoded input record.
+     * maxRecords is the third argument; the second limits collection elements.
      */
     mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate" | "collision")[];
     /**

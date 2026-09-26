@@ -146,7 +146,6 @@ fn decode_limits(value: Option<u32>, max_records: Option<u32>) -> DecodeLimits {
     DecodeLimits {
         max_collection_elements: value.map(|value| value as usize),
         max_records: max_records.map(|value| value as usize),
-        ..DecodeLimits::default()
     }
 }
 
@@ -632,6 +631,7 @@ impl SafeMeshGCounterReplica {
     }
 
     /// Return one core admission verdict for every decoded input record.
+    /// `maxRecords` is the third argument; the second limits collection elements.
     #[wasm_bindgen(
         js_name = mergeLogBytes,
         unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
@@ -784,6 +784,7 @@ impl SafeMeshEnableWinsFlagReplica {
     }
 
     /// Return one core admission verdict for every decoded input record.
+    /// `maxRecords` is the third argument; the second limits collection elements.
     #[wasm_bindgen(
         js_name = mergeLogBytes,
         unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
@@ -924,6 +925,7 @@ impl SafeMeshLwwMapReplica {
     }
 
     /// Return one core admission verdict for every decoded input record.
+    /// `maxRecords` is the third argument; the second limits collection elements.
     #[wasm_bindgen(
         js_name = mergeLogBytes,
         unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
@@ -1062,6 +1064,7 @@ impl SafeMeshLwwRegisterReplica {
     }
 
     /// Return one core admission verdict for every decoded input record.
+    /// `maxRecords` is the third argument; the second limits collection elements.
     #[wasm_bindgen(
         js_name = mergeLogBytes,
         unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
@@ -1257,7 +1260,7 @@ fn bounded_event_log_decode_error(error: DecodeError) -> BindingError {
         DecodeError::Wire(error) => event_log_decode_error(error),
         DecodeError::RecordLimitExceeded { max_records } => binding_error(
             1,
-            &format!("failed to decode event log: RecordLimitExceeded: {max_records}"),
+            format!("failed to decode event log: RecordLimitExceeded: {max_records}"),
         ),
     }
 }
@@ -1724,6 +1727,7 @@ impl SafeMeshStringOrSetReplica {
     }
 
     /// Return one core admission verdict for every decoded input record.
+    /// `maxRecords` is the third argument; the second limits collection elements.
     #[wasm_bindgen(
         js_name = mergeLogBytes,
         unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"
@@ -2237,7 +2241,7 @@ mod tests {
             for error in [
                 replica.try_merge_log_bytes(bytes).unwrap_err(),
                 replica
-                    .try_merge_log_bytes_with_limits(bytes, Some(4096))
+                    .try_merge_log_bytes_with_limits(bytes, Some(4096), None)
                     .unwrap_err(),
             ] {
                 assert_eq!((error.code, error.message.as_str()), (1, expected.as_str()));
@@ -3445,6 +3449,7 @@ impl SafeMeshPnCounterReplica {
     }
 
     /// Return one core admission verdict for every decoded input record.
+    /// `maxRecords` is the third argument; the second limits collection elements.
     #[wasm_bindgen(
         js_name = mergeLogBytes,
         unchecked_return_type = "(\"accepted\" | \"duplicate\" | \"collision\")[]"

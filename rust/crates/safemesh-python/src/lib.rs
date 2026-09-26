@@ -2120,10 +2120,10 @@ for make, append, read in [
                 let mut m = PyLwwMapReplica::new(0);
                 let mut r = PyLwwRegisterReplica::new(0);
                 let errors = [
-                    c.merge_log_bytes(counter).unwrap_err(),
-                    f.merge_log_bytes(flag).unwrap_err(),
-                    m.merge_log_bytes(map).unwrap_err(),
-                    r.merge_log_bytes(register).unwrap_err(),
+                    c.merge_log_bytes(counter, None).unwrap_err(),
+                    f.merge_log_bytes(flag, None).unwrap_err(),
+                    m.merge_log_bytes(map, None).unwrap_err(),
+                    r.merge_log_bytes(register, None).unwrap_err(),
                 ];
                 for error in errors {
                     assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
