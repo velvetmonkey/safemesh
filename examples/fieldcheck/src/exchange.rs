@@ -418,14 +418,11 @@ fn connection(mut stream: TcpStream, state: &Shared, initiator: bool) -> Result<
 pub fn start(state: Shared, listen: Option<&str>, connect: Option<&str>) -> Result<(), String> {
     if let Some(address) = listen {
         let listener = TcpListener::bind(address).map_err(|e| e.to_string())?;
-        if !listener
-            .local_addr()
-            .map_err(|e| e.to_string())?
-            .ip()
-            .is_loopback()
-        {
+        let bound_address = listener.local_addr().map_err(|e| e.to_string())?;
+        if !bound_address.ip().is_loopback() {
             return Err("Slice 2 requires loopback".into());
         }
+        crate::emit(json!({"listening": bound_address.to_string()}));
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let outcome = stream

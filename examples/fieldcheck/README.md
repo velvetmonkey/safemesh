@@ -25,6 +25,10 @@ Each invocation starts its own OS process with exclusive ownership of its own
 store. Keep the same writer flag on restart. The connecting service retries after
 socket loss; the listener accepts a new connection after the old socket closes.
 Independent saves remain available while disconnected and during a live connection.
+`--listen` binds the address itself and prints `Listening IP:port` with the actual
+bound address. Use `--listen 127.0.0.1:0` to let the OS select a port, then pass the
+printed address to the other device's `--connect` flag.
+
 `--listen` and `--connect` are start-time flags, not prompt commands. To make
 opposing offline inspections and then reconnect, start each CLI without its
 network flag, using `--writer 1` for device-b and `--writer 0` for device-a.
