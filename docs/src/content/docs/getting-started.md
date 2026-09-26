@@ -78,6 +78,9 @@ The [Rust journey](/safemesh/persist-and-restart/#rust-gold-path) and
 <a id="diagnose-a-failed-rust-exercise"></a>
 [Diagnose a failed Rust exercise](/safemesh/persist-and-restart/#diagnose-a-failed-rust-exercise).
 
+<a id="wire-compatibility-and-upgrades"></a>
+[Wire compatibility and upgrades](/safemesh/persist-and-restart/#wire-compatibility-and-upgrades).
+
 <a id="predict-then-run-a-concurrent-add-and-remove"></a>
 [Concurrent add and remove](/safemesh/persist-and-restart/#predict-then-run-a-concurrent-add-and-remove).
 

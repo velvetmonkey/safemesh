@@ -618,4 +618,7 @@ Here the Python calls hand bytes directly between two in-process objects; your a
 
 The Python CI matrix builds and installs a local wheel and runs binding and demo/sync tests on Linux x64 with CPython 3.8–3.14; the full distribution check also runs on CPython 3.11. The `abi3-py38` setting describes artifact reach, not evidence that every Python version or platform was tested. Python's data-mule demo is an in-memory partition-and-heal walk. [Fieldcheck](https://github.com/velvetmonkey/safemesh/blob/main/examples/fieldcheck/README.md), a Python CLI and Rust service, walks through disk-backed stores, SIGKILL/reopen recovery, and loopback reconnect. [Evidence: Python distribution scope](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-python/README.md) and [root walkthrough map](https://github.com/velvetmonkey/safemesh/blob/main/README.md#persist-restore-partition-and-reconcile-rust-and-typescriptnode).
 
+For EventLog bytes written by an earlier checkout, see
+[Wire compatibility and upgrades](/safemesh/persist-and-restart/#wire-compatibility-and-upgrades).
+
 Before committing to an integration, compare the [limits](/safemesh/limits/) with your requirements and read the [proof boundary](/safemesh/proof/#what-remains-outside).
