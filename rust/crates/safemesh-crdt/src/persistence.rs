@@ -51,8 +51,44 @@ pub(crate) fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
         return Err(error);
     }
     checkpoint(5)?;
+    cleanup_temporaries(path)?;
     parent.sync_all()?;
     checkpoint(6)?;
+    Ok(())
+}
+
+// Callers serialize this destination, including across processes (DurableReplica
+// holds its writer fence). Under that contract no matching temporary is live.
+// Match precisely the names produced above, not arbitrary .tmp entries. Unlink
+// acts on the entry itself, including symlinks; directories are never removed.
+fn cleanup_temporaries(path: &Path) -> io::Result<()> {
+    let prefix_path = path.with_extension("tmp-");
+    let prefix = prefix_path
+        .file_name()
+        .ok_or_else(|| io::Error::other("no filename"))?
+        .as_encoded_bytes();
+    for entry in fs::read_dir(path.parent().ok_or_else(|| io::Error::other("no parent"))?)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(suffix) = name.as_encoded_bytes().strip_prefix(prefix) else {
+            continue;
+        };
+        if suffix.len() != 16
+            || !suffix
+                .iter()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            continue;
+        }
+        match fs::remove_file(entry.path()) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
     Ok(())
 }
 
@@ -104,32 +140,6 @@ mod tests {
         replace(&path, b"replacement").unwrap();
         assert_eq!(fs::read(&victim).unwrap(), b"victim bytes");
         assert_eq!(fs::read(&path).unwrap(), b"replacement");
-        fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn durable_constructor_preserves_planted_symlink_and_restarts() {
-        use crate::local::DurableReplica;
-        use crate::ownership::WriterConfig;
-        let directory = directory();
-        let store = directory.join("store");
-        fs::create_dir(&store).unwrap();
-        let victim = directory.join("victim");
-        fs::write(&victim, b"victim bytes").unwrap();
-        std::os::unix::fs::symlink(&victim, store.join("writer-0.tmp")).unwrap();
-        let config = WriterConfig {
-            writers: 2,
-            writer: 0,
-        };
-        let mut replica = DurableReplica::counter(&store, config).unwrap();
-        assert_eq!(fs::read(&victim).unwrap(), b"victim bytes");
-        replica.bump(replica.ticket(), 5).unwrap();
-        let state = replica.state().state().to_vec();
-        drop(replica);
-        let replica = DurableReplica::restart_counter(&store, config).unwrap();
-        assert_eq!(replica.state().state(), state);
-        drop(replica);
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -192,38 +202,77 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn refused_write_then_remove_link_write_and_restart() {
-        use crate::local::DurableReplica;
-        use crate::ownership::WriterConfig;
+    fn cleanup_unlinks_only_exact_owned_names() {
         let directory = directory();
-        let store = directory.join("store");
-        let config = WriterConfig {
-            writers: 2,
-            writer: 0,
-        };
-        let mut replica = DurableReplica::counter(&store, config).unwrap();
-        replica.bump(replica.ticket(), 5).unwrap();
-        let temporary = store.join("writer-0.tmp");
+        let path = directory.join("writer-0.log");
         let victim = directory.join("victim");
         fs::write(&victim, b"keep").unwrap();
-        std::os::unix::fs::symlink(&victim, &temporary).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&store, fs::Permissions::from_mode(0o555)).unwrap();
-        let refused = replica.bump(replica.ticket(), 8);
-        fs::set_permissions(&store, fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(refused.is_err());
+        let stale = directory.join("writer-0.tmp-0123456789abcdef");
+        fs::write(&stale, b"stale").unwrap();
+        let link = directory.join("writer-0.tmp-fedcba9876543210");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+        let subdir = directory.join("writer-0.tmp-0000000000000000");
+        fs::create_dir(&subdir).unwrap();
+        fs::write(subdir.join("keep"), b"keep").unwrap();
+        let others = [
+            "writer-1.tmp-0123456789abcdef",
+            "writer-0.tmp",
+            "writer-0.tmp-short",
+            "writer-0.tmp-0123456789abcdeg",
+            "writer-0.tmp-0123456789ABCDEF",
+            "writer-0.tmp-0123456789abcdef-extra",
+        ];
+        for name in others {
+            fs::write(directory.join(name), b"other").unwrap();
+        }
+        replace(&path, b"success").unwrap();
+        assert!(!stale.exists());
+        assert!(fs::symlink_metadata(&link).is_err());
         assert_eq!(fs::read(&victim).unwrap(), b"keep");
-        fs::remove_file(&temporary).unwrap();
-        drop(replica);
-        let mut replica = DurableReplica::restart_counter(&store, config).unwrap();
-        replica.bump(replica.ticket(), 8).unwrap();
-        let state = replica.state().state().to_vec();
-        assert_eq!(state[0], 8);
-        drop(replica);
-        let replica = DurableReplica::restart_counter(&store, config).unwrap();
-        assert_eq!(replica.state().state(), state);
-        drop(replica);
+        assert_eq!(fs::read(subdir.join("keep")).unwrap(), b"keep");
+        for name in others {
+            assert_eq!(fs::read(directory.join(name)).unwrap(), b"other");
+        }
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn crash_cleanup_child() {
+        let Ok(root) = std::env::var("SAFEMESH_REPLACE_CRASH_ROOT") else {
+            return;
+        };
+        let boundary = std::env::var("SAFEMESH_REPLACE_CRASH_BOUNDARY")
+            .unwrap()
+            .parse()
+            .unwrap();
+        FAULT.with(|fault| fault.set((boundary, true)));
+        replace(&Path::new(&root).join("writer-0.log"), b"replacement").unwrap();
+        panic!("crash checkpoint did not exit");
+    }
+
+    #[test]
+    fn repeated_crashes_are_cleaned_by_success() {
+        for boundary in [2, 3] {
+            let directory = directory();
+            let path = directory.join("writer-0.log");
+            fs::write(&path, b"old").unwrap();
+            for _ in 0..4 {
+                let status = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["crash_cleanup_child", "--nocapture"])
+                    .env("SAFEMESH_REPLACE_CRASH_ROOT", &directory)
+                    .env("SAFEMESH_REPLACE_CRASH_BOUNDARY", boundary.to_string())
+                    .status()
+                    .unwrap();
+                assert_eq!(status.code(), Some(77));
+            }
+            let count = || fs::read_dir(&directory).unwrap().count() - 1;
+            assert_eq!(count(), 4, "four real crashes leave four temporaries");
+            assert_eq!(fs::read(&path).unwrap(), b"old");
+            replace(&path, b"success").unwrap();
+            assert_eq!(count(), 0, "success must reclaim every crash temporary");
+            assert_eq!(fs::read(&path).unwrap(), b"success");
+            fs::remove_dir_all(directory).unwrap();
+        }
     }
 
     #[test]
