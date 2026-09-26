@@ -402,10 +402,19 @@ fn retention_durable_persist_restart_all_5000() {
                 token: ownership::allocate_token(3, id.replica, id.sequence).unwrap(),
             },
         };
-        assert_eq!(
-            durable.receive(durable.ticket(), record.clone()).unwrap(),
-            Admission::Accepted
-        );
+        if id.replica == config.writer {
+            assert_eq!(
+                durable
+                    .append(durable.ticket(), record.delta.clone())
+                    .unwrap(),
+                record
+            );
+        } else {
+            assert_eq!(
+                durable.receive(durable.ticket(), record.clone()).unwrap(),
+                Admission::Accepted
+            );
+        }
         assert_eq!(expected.admit(record), Admission::Accepted);
     }
     let bytes = expected.log_bytes().unwrap();
