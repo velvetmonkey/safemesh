@@ -540,6 +540,12 @@ let migrated = EventLog::<GCounterDelta>::migrate_legacy_wire_bytes_for(&old_byt
 let log = EventLog::from_wire_bytes_for(&migrated, &state)?; // then persist `migrated`
 ```
 
+For untrusted history, use `migrate_legacy_wire_bytes_for_with_limits(&old_bytes,
+&state, DecodeLimits { max_records: Some(n), ..DecodeLimits::default() })`.
+The budget counts every input occurrence, including duplicates, and refuses
+before decoding record `n + 1`. It also applies when the input is already a
+current shaped frame. The original call remains unbounded.
+
 Or from a checkout, without writing Rust:
 
 ```sh

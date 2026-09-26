@@ -17,6 +17,110 @@ const FRAMES: [(&str, LegacyFrame); 2] = [
     ("tag03-unshaped", LegacyFrame::Tag03Unshaped),
 ];
 
+#[test]
+fn migration_budget_refuses_before_third_record_decode_and_retry_succeeds() {
+    let old = include_bytes!("fixtures/legacy-event-log/tag02/gcounter.log");
+    let state = GCounter::new(2);
+    assert_eq!(u32::from_le_bytes(old[1..5].try_into().unwrap()), 3);
+    let limited = DecodeLimits {
+        max_records: Some(2),
+        ..DecodeLimits::default()
+    };
+    assert_eq!(
+        EventLog::<GCounterDelta>::migrate_legacy_wire_bytes_for_with_limits(old, &state, limited),
+        Err(DecodeError::RecordLimitExceeded { max_records: 2 })
+    );
+    let mut malformed = old.to_vec();
+    let mut offset = 5;
+    for _ in 0..2 {
+        let length = u32::from_le_bytes(malformed[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4 + length;
+    }
+    malformed.truncate(offset);
+    malformed.extend_from_slice(&1u32.to_le_bytes());
+    malformed.push(0xff);
+    assert_eq!(
+        EventLog::<GCounterDelta>::migrate_legacy_wire_bytes_for_with_limits(
+            &malformed, &state, limited
+        ),
+        Err(DecodeError::RecordLimitExceeded { max_records: 2 })
+    );
+    assert!(EventLog::<GCounterDelta>::migrate_legacy_wire_bytes_for(&malformed, &state).is_err());
+    let migrated = EventLog::<GCounterDelta>::migrate_legacy_wire_bytes_for(old, &state).unwrap();
+    assert_eq!(
+        EventLog::<GCounterDelta>::from_wire_bytes_for(&migrated, &state)
+            .unwrap()
+            .records()
+            .len(),
+        3
+    );
+    assert_eq!(
+        EventLog::<GCounterDelta>::migrate_legacy_wire_bytes_for_with_limits(
+            &migrated, &state, limited
+        ),
+        Err(DecodeError::RecordLimitExceeded { max_records: 2 })
+    );
+    assert_eq!(
+        EventLog::<GCounterDelta>::migrate_legacy_wire_bytes_for_with_limits(
+            &migrated,
+            &state,
+            DecodeLimits {
+                max_records: Some(3),
+                ..DecodeLimits::default()
+            }
+        )
+        .unwrap(),
+        migrated
+    );
+    let empty = [0x02, 0, 0, 0, 0];
+    assert!(
+        EventLog::<GCounterDelta>::migrate_legacy_wire_bytes_for_with_limits(
+            &empty,
+            &state,
+            DecodeLimits {
+                max_records: Some(0),
+                ..DecodeLimits::default()
+            }
+        )
+        .is_ok()
+    );
+    assert_eq!(
+        EventLog::<GCounterDelta>::migrate_legacy_wire_bytes_for_with_limits(
+            old,
+            &state,
+            DecodeLimits {
+                max_records: Some(0),
+                ..DecodeLimits::default()
+            }
+        ),
+        Err(DecodeError::RecordLimitExceeded { max_records: 0 })
+    );
+    let first_len = u32::from_le_bytes(old[5..9].try_into().unwrap()) as usize;
+    let first = &old[5..9 + first_len];
+    let mut duplicates = vec![0x02];
+    duplicates.extend_from_slice(&3u32.to_le_bytes());
+    for _ in 0..3 {
+        duplicates.extend_from_slice(first);
+    }
+    assert_eq!(
+        EventLog::<GCounterDelta>::migrate_legacy_wire_bytes_for_with_limits(
+            &duplicates,
+            &state,
+            limited
+        ),
+        Err(DecodeError::RecordLimitExceeded { max_records: 2 })
+    );
+    let deduplicated =
+        EventLog::<GCounterDelta>::migrate_legacy_wire_bytes_for(&duplicates, &state).unwrap();
+    assert_eq!(
+        EventLog::<GCounterDelta>::from_wire_bytes_for(&deduplicated, &state)
+            .unwrap()
+            .records()
+            .len(),
+        1
+    );
+}
+
 // SHA-256 of every retained file. Any changed byte, added or missing file fails.
 const PINNED: [(&str, &str); 16] = [
     (

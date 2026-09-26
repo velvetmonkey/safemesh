@@ -74,6 +74,11 @@ assert_eq!(log.records().len(), 1);
 
 Python `merge_log_bytes(max_records=n)` and WASM `mergeLogBytes(bytes, undefined, n)`
 limit top-level input records before admission.
+Rust legacy migration accepts `migrate_legacy_wire_bytes_for_with_limits(bytes,
+state, DecodeLimits { max_records: Some(n), ..DecodeLimits::default() })`.
+WASM `SafeMeshStringOrSetReplica.importIdentity(bytes, n)` bounds the saved
+history before creating a live writer. Omitting either budget retains the
+previous unbounded behavior.
 
 For a destination CRDT, use `EventLog::from_wire_bytes_for_with_limits`
 to validate its shape before replay. `None` for `max_collection_elements`

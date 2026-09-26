@@ -200,6 +200,11 @@ restored.appendAllocatedAdd("bandage"); // fresh token after restart
 view.free(); restored.free(); right.free();
 ```
 
+For untrusted saved history, `importIdentity(saved, maxRecords)` limits the
+number of log record occurrences before creating a live writer. A refused
+import leaves its allocation claim free for a later retry. Omitting the budget
+keeps the existing unbounded behavior.
+
 Stdout:
 
 ```text
