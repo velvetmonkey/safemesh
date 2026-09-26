@@ -2098,7 +2098,7 @@ mod durable_tests {
         assert_eq!(r.last_sequence, 128);
         assert_eq!(r.state().0, 128);
         assert_eq!(
-            r.admit_committed(r.ticket(), record(129, 129), false, |log, sequence| {
+            r.admit_committed(r.ticket(), record(129, 129), true, |log, sequence| {
                 assert_eq!(log.records().len(), 129);
                 assert_eq!(sequence, 129);
                 Ok(())
@@ -2109,7 +2109,7 @@ mod durable_tests {
         assert_eq!(clones.get(), 1, "accepted writes must not clone history");
         let before = r.log.version().clone();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = r.admit_committed(r.ticket(), record(130, 130), false, |_, _| {
+            let _ = r.admit_committed(r.ticket(), record(130, 130), true, |_, _| {
                 panic!("commit unwind")
             });
         }));
