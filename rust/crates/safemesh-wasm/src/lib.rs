@@ -2183,6 +2183,53 @@ mod tests {
     }
 
     #[test]
+    fn legacy_event_log_fixtures_keep_the_core_text() {
+        use safemesh_crdt::LegacyFrame;
+        let cases: [(LegacyFrame, &[u8]); 2] = [
+            (
+                LegacyFrame::Tag02,
+                include_bytes!("../../safemesh-crdt/tests/fixtures/legacy-event-log/tag02/orset-utf8.log"),
+            ),
+            (
+                LegacyFrame::Tag03Unshaped,
+                include_bytes!(
+                    "../../safemesh-crdt/tests/fixtures/legacy-event-log/tag03-unshaped/orset-utf8.log"
+                ),
+            ),
+        ];
+        for (found, bytes) in cases {
+            let expected = format!(
+                "failed to decode event log: {}",
+                WireError::LegacyEventLogFrame { found }
+            );
+            let mut replica = SafeMeshStringOrSetReplica::new(0);
+            for error in [
+                replica.try_merge_log_bytes(bytes).unwrap_err(),
+                replica
+                    .try_merge_log_bytes_with_limits(bytes, Some(4096))
+                    .unwrap_err(),
+            ] {
+                assert_eq!((error.code, error.message.as_str()), (1, expected.as_str()));
+            }
+            assert!(replica.log.records().is_empty());
+            // A saved identity whose history is a legacy frame names it too.
+            let mut identity = b"SMOI\x01".to_vec();
+            for word in [2u64, 0, 1] {
+                identity.extend_from_slice(&word.to_le_bytes());
+            }
+            identity.extend_from_slice(bytes);
+            let Err(error) = SafeMeshStringOrSetReplica::try_import_identity(&identity) else {
+                panic!("legacy identity history imported");
+            };
+            assert_eq!((error.code, error.message.as_str()), (1, expected.as_str()));
+            println!(
+                "WASM {found:?}: code={} message={}",
+                error.code, error.message
+            );
+        }
+    }
+
+    #[test]
     fn allocated_history_refuses_gaps_zero_and_max_sequence() {
         for sequence in [0, 2, u64::MAX] {
             let mut replica = SafeMeshStringOrSetReplica::new(0);

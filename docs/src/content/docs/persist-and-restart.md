@@ -194,6 +194,18 @@ transaction has the wrong delta schema. For each, retain the damaged store for
 inspection; restart does not salvage the record. Investigate the failed write
 or transfer, and recover only from a known consistent history with its original
 identity and allocation metadata. Do not initialize over the damaged store.
+`LegacyEventLogFrame { found: Tag02 }` or `LegacyEventLogFrame { found:
+Tag03Unshaped }` from an `EventLog` loader (Display: `legacy EventLog frame:
+found tag 0x02 (no CRC, no shape header), expected tag 0x03 with shape header;
+migrate once with EventLog::migrate_legacy_wire_bytes_for(bytes, &destination)
+...`) means an earlier `safemesh-crdt` wrote the file, before the frame gained
+its CRC or its shape header. The bytes are intact and nothing was applied. Keep
+the file, then run the explicit migration once with the original replica count,
+reload the result, and replace the file:
+see "Migrating a legacy EventLog" in the
+[safemesh-crdt README](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md).
+Loaders never migrate on open. Durable stores postdate the shape header, so
+`restart` meets this only for a hand-edited transaction.
 See the [recovery evidence](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md).
 
 <a id="predict-then-run-a-concurrent-add-and-remove"></a>
