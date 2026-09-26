@@ -1121,14 +1121,14 @@ mod durable_tests {
         assert!(replica.state().elements().is_empty());
         drop(replica);
 
-        let add = Record {
+        let add: Record<OrSetDelta<String, u64>> = Record {
             id: RecordId {
                 replica: 1,
                 sequence: 0,
             },
             delta: OrSetDelta::Add {
                 element: "water".into(),
-                token: 1,
+                token: 1u64,
             },
         };
         let mut bytes = Vec::new();
