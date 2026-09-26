@@ -39,6 +39,13 @@ pub(super) const TAG_LWW_MAP_U64: u8 = 0x72;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WireError {
     OwnershipViolation,
+    /// An OR-Set add record at sequence 0. An add mints a token at its record
+    /// ID, and the Lean ownership rule allocates tokens only at positive
+    /// sequences (`RecordKernel.allocateToken`, `RecordKernel.permitted`).
+    ZeroSequenceAdd {
+        /// Author of the refused record. Its sequence is 0.
+        replica: u64,
+    },
     UnexpectedEof,
     InvalidTag,
     TrailingBytes,
@@ -82,6 +89,12 @@ impl core::fmt::Display for WireError {
             Self::OwnershipViolation => {
                 f.write_str("record violates replica ownership or coordinate bounds")
             }
+            Self::ZeroSequenceAdd { replica } => write!(
+                f,
+                "OR-Set add record (replica {replica}, sequence 0) refused: add sequences start at 1. \
+                 Recovery: re-add the element from replica {replica} at a positive sequence, \
+                 and remove this record from any stored log before loading it again"
+            ),
             Self::UnexpectedEof => f.write_str("unexpected end of wire input"),
             Self::InvalidTag => f.write_str("unexpected wire tag"),
             Self::TrailingBytes => f.write_str("unexpected trailing bytes after wire value"),
