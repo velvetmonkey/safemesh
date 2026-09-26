@@ -21,6 +21,8 @@ pub enum LocalError {
     Exhausted,
     RecoveryRequired,
     Configuration,
+    /// The requested counter width exceeds the core constructor domain.
+    CounterWidth(crate::CoordinateError),
     InvalidRecord(WireError),
     History(WireError),
     InvalidHistory,
@@ -43,6 +45,7 @@ impl core::fmt::Display for LocalError {
                 f.write_str("local writer sequence, generation, or token allocation exhausted")
             }
             Self::RecoveryRequired => f.write_str("local store requires recovery"),
+            Self::CounterWidth(error) => error.fmt(f),
             Self::Configuration => f.write_str("invalid or mismatched local writer configuration"),
             Self::InvalidRecord(error) => error.fmt(f),
             Self::History(error) => write!(f, "local history wire validation failed: {error}"),
@@ -63,6 +66,7 @@ impl core::error::Error for LocalError {
         match self {
             Self::InvalidRecord(error) | Self::History(error) => Some(error),
             Self::Io(error) => Some(error),
+            Self::CounterWidth(error) => Some(error),
             _ => None,
         }
     }
@@ -358,7 +362,11 @@ impl LocalReplica<GCounter> {
     pub fn counter(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
         let n = usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?;
-        Self::fresh(root, config, GCounter::new(n))
+        Self::fresh(
+            root,
+            config,
+            GCounter::try_new(n).map_err(LocalError::CounterWidth)?,
+        )
     }
     pub fn bump(
         &mut self,
@@ -776,7 +784,12 @@ impl DurableReplica<GCounter> {
     ) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
         let n = usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?;
-        Self::restart_with_limits(root, config, GCounter::new(n), limits)
+        Self::restart_with_limits(
+            root,
+            config,
+            GCounter::try_new(n).map_err(LocalError::CounterWidth)?,
+            limits,
+        )
     }
     /// Reacquire the writer, read its committed writer count, then run checked replay.
     /// The root must already contain a durable counter store for this writer.
@@ -811,12 +824,22 @@ impl DurableReplica<GCounter> {
             return Err(LocalError::Configuration);
         }
         let n = usize::try_from(writers).map_err(|_| LocalError::Configuration)?;
-        Self::restart_locked(&root, fence, config, GCounter::new(n), limits)
+        Self::restart_locked(
+            &root,
+            fence,
+            config,
+            GCounter::try_new(n).map_err(LocalError::CounterWidth)?,
+            limits,
+        )
     }
     pub fn counter(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
         let n = usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?;
-        Self::fresh(root, config, GCounter::new(n))
+        Self::fresh(
+            root,
+            config,
+            GCounter::try_new(n).map_err(LocalError::CounterWidth)?,
+        )
     }
     pub fn bump(
         &mut self,
@@ -1371,6 +1394,111 @@ mod durable_tests {
         assert!(matches!(pncounter, LocalError::Refused));
         assert_eq!(pncounter.to_string(), expected);
     }
+    #[test]
+    fn counter_width_constructor_boundaries() {
+        for writers in [0, 4096, 4097] {
+            let config = WriterConfig { writers, writer: 0 };
+            let local = LocalReplica::counter(&root(), config);
+            let durable_root = root();
+            let durable = DurableReplica::counter(&durable_root, config);
+            if writers == 4097 {
+                assert!(matches!(
+                    local,
+                    Err(LocalError::CounterWidth(
+                        crate::CoordinateError::ReplicaLimitExceeded {
+                            requested: 4097,
+                            maximum: 4096
+                        }
+                    ))
+                ));
+                assert!(matches!(durable, Err(LocalError::CounterWidth(_))));
+                assert!(matches!(
+                    DurableReplica::restart_counter(&durable_root, config),
+                    Err(LocalError::CounterWidth(_))
+                ));
+            } else if writers == 0 {
+                assert!(matches!(local, Err(LocalError::Configuration)));
+                assert!(matches!(durable, Err(LocalError::Configuration)));
+            } else {
+                assert_eq!(local.unwrap().state().len(), 4096);
+                drop(durable.unwrap());
+                assert_eq!(
+                    DurableReplica::restart_counter(&durable_root, config)
+                        .unwrap()
+                        .state()
+                        .len(),
+                    4096
+                );
+                assert_eq!(
+                    DurableReplica::restart_counter_from_store(&durable_root, 0)
+                        .unwrap()
+                        .state()
+                        .len(),
+                    4096
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn counter_width_restart_is_named_and_preserves_store() {
+        for writers in [4097, usize::MAX as u64] {
+            let root = root();
+            let config = WriterConfig { writers, writer: 0 };
+            // Match the pre-cap fresh log shape through the product encoder.
+            let log = EventLog::<GCounterDelta>::with_replica_count(writers as usize);
+            let mut transaction = [
+                writers.to_le_bytes(),
+                0u64.to_le_bytes(),
+                0u64.to_le_bytes(),
+            ]
+            .concat();
+            transaction.extend(log.to_wire_bytes().unwrap());
+            let fence = [
+                writers.to_le_bytes(),
+                0u64.to_le_bytes(),
+                1u64.to_le_bytes(),
+            ]
+            .concat();
+            fs::write(transaction_path(&root, config), &transaction).unwrap();
+            let fence_path = root.join("writer-0.fence");
+            fs::write(&fence_path, &fence).unwrap();
+            for _ in 0..2 {
+                let error = DurableReplica::restart_counter_from_store(&root, 0)
+                    .err()
+                    .unwrap();
+                assert!(
+                    matches!(error, LocalError::CounterWidth(crate::CoordinateError::ReplicaLimitExceeded { requested, maximum: 4096 }) if requested == writers as usize)
+                );
+                let message = error.to_string();
+                assert!(
+                    message.contains(&writers.to_string()) && message.contains("4096"),
+                    "{message}"
+                );
+                assert_eq!(
+                    fs::read(transaction_path(&root, config)).unwrap(),
+                    transaction
+                );
+                assert_eq!(fs::read(&fence_path).unwrap(), fence);
+            }
+            assert!(matches!(
+                DurableReplica::restart_counter(
+                    &root,
+                    WriterConfig {
+                        writers: 2,
+                        writer: 0
+                    }
+                ),
+                Err(LocalError::Configuration)
+            ));
+            assert_eq!(
+                fs::read(transaction_path(&root, config)).unwrap(),
+                transaction
+            );
+            assert_eq!(fs::read(&fence_path).unwrap(), fence);
+        }
+    }
+
     #[test]
     fn restart_counter_from_store_replays_without_writer_count() {
         let root = root();
