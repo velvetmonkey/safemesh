@@ -2234,7 +2234,7 @@ mod tests {
     fn allocated_history_refuses_gaps_zero_and_max_sequence() {
         for sequence in [0, 2, u64::MAX] {
             let mut replica = SafeMeshStringOrSetReplica::new(0);
-            replica.log.insert_record(
+            let admission = replica.log.insert_record(
                 &replica.state,
                 Record {
                     id: RecordId {
@@ -2244,7 +2244,16 @@ mod tests {
                     delta: OrSetDelta::Remove { tokens: vec![] },
                 },
             );
-            assert!(replica.checked_next(1).is_err());
+            if sequence == 0 {
+                assert_eq!(
+                    admission,
+                    safemesh_crdt::Admission::Invalid(WireError::ZeroSequenceRemove { replica: 0 })
+                );
+                assert!(replica.log.records().is_empty());
+            } else {
+                assert_eq!(admission, safemesh_crdt::Admission::Accepted);
+                assert!(replica.checked_next(1).is_err());
+            }
         }
         assert_eq!(allocate_token(1, 0, u64::MAX), Some(u64::MAX));
         assert_eq!(allocate_token(2, 0, u64::MAX), None);
