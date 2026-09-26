@@ -7,7 +7,7 @@ The Rust, Python data-mule, and browser demos below use **main (unreleased)** so
 They exercise modeled convergence; they do not establish real transport delivery,
 storage durability, or maintainer support.
 Success output establishes the stated example outcome, not the release status of
-every carrier shown. **Supported** below means selected for v0, within the
+every carrier shown. **v0 focus** below means selected for v0, within the
 [v0 scope table and language-path limits](/safemesh/#v0-support); main remains unreleased.
 
 ## Put SafeMesh in your program
@@ -63,7 +63,7 @@ package. Registry availability is not implied.
 ## Rust: partition and heal
 
 **Carriers used:** G-Counter (`GCounter`, counter) and numeric OR-Set (`OrSet`,
-supplies) are **v0-supported**; RGA/Text (`Rga`, text positions) is **experimental**.
+supplies) are **v0-focus**; RGA/Text (`Rga`, text positions) is **experimental**.
 See the [demo source](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/examples/break_it.rs)
 and [v0 scope table](/safemesh/#v0-support).
 
@@ -89,7 +89,7 @@ These observations exercise modeled merge behavior; they do not prove real trans
 
 ## Python: cold-chain data mule
 
-**Carriers used:** G-Counter (`GCounterReplica`, audit counts) is **v0-supported**;
+**Carriers used:** G-Counter (`GCounterReplica`, audit counts) is **v0-focus**;
 LWW Map (`LwwMapReplica`, custody holder) and Enable-wins Flag
 (`EnableWinsFlagReplica`, temperature alert) are **experimental**, including their
 replica wrappers. See the [demo source](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-python/examples/data_mule_demo.py)
@@ -118,7 +118,7 @@ The preceding stages show modeled custody, audit counts, and temperature alerts.
 
 **Carriers used:** G-Counter (`SafeMeshGCounterReplica`, headcount) and UTF-8 OR-Set
 (`SafeMeshStringOrSetReplica`, supplies), both through Rust/WASM, are the two
-**v0-supported** carrier types. This demo uses no experimental carriers. See the
+**v0-focus** carrier types. This demo uses no experimental carriers. See the
 [simulation source](https://github.com/velvetmonkey/safemesh/blob/main/web/src/sim/simulation.ts)
 and [v0 scope table and language-path limits](/safemesh/#v0-support).
 

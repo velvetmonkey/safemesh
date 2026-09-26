@@ -12,7 +12,7 @@ cab067b1113605007d8cd0098cbc996b15fffafc
 <!-- /pinned:revision -->
 
 SafeMesh is a small replicated-state library with explicit merge rules. This
-Linux x86_64 recipe builds a standalone consumer of the supported G-Counter,
+Linux x86_64 recipe builds a standalone consumer of the v0-focus G-Counter,
 merges two independent tallies, and asserts that replay leaves the total at `6`.
 It does not demonstrate a network or persistence.
 

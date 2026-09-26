@@ -1,6 +1,6 @@
 # SafeMesh PWA MVP
 
-**v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](https://velvetmonkey.github.io/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
+**v0 scope:** G-Counter and OR-Set are the **v0 focus** types, within the [language-path limits](https://velvetmonkey.github.io/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
 
 
 Lean is the SafeMesh semantic oracle. The G-Counter and OR-Set use Rust-core records, merges, and reads through WASM. The TypeScript transport simulates timing, duplication, drops, and partitions. The Lean-backed Rust core is the proof-carrying surface for modeled CRDT semantics.
