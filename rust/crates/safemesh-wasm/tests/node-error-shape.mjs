@@ -316,6 +316,7 @@ for (const [make, append] of [
   [() => new wasm.SafeMeshLwwMapReplica(0n), r => r.appendSet(1n, 1n, 0n, 1n)],
   [() => new wasm.SafeMeshLwwRegisterReplica(0n), r => r.appendSet(1n, 0n, 1n)],
   [() => new wasm.SafeMeshStringOrSetReplica(0n), r => r.appendAdd("water", 1n)],
+  [() => new wasm.SafeMeshPnCounterReplica(0n, 2), r => r.appendInc(0, 1n)],
 ]) {
   const sender = make();
   try {
@@ -328,6 +329,16 @@ for (const [make, append] of [
       const receiver = make(), untouched = make();
       try {
         const frame = frameOccurrences(sender.logBytes(), order);
+        const beforeBudget = snapshot(untouched);
+        assertSafeMeshError(() => untouched.mergeLogBytes(frame, undefined, 2), 1,
+          "failed to decode event log: RecordLimitExceeded: 2");
+        assert.deepEqual(snapshot(untouched), beforeBudget);
+        for (const invalid of [-1, 1.5, "2", true]) {
+          assertSafeMeshError(() => untouched.mergeLogBytes(frame, undefined, invalid), 2,
+            "maxRecords must be a nonnegative integer at most 4294967295");
+          assert.deepEqual(snapshot(untouched), beforeBudget);
+        }
+        assert.deepEqual(untouched.mergeLogBytes(frame, undefined, 3), expected);
         assert.deepEqual(receiver.mergeLogBytes(frame), expected);
         const canonical = receiver.logBytes();
         assert.deepEqual(receiver.mergeLogBytes(frame), ["duplicate", "duplicate", "duplicate"]);

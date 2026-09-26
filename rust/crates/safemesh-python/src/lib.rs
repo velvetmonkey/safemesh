@@ -5,9 +5,9 @@
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use safemesh_crdt::{
-    CollectionLimits, Crdt, EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounter, GCounterDelta,
-    GSet, LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta, OrSet, PnCounter, Record, Rga,
-    WireDecode, WireEncode,
+    CollectionLimits, Crdt, DecodeError, DecodeLimits, EnableWinsFlag, EnableWinsFlagDelta,
+    EventLog, GCounter, GCounterDelta, GSet, LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta,
+    OrSet, PnCounter, Record, Rga, WireDecode, WireEncode,
 };
 
 // Reject bool at the Python boundary before any method body can mutate state.
@@ -78,6 +78,17 @@ fn event_log_decode_error(error: safemesh_crdt::WireError) -> PyErr {
         }
         cause => format!("failed to decode event log: {cause}"),
     })
+}
+
+fn bounded_event_log_decode_error(error: DecodeError) -> PyErr {
+    match error {
+        DecodeError::Wire(error) => event_log_decode_error(error),
+        DecodeError::RecordLimitExceeded { max_records } => {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "failed to decode event log: RecordLimitExceeded: {max_records}"
+            ))
+        }
+    }
 }
 
 fn admission_name(admission: safemesh_crdt::Admission) -> String {
@@ -537,9 +548,23 @@ mod py_g_counter_replica_python {
         }
 
         /// Return one core admission verdict for every decoded input record.
-        pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
-            let log = EventLog::<GCounterDelta>::records_from_wire_bytes_for(bytes, &self.state)
-                .map_err(event_log_decode_error)?;
+        #[pyo3(signature = (bytes, *, max_records = None))]
+        pub fn merge_log_bytes(
+            &mut self,
+            bytes: &[u8],
+            max_records: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<Vec<String>> {
+            let max_records = collection_budget(max_records)?;
+            let limits = DecodeLimits {
+                max_records,
+                ..DecodeLimits::default()
+            };
+            let log = EventLog::<GCounterDelta>::records_from_wire_bytes_for_with_limits(
+                bytes,
+                &self.state,
+                limits,
+            )
+            .map_err(bounded_event_log_decode_error)?;
             if log.iter().any(|r| {
                 safemesh_crdt::ownership::check_counter_record(self.state.len(), r.id, &r.delta)
                     .is_err()
@@ -671,12 +696,24 @@ mod py_enable_wins_flag_replica_python {
         }
 
         /// Return one core admission verdict for every decoded input record.
-        pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
-            let log = EventLog::<EnableWinsFlagDelta<u64>>::records_from_wire_bytes_for(
-                bytes,
-                &self.state,
-            )
-            .map_err(event_log_decode_error)?;
+        #[pyo3(signature = (bytes, *, max_records = None))]
+        pub fn merge_log_bytes(
+            &mut self,
+            bytes: &[u8],
+            max_records: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<Vec<String>> {
+            let max_records = collection_budget(max_records)?;
+            let limits = DecodeLimits {
+                max_records,
+                ..DecodeLimits::default()
+            };
+            let log =
+                EventLog::<EnableWinsFlagDelta<u64>>::records_from_wire_bytes_for_with_limits(
+                    bytes,
+                    &self.state,
+                    limits,
+                )
+                .map_err(bounded_event_log_decode_error)?;
             Ok(log
                 .iter()
                 .cloned()
@@ -816,10 +853,23 @@ mod py_lww_map_replica_python {
         }
 
         /// Return one core admission verdict for every decoded input record.
-        pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
-            let log =
-                EventLog::<LwwMapDelta<u64, u64>>::records_from_wire_bytes_for(bytes, &self.state)
-                    .map_err(event_log_decode_error)?;
+        #[pyo3(signature = (bytes, *, max_records = None))]
+        pub fn merge_log_bytes(
+            &mut self,
+            bytes: &[u8],
+            max_records: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<Vec<String>> {
+            let max_records = collection_budget(max_records)?;
+            let limits = DecodeLimits {
+                max_records,
+                ..DecodeLimits::default()
+            };
+            let log = EventLog::<LwwMapDelta<u64, u64>>::records_from_wire_bytes_for_with_limits(
+                bytes,
+                &self.state,
+                limits,
+            )
+            .map_err(bounded_event_log_decode_error)?;
             Ok(log
                 .iter()
                 .cloned()
@@ -937,10 +987,23 @@ mod py_lww_register_replica_python {
         }
 
         /// Return one core admission verdict for every decoded input record.
-        pub fn merge_log_bytes(&mut self, bytes: &[u8]) -> PyResult<Vec<String>> {
-            let log =
-                EventLog::<LwwRegisterDelta<u64>>::records_from_wire_bytes_for(bytes, &self.state)
-                    .map_err(event_log_decode_error)?;
+        #[pyo3(signature = (bytes, *, max_records = None))]
+        pub fn merge_log_bytes(
+            &mut self,
+            bytes: &[u8],
+            max_records: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<Vec<String>> {
+            let max_records = collection_budget(max_records)?;
+            let limits = DecodeLimits {
+                max_records,
+                ..DecodeLimits::default()
+            };
+            let log = EventLog::<LwwRegisterDelta<u64>>::records_from_wire_bytes_for_with_limits(
+                bytes,
+                &self.state,
+                limits,
+            )
+            .map_err(bounded_event_log_decode_error)?;
             Ok(log
                 .iter()
                 .cloned()
@@ -1583,17 +1646,31 @@ def occurrences(frame, order):
     body=body[:offset]+struct.pack('<I',len(order))+b''.join(records[i] for i in order)
     checked=struct.pack('<II',len(body),len(body)^0xffffffff)+body
     return b'\x03'+checked+struct.pack('<I',zlib.crc32(checked))
-for make, append in [
-    (lambda: sm.GCounterReplica(0,2), lambda r: r.append_bump(0,1)),
-    (lambda: sm.EnableWinsFlagReplica(0), lambda r: r.append_enable(1)),
-    (lambda: sm.LwwMapReplica(0), lambda r: r.append_set(1,1,0,1)),
-    (lambda: sm.LwwRegisterReplica(0), lambda r: r.append_set(1,0,1)),
+for make, append, read in [
+    (lambda: sm.GCounterReplica(0,2), lambda r: r.append_bump(0,1), lambda r: r.state()),
+    (lambda: sm.EnableWinsFlagReplica(0), lambda r: r.append_enable(1), lambda r: (r.value(), r.enabled_tokens())),
+    (lambda: sm.LwwMapReplica(0), lambda r: r.append_set(1,1,0,1), lambda r: r.value_or(1,0)),
+    (lambda: sm.LwwRegisterReplica(0), lambda r: r.append_set(1,0,1), lambda r: (r.value_or(0), r.timestamp_or(0))),
 ]:
     sender=make(); append(sender); append(sender)
     for order, expected in [([0,0,1],['accepted','duplicate','accepted']),
                             ([0,0,0],['accepted','duplicate','duplicate']),
                             ([0,1,0],['accepted','accepted','duplicate'])]:
         receiver=make(); frame=occurrences(sender.log_bytes(),order)
+        bounded=make(); before=bounded.log_bytes(); state_before=read(bounded)
+        try: bounded.merge_log_bytes(frame, max_records=2)
+        except ValueError as error:
+            assert 'RecordLimitExceeded' in str(error) and '2' in str(error)
+        else: raise AssertionError('record budget did not refuse three occurrences')
+        assert read(bounded)==state_before, 'state unchanged after budget refusal'
+        assert bounded.log_bytes()==before
+        for invalid in (-1, 1.5, True):
+            try: bounded.merge_log_bytes(frame, max_records=invalid)
+            except (TypeError, OverflowError, ValueError): pass
+            else: raise AssertionError('invalid record budget accepted')
+            assert read(bounded)==state_before, 'state unchanged after invalid budget'
+            assert bounded.log_bytes()==before
+        assert bounded.merge_log_bytes(frame, max_records=3)==expected
         assert receiver.merge_log_bytes(frame)==expected
         canonical=receiver.log_bytes()
         assert receiver.merge_log_bytes(frame)==['duplicate']*3
@@ -1774,7 +1851,7 @@ for make, append in [
             assert_eq!(right.version_for(1), 1);
 
             let log_bytes = right.log_bytes(py).unwrap().as_bytes().to_vec();
-            left.merge_log_bytes(&log_bytes).unwrap();
+            left.merge_log_bytes(&log_bytes, None).unwrap();
             assert_eq!(left.value(), right.value());
         });
     }
@@ -1900,7 +1977,7 @@ for make, append in [
             left.merge_record_bytes(&disable_10).unwrap();
             assert!(left.value());
             let log_bytes = right.log_bytes(py).unwrap().as_bytes().to_vec();
-            left.merge_log_bytes(&log_bytes).unwrap();
+            left.merge_log_bytes(&log_bytes, None).unwrap();
             assert_eq!(left.value(), right.value());
             assert_eq!(left.enabled_tokens(), vec![10, 11]);
             assert_eq!(left.tombstone_tokens(), vec![10]);
@@ -1957,7 +2034,7 @@ for make, append in [
             left.merge_record_bytes(&remove_100).unwrap();
             assert_eq!(left.value_or(7, 0), 300);
             let log_bytes = right.log_bytes(py).unwrap().as_bytes().to_vec();
-            left.merge_log_bytes(&log_bytes).unwrap();
+            left.merge_log_bytes(&log_bytes, None).unwrap();
             assert_eq!(left.value_or(7, 0), right.value_or(7, 0));
             assert_eq!(left.visible_keys(), vec![7]);
             assert_eq!(left.removal_keys(), vec![7]);
@@ -1993,7 +2070,7 @@ for make, append in [
             assert_eq!(right.version_for(1), 1);
 
             let log_bytes = right.log_bytes(py).unwrap().as_bytes().to_vec();
-            left.merge_log_bytes(&log_bytes).unwrap();
+            left.merge_log_bytes(&log_bytes, None).unwrap();
             assert_eq!(left.value_or(0), right.value_or(0));
             assert_eq!(left.writer_replica_or(0), 2);
         });
@@ -2049,7 +2126,7 @@ mod admission_tests {
                         );
                         assert_eq!(
                             replica
-                                .merge_log_bytes(&incoming.to_wire_bytes().unwrap())
+                                .merge_log_bytes(&incoming.to_wire_bytes().unwrap(), None)
                                 .unwrap(),
                             vec![verdict]
                         );
@@ -2062,7 +2139,7 @@ mod admission_tests {
                     let mut empty = $replica;
                     let state = empty.state.clone();
                     assert!(empty
-                        .merge_log_bytes(bytes)
+                        .merge_log_bytes(bytes, None)
                         .unwrap_err()
                         .to_string()
                         .contains("record ID collision"));
@@ -2176,7 +2253,10 @@ mod admission_tests {
                         .merge_record_bytes(&record_input)
                         .unwrap_err()
                         .to_string();
-                    let batch = target.merge_log_bytes(&log_input).unwrap_err().to_string();
+                    let batch = target
+                        .merge_log_bytes(&log_input, None)
+                        .unwrap_err()
+                        .to_string();
                     println!("Python {} {case}: record={single:?} log={batch:?}", $name);
                     let single = cause(&single, "failed to decode record");
                     let batch = cause(&batch, "failed to decode event log");
@@ -2289,14 +2369,15 @@ mod admission_tests {
             "accepted"
         );
         assert_eq!(
-            target.merge_log_bytes(&wire([])).unwrap(),
+            target.merge_log_bytes(&wire([]), None).unwrap(),
             Vec::<String>::new()
         );
         assert_eq!(target.state(), vec![5, 0]);
 
         let mut one = PyGCounterReplica::new(0, 2);
         assert_eq!(
-            one.merge_log_bytes(&wire([accepted.clone()])).unwrap(),
+            one.merge_log_bytes(&wire([accepted.clone()]), None)
+                .unwrap(),
             vec!["accepted"]
         );
         assert_eq!(one.state(), vec![0, 7]);
@@ -2310,7 +2391,9 @@ mod admission_tests {
             "collision"
         );
         assert_eq!(
-            target.merge_log_bytes(&wire([collision.clone()])).unwrap(),
+            target
+                .merge_log_bytes(&wire([collision.clone()]), None)
+                .unwrap(),
             vec!["collision"]
         );
         assert_eq!(target.state(), before);
@@ -2332,7 +2415,7 @@ mod admission_tests {
         }
         assert_eq!(
             target
-                .merge_log_bytes(&wire([existing.clone(), accepted.clone()]))
+                .merge_log_bytes(&wire([existing.clone(), accepted.clone()]), None)
                 .unwrap(),
             vec!["duplicate", "duplicate"]
         );
@@ -2346,7 +2429,7 @@ mod admission_tests {
         );
         let before = late.state();
         let admissions = late
-            .merge_log_bytes(&wire([accepted, collision, after_collision]))
+            .merge_log_bytes(&wire([accepted, collision, after_collision]), None)
             .unwrap();
         let after = late.state();
         println!("PYTHON admissions={admissions:?} before_state={before:?} after_state={after:?}");
@@ -2433,14 +2516,14 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
             let state = target.state.clone();
             let log = target.log.clone();
             assert!(target
-                .merge_log_bytes(&bytes)
+                .merge_log_bytes(&bytes, None)
                 .unwrap_err()
                 .to_string()
                 .contains("replica count mismatch"));
             assert_eq!(target.state, state);
             assert_eq!(target.log, log);
             let mut matching = PyGCounterReplica::new(0, 2);
-            matching.merge_log_bytes(&bytes).unwrap();
+            matching.merge_log_bytes(&bytes, None).unwrap();
             assert_eq!(matching.state, source.state);
         });
     }
@@ -2469,7 +2552,10 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
                     .to_string();
                 let mut bytes = Vec::new();
                 EventLog::encode_records(Some(2), &[record], &mut bytes).unwrap();
-                let log = replica.merge_log_bytes(&bytes).unwrap_err().to_string();
+                let log = replica
+                    .merge_log_bytes(&bytes, None)
+                    .unwrap_err()
+                    .to_string();
                 println!("Python {name}: single={single:?}, log={log:?}");
                 errors.push((name, single, log));
             }
@@ -2511,7 +2597,10 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
         };
         let mut bytes = Vec::new();
         EventLog::encode_records(Some(2), &[good, bad], &mut bytes).unwrap();
-        let error = replica.merge_log_bytes(&bytes).unwrap_err().to_string();
+        let error = replica
+            .merge_log_bytes(&bytes, None)
+            .unwrap_err()
+            .to_string();
         println!(
             "Python good-then-bad: error={error:?}, value={}",
             replica.value()

@@ -22,7 +22,7 @@ export class SafeMeshEnableWinsFlagReplica {
     /**
      * Return one core admission verdict for every decoded input record.
      */
-    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): ("accepted" | "duplicate" | "collision")[];
+    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate" | "collision")[];
     /**
      * Return the core admission verdict for the decoded input record, as
      * `mergeLogBytes` does per record. Only `"accepted"` changes state.
@@ -58,7 +58,7 @@ export class SafeMeshGCounterReplica {
     /**
      * Return one core admission verdict for every decoded input record.
      */
-    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): ("accepted" | "duplicate" | "collision")[];
+    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate" | "collision")[];
     /**
      * Return the core admission verdict for the decoded input record, as
      * `mergeLogBytes` does per record. Only `"accepted"` changes state.
@@ -114,7 +114,7 @@ export class SafeMeshLwwMapReplica {
     /**
      * Return one core admission verdict for every decoded input record.
      */
-    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): ("accepted" | "duplicate" | "collision")[];
+    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate" | "collision")[];
     /**
      * Return the core admission verdict for the decoded input record, as
      * `mergeLogBytes` does per record. Only `"accepted"` changes state.
@@ -151,7 +151,7 @@ export class SafeMeshLwwRegisterReplica {
     /**
      * Return one core admission verdict for every decoded input record.
      */
-    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): ("accepted" | "duplicate" | "collision")[];
+    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate" | "collision")[];
     /**
      * Return the core admission verdict for the decoded input record, as
      * `mergeLogBytes` does per record. Only `"accepted"` changes state.
@@ -195,7 +195,7 @@ export class SafeMeshPnCounterReplica {
     /**
      * Return one core admission verdict for every decoded input record.
      */
-    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): ("accepted" | "duplicate" | "collision")[];
+    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate" | "collision")[];
     /**
      * Return the core admission verdict for the decoded input record, as
      * `mergeLogBytes` does per record. Only `"accepted"` changes state.
@@ -323,7 +323,7 @@ export class SafeMeshStringOrSetReplica {
     /**
      * Return one core admission verdict for every decoded input record.
      */
-    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): ("accepted" | "duplicate" | "collision")[];
+    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate" | "collision")[];
     /**
      * Decode one record and admit it through the core event log.
      *
