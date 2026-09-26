@@ -6,7 +6,8 @@ use safemesh_crdt::ownership::{allocate_token, WriterConfig};
 use safemesh_crdt::{
     CollectionLimits, Crdt, DecodeError, DecodeLimits, EnableWinsFlag, EnableWinsFlagDelta,
     EventLog, GCounter, GCounterDelta, GSet, LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta,
-    OrSet, OrSetDelta, PnCounter, PnCounterDelta, Record, Rga, WireEncode, WireError,
+    OrSet, OrSetDelta, PnCounter, PnCounterDelta, Record, Replica, ReplicaError, Rga, WireEncode,
+    WireError,
 };
 use std::{cell::RefCell, collections::BTreeSet};
 use wasm_bindgen::prelude::*;
@@ -578,8 +579,7 @@ pub fn enable_wins_flag_disable_delta_to_wire_js(
 #[wasm_bindgen]
 pub struct SafeMeshGCounterReplica {
     replica_id: u64,
-    state: GCounter,
-    log: EventLog<GCounterDelta>,
+    replica: Replica<GCounter>,
 }
 
 #[wasm_bindgen]
@@ -616,13 +616,16 @@ impl SafeMeshGCounterReplica {
         bytes: &[u8],
         max_collection_elements: Option<u32>,
     ) -> Result<String, JsValue> {
-        let record = Record::<GCounterDelta>::from_wire_bytes_with_collection_limits(
+        let record = Replica::<GCounter>::inspect_record_bytes(
             bytes,
             collection_limits(max_collection_elements),
         )
-        .map_err(record_decode_js_error)?;
+        .map_err(|e| match e {
+            ReplicaError::RecordDecode(e) => record_decode_js_error(e),
+            _ => unreachable!(),
+        })?;
         if safemesh_crdt::ownership::check_counter_record(
-            self.state.len(),
+            self.replica.state().len(),
             record.id,
             &record.delta,
         )
@@ -633,13 +636,7 @@ impl SafeMeshGCounterReplica {
                 "counter coordinate out of range or not owned by record author",
             ));
         }
-        record_verdict(
-            self.log
-                .admit_with(&mut self.state, record, |state, delta| {
-                    state.apply_delta(delta.clone());
-                }),
-        )
-        .map_err(JsValue::from)
+        record_verdict(self.replica.admit(record)).map_err(JsValue::from)
     }
 
     /// Return one core admission verdict for every decoded input record.
@@ -655,15 +652,20 @@ impl SafeMeshGCounterReplica {
         max_collection_elements: Option<u32>,
         maxRecords: Option<u32>,
     ) -> Result<Vec<String>, JsValue> {
-        let log = EventLog::<GCounterDelta>::records_from_wire_bytes_for_with_limits(
-            bytes,
-            &self.state,
-            decode_limits(max_collection_elements, maxRecords),
-        )
-        .map_err(event_log_decode_js_error)?;
+        let log = self
+            .replica
+            .decode_log_bytes(bytes, decode_limits(max_collection_elements, maxRecords))
+            .map_err(|e| match e {
+                ReplicaError::LogDecode(e) => event_log_decode_js_error(e),
+                _ => unreachable!(),
+            })?;
         if log.iter().any(|r| {
-            safemesh_crdt::ownership::check_counter_record(self.state.len(), r.id, &r.delta)
-                .is_err()
+            safemesh_crdt::ownership::check_counter_record(
+                self.replica.state().len(),
+                r.id,
+                &r.delta,
+            )
+            .is_err()
         }) {
             return Err(safe_mesh_error(
                 2,
@@ -673,20 +675,15 @@ impl SafeMeshGCounterReplica {
         Ok(log
             .iter()
             .cloned()
-            .map(|record| {
-                self.log
-                    .admit_with(&mut self.state, record, |state, delta| {
-                        state.apply_delta(delta.clone());
-                    })
-            })
+            .map(|record| self.replica.admit(record))
             .map(admission_name)
             .collect())
     }
 
     #[wasm_bindgen(js_name = logBytes)]
     pub fn log_bytes(&self) -> Result<Vec<u8>, JsValue> {
-        self.log
-            .to_wire_bytes()
+        self.replica
+            .log_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode event log"))
     }
 
@@ -708,18 +705,18 @@ impl SafeMeshGCounterReplica {
     /// The Rust-core total behind [`Self::value`]; not exported, so host-side
     /// tests can read it without constructing a JavaScript value.
     fn total(&self) -> u128 {
-        self.state.value()
+        self.replica.state().value()
     }
 
     /// Compare the Rust-core carrier states without reproducing its equality in JavaScript.
     #[wasm_bindgen(js_name = sameStateAs)]
     pub fn same_state_as(&self, other: &SafeMeshGCounterReplica) -> bool {
-        self.state == other.state
+        self.replica.state() == other.replica.state()
     }
 
     #[wasm_bindgen(js_name = state)]
     pub fn state(&self) -> Vec<u64> {
-        self.state.state().to_vec()
+        self.replica.state().state().to_vec()
     }
 }
 
@@ -1951,14 +1948,13 @@ impl SafeMeshGCounterReplica {
     pub fn new(replica_id: u64, replicas: usize) -> Self {
         SafeMeshGCounterReplica {
             replica_id,
-            state: GCounter::new(replicas),
-            log: EventLog::with_replica_count(replicas),
+            replica: Replica::new(GCounter::new(replicas)),
         }
     }
 
     pub fn append_bump(&mut self, counter_replica: usize, tally: u64) -> Result<Vec<u8>, JsValue> {
         if safemesh_crdt::ownership::check_counter_record(
-            self.state.len(),
+            self.replica.state().len(),
             safemesh_crdt::RecordId {
                 replica: self.replica_id,
                 sequence: 1,
@@ -1979,24 +1975,15 @@ impl SafeMeshGCounterReplica {
             replica: counter_replica,
             tally,
         };
-        let id = self
-            .log
-            .append_with(
-                &mut self.state,
-                self.replica_id,
-                delta.clone(),
-                |state, delta| {
-                    state.apply_delta(delta.clone());
-                },
-            )
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
-        Record { id, delta }
+        self.replica
+            .append(self.replica_id, delta)
+            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
     }
 
     pub fn version_for(&self, replica: u64) -> u64 {
-        self.log.version().get(replica)
+        self.replica.version().get(replica)
     }
 }
 impl SafeMeshEnableWinsFlagReplica {
@@ -2571,8 +2558,16 @@ mod tests {
 
     #[test]
     fn wasm_all_replica_batches_report_collisions() {
+        macro_rules! view {
+            ($replica:ident) => {
+                (&$replica.state, &$replica.log)
+            };
+            ($replica:ident, core) => {
+                ($replica.replica.state(), $replica.replica.log())
+            };
+        }
         macro_rules! check {
-            ($replica:expr, $first:expr, $second:expr) => {{
+            ($replica:expr, $first:expr, $second:expr $(, $core:ident)?) => {{
                 let first = Record {
                     id: RecordId {
                         replica: 1,
@@ -2588,11 +2583,11 @@ mod tests {
                 replica
                     .merge_record_bytes(&first.to_wire_bytes().unwrap(), None)
                     .unwrap();
-                let state = replica.state.clone();
-                let log = replica.log.clone();
-                let mut incoming = EventLog::for_crdt(&replica.state);
+                let state = view!(replica $(, $core)?).0.clone();
+                let log = view!(replica $(, $core)?).1.clone();
+                let mut incoming = EventLog::for_crdt(view!(replica $(, $core)?).0);
                 assert_eq!(
-                    incoming.insert_record(&replica.state, second),
+                    incoming.insert_record(view!(replica $(, $core)?).0, second),
                     safemesh_crdt::Admission::Accepted
                 );
                 assert_eq!(
@@ -2601,8 +2596,8 @@ mod tests {
                         .unwrap(),
                     vec!["collision"]
                 );
-                assert_eq!(replica.state, state);
-                assert_eq!(replica.log, log);
+                assert_eq!(view!(replica $(, $core)?).0, &state);
+                assert_eq!(view!(replica $(, $core)?).1, &log);
             }};
         }
         check!(
@@ -2614,7 +2609,8 @@ mod tests {
             GCounterDelta {
                 replica: 1,
                 tally: 9
-            }
+            },
+            core
         );
         check!(
             SafeMeshEnableWinsFlagReplica::new(2),
@@ -2687,8 +2683,16 @@ mod tests {
 
     #[test]
     fn wasm_record_and_log_paths_name_the_same_verdict() {
+        macro_rules! view {
+            ($replica:ident) => {
+                (&$replica.state, &$replica.log)
+            };
+            ($replica:ident, core) => {
+                ($replica.replica.state(), $replica.replica.log())
+            };
+        }
         macro_rules! check {
-            ($replica:expr, $first:expr, $second:expr) => {{
+            ($replica:expr, $first:expr, $second:expr $(, $core:ident)?) => {{
                 let first = Record {
                     id: RecordId {
                         replica: 1,
@@ -2707,17 +2711,17 @@ mod tests {
                         .unwrap(),
                     "accepted"
                 );
-                let state = replica.state.clone();
-                let log = replica.log.clone();
+                let state = view!(replica $(, $core)?).0.clone();
+                let log = view!(replica $(, $core)?).1.clone();
                 // A redelivery and a conflicting payload each get one verdict, named
                 // the same on both paths, and neither moves state or the log.
                 for (record, verdict) in [(first, "duplicate"), (second, "collision")] {
                     let single = replica
                         .merge_record_bytes(&record.to_wire_bytes().unwrap(), None)
                         .unwrap();
-                    let mut incoming = EventLog::for_crdt(&replica.state);
+                    let mut incoming = EventLog::for_crdt(view!(replica $(, $core)?).0);
                     assert_eq!(
-                        incoming.insert_record(&replica.state, record),
+                        incoming.insert_record(view!(replica $(, $core)?).0, record),
                         safemesh_crdt::Admission::Accepted
                     );
                     let batch = replica
@@ -2729,8 +2733,8 @@ mod tests {
                     );
                     assert_eq!(single, verdict);
                     assert_eq!(batch, vec![single]);
-                    assert_eq!(replica.state, state);
-                    assert_eq!(replica.log, log);
+                    assert_eq!(view!(replica $(, $core)?).0, &state);
+                    assert_eq!(view!(replica $(, $core)?).1, &log);
                 }
             }};
         }
@@ -2743,7 +2747,8 @@ mod tests {
             GCounterDelta {
                 replica: 1,
                 tally: 9
-            }
+            },
+            core
         );
         check!(
             SafeMeshPnCounterReplica::new(2, 2),
