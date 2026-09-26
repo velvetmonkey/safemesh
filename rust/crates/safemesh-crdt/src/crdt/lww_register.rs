@@ -88,11 +88,12 @@ impl<V: Ord + Clone> Mergeable for LwwRegister<V> {
 impl<V: Ord + Clone> Crdt for LwwRegister<V> {
     type Delta = LwwRegisterDelta<V>;
 
-    /// Accepts every record. A write that loses to the current entry under the
-    /// total order `(timestamp, replica, value)` is subsumed, which is convergence,
-    /// not loss: a fresh register applies the same write. Every
-    /// `(timestamp, replica, value)` is in the register's domain.
-    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
+    /// A record may only assign its author's dot. Losing assignments with a
+    /// matching author remain valid and are subsumed by the total-order rule.
+    fn validate_record(&self, id: RecordId, delta: &Self::Delta) -> Result<(), WireError> {
+        if delta.replica != id.replica {
+            return Err(WireError::OwnershipViolation);
+        }
         Ok(())
     }
 
