@@ -1,5 +1,12 @@
 // Example synchronous Node Store: exclusive wx lock, atomic rename, file fsync
 // and directory fsync (POSIX filesystems). No stale-lock recovery is automatic.
+// After a crash leaves lease.lock, stop all programs that can open this store and
+// prevent their supervisors from restarting them. Check the crashed process has
+// exited (for example with ps), and use lsof /absolute/store/root/lease.lock to
+// check for open holders. An empty lsof result alone is not enough: keep every
+// potential store user stopped while removing /absolute/store/root/lease.lock
+// with rm, then restart in mode "restart". Do not remove the snapshot or anchor.
+// After a crash between completed edits, restart reads the last committed value.
 // The independent anchorPath MUST be retained outside snapshot rollback policy.
 // Anchor and envelope are separate durable replacements: interruption between
 // them fails closed at restart; this example does not promise recovery then.

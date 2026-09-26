@@ -2,13 +2,14 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { FileSystemStore } from '../examples/node-filesystem-store.mjs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const pkg = resolve(process.argv[2]);
 const wasm = createRequire(import.meta.url)(join(pkg, 'safemesh_wasm.js'));
-const root = mkdtempSync(join(process.env.TMPDIR, 'managed-counter-'));
+const root = mkdtempSync(join(tmpdir(), 'managed-counter-'));
 if (process.argv.includes('--low-level')) {
   // (a) The low-level counter acknowledges and exposes an edit before saving.
   const live = new wasm.SafeMeshGCounterReplica(0n, 2);

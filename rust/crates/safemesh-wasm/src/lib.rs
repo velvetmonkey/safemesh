@@ -4521,8 +4521,12 @@ struct ManagedCounterState {
 }
 
 /// Owns a synchronous Store lease. Call close explicitly before free.
-/// All exported methods borrow through try_borrow: callback reentry is rejected
-/// before touching state, including read/close/free attempts during commit.
+/// Instance methods implemented in Rust borrow through try_borrow: callback reentry
+/// is rejected as REENTRY before touching state, including read/close during commit.
+/// The wasm-bindgen-generated free() is not guarded by try_borrow. Calling free()
+/// during commit throws a wasm-bindgen ownership error and invalidates the JS handle;
+/// subsequent instance methods on that handle throw a null-pointer error. Do not
+/// call free() from a Store callback; close the handle before freeing it.
 #[wasm_bindgen]
 pub struct SafeMeshManagedGCounter {
     store: JsValue,
