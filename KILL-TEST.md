@@ -18,7 +18,7 @@ cargo run -p safemesh-crdt --example cold_chain_kill_test
 The scenario models a field sample moving from clinic to courier to lab while a lab-side freezer alert is recorded during a partition. The example uses:
 
 - `EventLog` for append/merge/since/version record exchange.
-- `InMemoryTransport` plus `anti_entropy` for drop, duplicate, reorder, partition, and heal.
+- `InMemoryTransport` plus `queue_anti_entropy` for drop, duplicate, reorder, partition, and heal.
 - `GSet` for known samples.
 - `OrSet` for active custody holders and active alerts.
 - `Rga` for ordered audit entries.
