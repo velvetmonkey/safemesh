@@ -1263,9 +1263,11 @@ impl PyStringOrSetRecord {
 /// Every value is computed by `safemesh_crdt::OrSet<String, u64>` and
 /// `safemesh_crdt::EventLog`. The optional allocated lifecycle checks ownership
 /// and holds a live-author claim within this Python process. Tokens remain
-/// global to the set, exactly as in `OrSet`. Method names, verdict strings and
-/// error texts match the WASM `SafeMeshStringOrSetReplica`; errors raise
-/// `ValueError`.
+/// global to the set, exactly as in `OrSet`. Python exposes the WASM
+/// `SafeMeshStringOrSetReplica` replica, read, merge, inspect and allocated-writer
+/// operations in snake_case where WASM uses camelCase. The WASM lifecycle methods
+/// `free()` and `[Symbol.dispose]()` have no Python counterpart. Verdict strings
+/// and error texts match for the shared operations; errors raise `ValueError`.
 #[pyclass(name = "StringOrSetReplica")]
 pub struct PyStringOrSetReplica {
     replica_id: u64,
@@ -3343,7 +3345,23 @@ mod string_orset_tests {
 
     #[test]
     fn python_allocated_history_refuses_gaps_zero_and_max_sequence() {
-        for sequence in [0, 2, u64::MAX] {
+        let mut zero = replica(0);
+        assert_eq!(
+            zero.log.insert_record(
+                &zero.state,
+                Record {
+                    id: RecordId {
+                        replica: 0,
+                        sequence: 0,
+                    },
+                    delta: OrSetDelta::Remove { tokens: vec![] },
+                },
+            ),
+            safemesh_crdt::Admission::Invalid(WireError::ZeroSequenceRemove { replica: 0 })
+        );
+        assert!(zero.log.records().is_empty());
+        assert_eq!(zero.checked_next(1), Ok(1));
+        for sequence in [2, u64::MAX] {
             let mut replica = replica(0);
             replica.log.insert_record(
                 &replica.state,

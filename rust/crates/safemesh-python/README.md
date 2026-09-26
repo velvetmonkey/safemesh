@@ -137,7 +137,9 @@ core's token semantics, including token reuse; the binding does not allocate IDs
 `StringOrSetReplica` carries a Rust `OrSet<String, u64>` behind an `EventLog`,
 so records can be replayed, deduplicated and repaired from a log the same way
 `GCounterReplica` does. It is the Python counterpart of the WASM
-`SafeMeshStringOrSetReplica` and has every one of its methods, in snake_case.
+`SafeMeshStringOrSetReplica`, exposing its replica, read, merge, inspect and
+allocated-writer operations in snake_case. The WASM lifecycle methods `free()`
+and `[Symbol.dispose]()` have no Python counterpart.
 It sits beside `OrSet`, which is unchanged.
 
 ```python
@@ -203,6 +205,8 @@ the second one as `"collision"`. Cross-process exclusion is the caller's job.
 
 ### Differences from WASM
 
+- Python uses snake_case method names where WASM uses camelCase.
+
 - Errors raise `ValueError` with the WASM message. WASM's numeric
   `SafeMeshError` code is not carried over. Error texts are the WASM strings
   unchanged, so the append refusal on an allocated replica names the WASM
@@ -215,8 +219,9 @@ the second one as `"collision"`. Cross-process exclusion is the caller's job.
 - `max_collection_elements` is keyword-only.
 - `add_entries()` returns `(element, token)` tuples where WASM returns entry
   objects with `element()` and `token()`.
-- WASM releases an allocated claim on `free()`. Python has no `free()`; the
-  claim is released when the object is deallocated (`del` of the last
+- WASM releases an allocated claim on `free()` or `[Symbol.dispose]()`. Python
+  has neither lifecycle method; the claim is released when the object is
+  deallocated (`del` of the last
   reference, or garbage collection).
 - The live-author registry is per Python process instead of per WASM instance,
   because a Python object can be used and dropped on any thread.
