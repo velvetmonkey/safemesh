@@ -119,3 +119,55 @@ for cls, payload in [(sm.GSet, gset_bytes), (sm.Rga, rga_bytes)]:
 raises(ValueError, lambda: sm.GSet.from_wire_bytes(rga_bytes))
 assert not hasattr(sm.PnCounter, 'to_wire_bytes')
 assert not hasattr(sm.PnCounter, 'from_wire_bytes')
+
+
+def retention_python_merge_log_bytes_all_5000():
+    import struct
+
+    def identities(frame):
+        offset = 17 + struct.unpack_from('<I', frame, 13)[0]
+        shape = frame[offset]
+        offset += 1 + (8 if shape else 0)
+        count = struct.unpack_from('<I', frame, offset)[0]
+        offset += 4
+        result = []
+        for _ in range(count):
+            length = struct.unpack_from('<I', frame, offset)[0]
+            offset += 4
+            result.append(struct.unpack_from('<QQ', frame, offset + 1))
+            offset += length
+        return sorted(result)
+
+    authors = [sm.LwwMapReplica(author) for author in range(3)]
+    source = sm.LwwMapReplica(0)
+    expected_ids = []
+    for index in range(5000):
+        author = index % 3
+        record = authors[author].append_set(index, index + 1, author, index + 1)
+        assert source.merge_record_bytes(record) == 'accepted'
+        expected_ids.append((author, index // 3 + 1))
+    log = source.log_bytes()
+    target = sm.LwwMapReplica(0)
+    target.append_set(999999, 1, 0, 99)
+    before = target.log_bytes()
+    keys_before = target.visible_keys()
+    try:
+        target.merge_log_bytes(log, max_records=4999)
+    except ValueError as error:
+        assert 'RecordLimitExceeded' in str(error), str(error)
+    else:
+        raise AssertionError('retention budget must refuse, never truncate')
+    assert target.log_bytes() == before
+    assert target.visible_keys() == keys_before
+    target = sm.LwwMapReplica(0)
+    assert target.merge_log_bytes(log, max_records=5000) == ['accepted'] * 5000
+    assert len(identities(target.log_bytes())) == 5000
+    assert identities(target.log_bytes()) == sorted(expected_ids)
+    assert target.log_bytes() == log
+    assert target.visible_keys() == list(range(5000))
+    for index in range(5000):
+        assert target.value_or(index, 0) == index + 1
+    print('retention_python_merge_log_bytes_all_5000 PASS')
+
+
+retention_python_merge_log_bytes_all_5000()

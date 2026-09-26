@@ -2240,3 +2240,167 @@ fn replica_differential_frames_restore_and_second_merge() {
         assert_replica_equal(&replica, &state, &log);
     }
 }
+
+// Each accepted add has a unique element as well as a unique record identity.
+// Authors alternate; each author's sequence is contiguous independently.
+fn retention_history() -> Replica<safemesh_crdt::OrSet<String, u64>> {
+    use safemesh_crdt::{OrSet, OrSetDelta};
+    let mut replica = Replica::new(OrSet::new());
+    for index in 0..5_000u64 {
+        assert_eq!(
+            replica.admit(Record {
+                id: RecordId {
+                    replica: index % 3,
+                    sequence: index / 3 + 1
+                },
+                delta: OrSetDelta::Add {
+                    element: format!("retained-{index:04}"),
+                    token: index + 1
+                },
+            }),
+            Admission::Accepted
+        );
+    }
+    replica
+}
+
+fn assert_retention(
+    actual: &Replica<safemesh_crdt::OrSet<String, u64>>,
+    expected: &Replica<safemesh_crdt::OrSet<String, u64>>,
+) {
+    use std::collections::BTreeSet;
+    let ids = |r: &Replica<safemesh_crdt::OrSet<String, u64>>| {
+        r.log()
+            .records()
+            .iter()
+            .map(|r| (r.id.replica, r.id.sequence))
+            .collect::<BTreeSet<_>>()
+    };
+    assert_eq!(
+        actual.log().records().len(),
+        5_000,
+        "retain all record count"
+    );
+    assert_eq!(ids(actual), ids(expected), "retain all record identities");
+    assert_eq!(
+        actual.state(),
+        expected.state(),
+        "retain every unique element"
+    );
+    assert_eq!(
+        actual.log_bytes().unwrap(),
+        expected.log_bytes().unwrap(),
+        "retain byte-identical export"
+    );
+}
+
+#[test]
+fn retention_event_log_save_load_all_5000() {
+    use safemesh_crdt::{DecodeLimits, OrSet, OrSetDelta};
+    let expected = retention_history();
+    let bytes = expected.log_bytes().unwrap();
+    for log in [
+        EventLog::<OrSetDelta<String, u64>>::from_wire_bytes(&bytes).unwrap(),
+        EventLog::from_wire_bytes_with_limits(&bytes, DecodeLimits::default()).unwrap(),
+        EventLog::from_wire_bytes_for_with_limits(&bytes, &OrSet::new(), DecodeLimits::default())
+            .unwrap(),
+    ] {
+        let mut actual = Replica::new(OrSet::new());
+        for record in log.records() {
+            assert_eq!(actual.admit(record.clone()), Admission::Accepted);
+        }
+        assert_retention(&actual, &expected);
+        assert_eq!(log.to_wire_bytes().unwrap(), bytes);
+    }
+}
+
+#[test]
+fn retention_replica_log_bytes_restore_all_5000() {
+    let expected = retention_history();
+    let actual = Replica::restore(
+        safemesh_crdt::OrSet::new(),
+        &expected.log_bytes().unwrap(),
+        safemesh_crdt::DecodeLimits::default(),
+    )
+    .unwrap();
+    assert_retention(&actual, &expected);
+}
+
+#[test]
+fn retention_replica_merge_log_bytes_fresh_all_5000() {
+    let expected = retention_history();
+    let mut actual = Replica::new(safemesh_crdt::OrSet::new());
+    assert_eq!(
+        actual
+            .merge_log_bytes(
+                &expected.log_bytes().unwrap(),
+                safemesh_crdt::DecodeLimits::default()
+            )
+            .unwrap(),
+        vec![Admission::Accepted; 5_000]
+    );
+    assert_retention(&actual, &expected);
+}
+
+#[test]
+fn retention_loader_record_budget_refuses_without_partial_history() {
+    use safemesh_crdt::{DecodeError, DecodeLimits, OrSet, OrSetDelta};
+    let expected = retention_history();
+    let bytes = expected.log_bytes().unwrap();
+    let refusal = DecodeLimits {
+        max_records: Some(4_999),
+        ..DecodeLimits::default()
+    };
+    let exact = DecodeLimits {
+        max_records: Some(5_000),
+        ..refusal
+    };
+    let error = DecodeError::RecordLimitExceeded { max_records: 4_999 };
+    let carrier = OrSet::<String, u64>::new();
+    let before = carrier.clone();
+    assert_eq!(
+        EventLog::<OrSetDelta<String, u64>>::from_wire_bytes_with_limits(&bytes, refusal),
+        Err(error)
+    );
+    assert_eq!(
+        EventLog::from_wire_bytes_for_with_limits(&bytes, &carrier, refusal),
+        Err(error)
+    );
+    assert_eq!(
+        EventLog::records_from_wire_bytes_for_with_limits(&bytes, &carrier, refusal),
+        Err(error)
+    );
+    assert_eq!(carrier, before);
+    for log in [
+        EventLog::<OrSetDelta<String, u64>>::from_wire_bytes_with_limits(&bytes, exact).unwrap(),
+        EventLog::from_wire_bytes_for_with_limits(&bytes, &carrier, exact).unwrap(),
+    ] {
+        assert_eq!(&log, expected.log());
+        assert_eq!(log.to_wire_bytes().unwrap(), bytes);
+    }
+    assert_eq!(
+        EventLog::records_from_wire_bytes_for_with_limits(&bytes, &carrier, exact).unwrap(),
+        expected.log().records()
+    );
+    assert_eq!(
+        Replica::restore(carrier.clone(), &bytes, refusal).err(),
+        Some(ReplicaError::LogDecode(error))
+    );
+    assert_eq!(carrier, before);
+    assert_retention(
+        &Replica::restore(carrier.clone(), &bytes, exact).unwrap(),
+        &expected,
+    );
+    let mut destination = Replica::new(carrier);
+    destination.admit(expected.log().records()[0].clone());
+    let before_state = destination.state().clone();
+    let before_bytes = destination.log_bytes().unwrap();
+    assert_eq!(
+        destination.merge_log_bytes(&bytes, refusal),
+        Err(ReplicaError::LogDecode(error))
+    );
+    assert_eq!(destination.state(), &before_state);
+    assert_eq!(destination.log_bytes().unwrap(), before_bytes);
+    destination.merge_log_bytes(&bytes, exact).unwrap();
+    assert_retention(&destination, &expected);
+}
