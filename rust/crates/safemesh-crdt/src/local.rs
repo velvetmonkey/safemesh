@@ -141,7 +141,7 @@ impl<C: Crdt> Drop for LocalReplica<C> {
 
 // Without a fence, existing directories may be leftovers from interrupted mkdir.
 // No persistent provenance identifies a safe stopping ancestor, so sync the
-// resolved parent chain through the filesystem root before creating the fence.
+// resolved and traversed parent chains through / before creating the fence.
 fn prepare_durable_root(root: &Path, config: WriterConfig) -> io::Result<()> {
     if root
         .join(format!("writer-{}.fence", config.writer))
@@ -194,8 +194,22 @@ fn create_durable_root_using(
         }
     }
     let resolved = root.canonicalize()?;
-    for parent in resolved.ancestors().skip(1) {
-        sync_parent(parent)?;
+    let mut parents: Vec<_> = resolved
+        .ancestors()
+        .skip(1)
+        .map(Path::to_path_buf)
+        .collect();
+    // Keep entries needed to traverse symlinks or cancelled `..` components
+    // durable too, even if an interrupted earlier call created them.
+    for parent in root.ancestors().skip(1) {
+        let parent = parent.canonicalize()?;
+        if !parents.contains(&parent) {
+            parents.push(parent);
+        }
+    }
+    parents.sort_by_key(|parent| core::cmp::Reverse(parent.components().count()));
+    for parent in parents {
+        sync_parent(&parent)?;
     }
     Ok(())
 }
@@ -1284,6 +1298,26 @@ mod durable_tests {
         assert_eq!(synced[1], existing);
         let replica = DurableReplica::counter(&leftover, config()).unwrap();
         assert!(leftover.join("writer-0.fence").is_file());
+        drop(replica);
+    }
+
+    #[test]
+    fn fresh_root_syncs_cancelled_traversal_parents() {
+        let existing = root();
+        let cancelled = existing.join("interrupted/child");
+        fs::create_dir_all(&cancelled).unwrap();
+        let store = existing.join("interrupted/child/../../store");
+        fs::create_dir(existing.join("store")).unwrap();
+        let mut synced = Vec::new();
+        create_durable_root_with(&store, |parent| {
+            synced.push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        assert!(synced.contains(&existing.join("interrupted")));
+        assert!(synced.contains(&existing));
+        assert_eq!(synced.last().unwrap(), Path::new("/"));
+        let replica = DurableReplica::counter(&store, config()).unwrap();
         drop(replica);
     }
 
