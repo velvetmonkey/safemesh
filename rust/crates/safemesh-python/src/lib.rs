@@ -1178,9 +1178,9 @@ impl PyOrSet {
     }
 }
 
-// The WASM `SafeMeshStringOrSetReplica` error texts, message for message. Each
-// decode path keeps one stable prefix and names the core `WireError` as its
-// cause, so the same malformed bytes read the same on either binding.
+// Record-decode texts match WASM. Log-decode texts normally match too, but
+// Python prefixes zero-sequence core errors with "failed to decode event log: "
+// while WASM returns those reasons alone.
 fn string_orset_record_decode_error(error: WireError) -> String {
     match error {
         WireError::CollectionElementLimitExceeded { max_elements } => {
@@ -1267,7 +1267,12 @@ impl PyStringOrSetRecord {
 /// `SafeMeshStringOrSetReplica` replica, read, merge, inspect and allocated-writer
 /// operations in snake_case where WASM uses camelCase. The WASM lifecycle methods
 /// `free()` and `[Symbol.dispose]()` have no Python counterpart. Verdict strings
-/// and error texts match for the shared operations; errors raise `ValueError`.
+/// match for the shared operations. Record-decode and allocated-writer refusal texts
+/// match WASM; Python raises `ValueError`. Invalid record admission differs:
+/// for example, a sequence-0 OR-Set remove raises `ValueError("invalid record")`
+/// in Python, while WASM names the reason (`ZeroSequenceRemove`). For a log
+/// containing that record, Python prefixes the core reason with
+/// `failed to decode event log: `; WASM returns the core reason alone.
 #[pyclass(name = "StringOrSetReplica")]
 pub struct PyStringOrSetReplica {
     replica_id: u64,
@@ -3265,7 +3270,8 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
 }
 
 // Mirrors the `wasm_string_orset_*` host tests in safemesh-wasm: same inputs,
-// same verdict strings, same error texts, checked against the Rust core.
+// same verdict strings and the tested decode/allocated-writer refusal texts, checked against
+// the Rust core. Invalid record admission error texts differ between bindings.
 #[cfg(test)]
 mod string_orset_tests {
     use super::*;

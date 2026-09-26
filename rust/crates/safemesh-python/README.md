@@ -207,10 +207,14 @@ the second one as `"collision"`. Cross-process exclusion is the caller's job.
 
 - Python uses snake_case method names where WASM uses camelCase.
 
-- Errors raise `ValueError` with the WASM message. WASM's numeric
-  `SafeMeshError` code is not carried over. Error texts are the WASM strings
-  unchanged, so the append refusal on an allocated replica names the WASM
-  method: `allocated replica rejects caller-supplied tokens; use
+- Record-decode and allocated-writer refusal texts match WASM; Python raises
+  `ValueError` without WASM's numeric `SafeMeshError` code. Invalid record
+  admission differs: for example, a sequence-0 OR-Set remove raises
+  `ValueError("invalid record")` in Python, while WASM names the reason
+  (`ZeroSequenceRemove`). For a log containing that record, Python prefixes
+  the core reason with `failed to decode event log: `; WASM returns the core
+  reason alone. The append refusal on an allocated replica retains
+  the WASM method name: `allocated replica rejects caller-supplied tokens; use
   appendAllocatedAdd`.
 - Integer arguments go through the same checks as the other Python classes: a
   bool raises `TypeError`, a negative or too-large integer raises
