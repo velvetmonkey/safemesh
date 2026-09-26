@@ -46,6 +46,11 @@ typedef struct SafeMeshU64s {
 extern "C" {
 #endif // __cplusplus
 
+/**
+ * Fresh counter, maximum 4096 replicas (the default wire author limit).
+ * Larger counts return NULL before allocation. Storage uses zeroed allocation.
+ * Returns NULL if the replica vector or handle cannot be allocated.
+ */
 struct SafeMeshGCounter *safemesh_gcounter_new(size_t replicas);
 
 /**
