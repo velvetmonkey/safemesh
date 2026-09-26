@@ -2063,13 +2063,7 @@ fn replica_differential_admit_append_gaps_exhaustion() {
     let mut state = GCounter::new(2);
     let mut log = EventLog::for_crdt(&state);
     let mut replica = Replica::new(state.clone());
-    for r in [
-        record(2, 5),
-        record(2, 5),
-        record(2, 9),
-        record(1, 4),
-        record(0, 8),
-    ] {
+    for r in [record(2, 5), record(2, 5), record(2, 9), record(0, 8)] {
         let expected = log.admit_with(&mut state, r.clone(), |s, d| s.apply_delta(d.clone()));
         assert_eq!(replica.admit(r), expected);
         assert_replica_equal(&replica, &state, &log);
@@ -2082,6 +2076,13 @@ fn replica_differential_admit_append_gaps_exhaustion() {
         .unwrap();
     assert_eq!(replica.append(1, delta.clone()), Ok(Record { id, delta }));
     assert_eq!(id.sequence, 3);
+    assert_eq!(replica.version().get(1), 0);
+    let missing = record(1, 4);
+    assert_eq!(
+        replica.admit(missing.clone()),
+        log.admit_with(&mut state, missing, |s, d| s.apply_delta(d.clone()))
+    );
+    assert_eq!(replica.version().get(1), 3);
     assert_replica_equal(&replica, &state, &log);
     let r = record(u64::MAX, 10);
     assert_eq!(
