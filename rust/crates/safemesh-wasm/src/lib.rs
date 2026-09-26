@@ -3564,6 +3564,35 @@ mod tests {
     }
 
     #[test]
+    fn wasm_string_orset_remove_admission_uses_token_sets() {
+        let mut reader = SafeMeshStringOrSetReplica::new(2);
+        let bytes = |tokens| {
+            Record {
+                id: RecordId {
+                    replica: 1,
+                    sequence: 1,
+                },
+                delta: OrSetDelta::<String, u64>::Remove { tokens },
+            }
+            .to_wire_bytes()
+            .unwrap()
+        };
+        for (tokens, expected) in [
+            (vec![1, 2], "accepted"),
+            (vec![2, 1], "duplicate"),
+            (vec![1, 2, 2], "duplicate"),
+            (vec![1, 3], "collision"),
+            (vec![], "collision"),
+        ] {
+            assert_eq!(
+                reader.try_merge_record_bytes(&bytes(tokens)).unwrap(),
+                expected
+            );
+        }
+        assert_eq!(reader.tombstones(), vec![1, 2]);
+    }
+
+    #[test]
     fn wasm_string_orset_replica_rejects_duplicate_record_without_moving_state() {
         let mut author = SafeMeshStringOrSetReplica::new(1);
         let mut reader = SafeMeshStringOrSetReplica::new(2);
