@@ -2090,6 +2090,84 @@ for make, append, read in [
     }
 
     #[test]
+    fn python_lww_foreign_writer_refused_in_single_and_log_merge() {
+        struct Unchecked<D>(std::marker::PhantomData<D>);
+        impl<D> safemesh_crdt::Mergeable for Unchecked<D> {
+            fn merge(&mut self, _: &Self) -> Result<(), safemesh_crdt::MergeError> {
+                Ok(())
+            }
+        }
+        impl<D> Crdt for Unchecked<D> {
+            type Delta = D;
+            fn validate_record(&self, _: RecordId, _: &D) -> Result<(), safemesh_crdt::WireError> {
+                Ok(())
+            }
+            fn apply_delta(&mut self, _: D) {}
+        }
+        with_python(|py| {
+            macro_rules! check {
+                ($replica:expr, $delta:expr) => {{
+                    let record = Record {
+                        id: RecordId {
+                            replica: 0,
+                            sequence: 1,
+                        },
+                        delta: $delta,
+                    };
+                    let mut replica = $replica;
+                    let state = replica.state.clone();
+                    let log = replica.log.clone();
+                    assert!(replica
+                        .merge_record_bytes(&record.to_wire_bytes().unwrap())
+                        .is_err());
+                    let unchecked = Unchecked(std::marker::PhantomData);
+                    let mut incoming = EventLog::new();
+                    assert_eq!(
+                        incoming.insert_record(&unchecked, record),
+                        safemesh_crdt::Admission::Accepted
+                    );
+                    assert!(replica
+                        .merge_log_bytes(&incoming.to_wire_bytes().unwrap(), None)
+                        .is_err());
+                    assert_eq!(replica.state, state);
+                    assert_eq!(replica.log, log);
+                    assert_eq!(replica.log.since(log.version()).len(), 0);
+                }};
+            }
+            for foreign in [1, 99, u32::MAX as u64 + 1, u64::MAX] {
+                check!(
+                    PyLwwRegisterReplica::new(0),
+                    LwwRegisterDelta {
+                        timestamp: 100,
+                        replica: foreign,
+                        value: 9
+                    }
+                );
+                check!(
+                    PyLwwMapReplica::new(0),
+                    LwwMapDelta::Set {
+                        key: 1,
+                        timestamp: 100,
+                        replica: foreign,
+                        value: 9
+                    }
+                );
+                check!(
+                    PyLwwMapReplica::new(0),
+                    LwwMapDelta::Remove {
+                        key: 1,
+                        timestamp: 100,
+                        replica: foreign
+                    }
+                );
+            }
+            let mut writer = PyLwwRegisterReplica::new(0);
+            writer.append_set(py, 1, 0, 7).unwrap();
+            assert_eq!(writer.value_or(0), 7);
+        });
+    }
+
+    #[test]
     fn python_lww_replicas_exchange_canonical_record_bytes() {
         with_python(|py| {
             let mut left = PyLwwRegisterReplica::new(1);

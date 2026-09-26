@@ -252,7 +252,9 @@ console.log("NUMERIC_LEGIT_VALUES=true");
 let legitimateCases = 0;
 for (const [className, method, types] of numericExports) {
   for (const bigint of [0n, maxU64]) {
-    const object = className && method !== "constructor" && method !== "createAllocated" ? fresh(className) : null;
+    const object = className?.includes("Lww") && className.endsWith("Replica") && method.startsWith("append")
+      ? new wasm[className](bigint)
+      : className && method !== "constructor" && method !== "createAllocated" ? fresh(className) : null;
     const args = types.map(t => t === "usize" ? (method === "constructor" ? 2 : 0) : t === "String" ? "item" : t === "Vec<u64>" ? new BigUint64Array([bigint]) : bigint);
     if (method === "createAllocated") { args[0] = 2n; args[1] = bigint === 0n ? 0n : 1n; }
     let returned;
@@ -495,3 +497,31 @@ assert.deepEqual(capacityFailures, []);
   }
   console.log(`LEGACY_EVENT_LOG_CASES=${legacyCases}`);
 }
+
+// LWW authorship applies to both record and complete-log admission.
+for (const foreign of [1n, 99n, 2n ** 32n, 2n ** 64n - 1n]) {
+  for (const kind of ["register", "map-set", "map-remove"]) {
+    const make = () => kind === "register"
+      ? new wasm.SafeMeshLwwRegisterReplica(0n)
+      : new wasm.SafeMeshLwwMapReplica(0n);
+    const author = make();
+    const receiver = make();
+    const valid = kind === "register" ? author.appendSet(1n, 0n, 7n)
+      : kind === "map-set" ? author.appendSet(1n, 1n, 0n, 7n)
+      : author.appendRemove(1n, 1n, 0n);
+    const invalid = Uint8Array.from(valid);
+    new DataView(invalid.buffer).setBigUint64(kind === "register" ? 30 : 38, foreign, true);
+    const before = receiver.logBytes();
+    const beforeState = snapshot(receiver);
+    assertSafeMeshError(() => receiver.mergeRecordBytes(invalid), 1, "invalid record");
+    caughtError(() => receiver.mergeLogBytes(replaceRecordInLog(author.logBytes(), valid, invalid)));
+    assert.deepEqual(receiver.logBytes(), before);
+    assert.deepEqual(snapshot(receiver), beforeState);
+    assert.equal(receiver.versionFor(0n), 0n);
+    assert.equal(receiver.mergeRecordBytes(valid), "accepted");
+    assert.equal(receiver.versionFor(0n), 1n);
+    author.free();
+    receiver.free();
+  }
+}
+console.log("LWW_FOREIGN_WRITER_REFUSED=true");
