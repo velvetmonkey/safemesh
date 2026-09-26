@@ -22,7 +22,6 @@ absolute scratch directory; existing journey directories are deliberately
 rejected to preserve evidence and prevent accidental reuse of replica identity.
 
 ```sh
-export PATH=/home/monkey/bin:$PATH
 DEMO_WORK="$HOME/scratch/two-app-inventory"
 mkdir -p "$DEMO_WORK/wheels" "$DEMO_WORK/tmp"
 export TMPDIR="$DEMO_WORK/tmp"
