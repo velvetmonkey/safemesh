@@ -25,6 +25,12 @@ pub enum LocalError {
     History(WireError),
     InvalidHistory,
     Io(io::Error),
+    /// A `_with_limits` restart found a committed history that declares more
+    /// records than [`DecodeLimits::max_records`](crate::DecodeLimits). Checked
+    /// from the frame header before any record is read; the store is unchanged.
+    RecordLimitExceeded {
+        max_records: usize,
+    },
 }
 
 impl core::fmt::Display for LocalError {
@@ -44,6 +50,10 @@ impl core::fmt::Display for LocalError {
                 f.write_str("local history failed replay or sequence validation")
             }
             Self::Io(error) => write!(f, "local store I/O failed: {error}"),
+            Self::RecordLimitExceeded { max_records } => write!(
+                f,
+                "local history exceeds restart record budget: RecordLimitExceeded: {max_records}"
+            ),
         }
     }
 }
@@ -427,6 +437,62 @@ fn transaction_path(root: &Path, config: WriterConfig) -> PathBuf {
     root.join(format!("writer-{}.transaction", config.writer))
 }
 
+// Read at most `len` leading bytes; a shorter file yields all of its bytes.
+fn read_prefix(path: &Path, len: u64) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    File::open(path)?.take(len).read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+// The record count a committed transaction declares, from a bounded prefix: the
+// 24-byte allocation header, then the current EventLog frame's tag, length pair,
+// shape header and count. Neither the frame CRC nor any record is read, so a
+// corrupted count can be refused by budget before the full read would report it.
+// `None` means the prefix is not a current frame for this writer and delta
+// schema; the full checked read and decode then name the failure.
+fn declared_records<D: WireSchema>(
+    path: &Path,
+    config: WriterConfig,
+) -> Result<Option<usize>, LocalError> {
+    let schema = D::wire_schema();
+    let len = 24 + 1 + 8 + 4 + 4 + schema.len() + 1 + 8 + 4;
+    let bytes = read_prefix(path, len as u64)?;
+    let mut cursor = crate::WireCursor::new(&bytes);
+    let mut parse = || -> Result<Option<usize>, WireError> {
+        if cursor.read_u64()? != config.writers || cursor.read_u64()? != config.writer {
+            return Ok(None);
+        }
+        cursor.read_u64()?;
+        if cursor.read_u8()? != crate::codec::TAG_EVENT_LOG {
+            return Ok(None);
+        }
+        let body = cursor.read_u32()?;
+        if cursor.read_u32()? != !body || cursor.read_u32()? != u32::MAX {
+            return Ok(None);
+        }
+        let schema_len = cursor.read_len()?;
+        if cursor.read_exact(schema_len)? != schema.as_ref() {
+            return Ok(None);
+        }
+        match cursor.read_u8()? {
+            0 if !D::REQUIRES_ARITY => {}
+            1 => {
+                cursor.read_u64()?;
+            }
+            _ => return Ok(None),
+        }
+        cursor.read_len().map(Some)
+    };
+    Ok(parse().unwrap_or(None))
+}
+
+/// Largest durable history, in records, that SafeMesh supports. Histories are
+/// retained forever and every durable append rewrites the whole transaction, so
+/// the append cost grows with this size; `evidence/retention/results.md` records
+/// the benchmark that sets it. Pass it as [`DecodeLimits::max_records`](crate::DecodeLimits)
+/// to a `_with_limits` restart to refuse larger stores by name.
+pub const SUPPORTED_MAX_RECORDS: usize = 100_000;
+
 /// Additive durable API for Linux local filesystems. Fresh constructors create
 /// a missing root; the root must then remain in place. All writers use the same
 /// fixed root and configuration. Each Accepted/Ok(record) follows full
@@ -573,19 +639,15 @@ where
     C::Delta: OwnedDelta + Clone + PartialEq + WireEncode + WireDecode + WireSchema,
 {
     fn restart(root: &Path, config: WriterConfig, state: C) -> Result<Self, LocalError> {
-        Self::restart_with_collection_limits(
-            root,
-            config,
-            state,
-            crate::CollectionLimits { max_elements: None },
-        )
+        Self::restart_with_limits(root, config, state, crate::DecodeLimits::default())
     }
 
-    fn restart_with_collection_limits(
+    // `max_collection_elements: None` keeps the ordinary stored-byte budget below.
+    fn restart_with_limits(
         root: &Path,
         config: WriterConfig,
         state: C,
-        limits: crate::CollectionLimits,
+        limits: crate::DecodeLimits,
     ) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
         let root = root.canonicalize()?;
@@ -619,7 +681,7 @@ where
         mut fence: RestartFence,
         config: WriterConfig,
         state: C,
-        limits: crate::CollectionLimits,
+        limits: crate::DecodeLimits,
     ) -> Result<Self, LocalError> {
         let mut bytes = Vec::new();
         fence.file().read_to_end(&mut bytes)?;
@@ -634,6 +696,15 @@ where
         if generation == 0 {
             return Err(LocalError::RecoveryRequired);
         }
+        let max_records = limits.max_records;
+        // Refuse an over-budget history from its declared count, before the
+        // transaction is read in full or any record is decoded or replayed.
+        if let Some(max_records) = max_records {
+            let declared = declared_records::<C::Delta>(&transaction_path(root, config), config)?;
+            if declared.is_some_and(|records| records > max_records) {
+                return Err(LocalError::RecordLimitExceeded { max_records });
+            }
+        }
         // The lock covers reading, checking and replaying the complete transaction.
         let transaction = CommittedTransaction::read(root, config)?;
         // This is the locally committed transaction, whose bytes are already in
@@ -641,7 +712,7 @@ where
         // its length bounds any count without imposing a new writer-lifetime
         // limit on stores created before collection ceilings were introduced.
         // Peer wire decoders retain their independent 4,096-element default.
-        let max_elements = limits.max_elements.unwrap_or_else(|| {
+        let max_elements = limits.max_collection_elements.unwrap_or_else(|| {
             transaction
                 .log_bytes
                 .len()
@@ -651,13 +722,15 @@ where
             &transaction.log_bytes,
             &state,
             crate::DecodeLimits {
-                max_records: None,
+                max_records,
                 max_collection_elements: Some(max_elements),
             },
         )
         .map_err(|error| match error {
             crate::DecodeError::Wire(error) => LocalError::History(error),
-            crate::DecodeError::RecordLimitExceeded { .. } => unreachable!("no record limit"),
+            crate::DecodeError::RecordLimitExceeded { max_records } => {
+                LocalError::RecordLimitExceeded { max_records }
+            }
         })?;
         let mut inner = LocalReplica {
             config,
@@ -689,18 +762,39 @@ impl DurableReplica<GCounter> {
     /// Reacquire ownership, validate the committed history and replay fresh state.
     /// Any error returns no replica and grants no write ticket.
     pub fn restart_counter(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
+        Self::restart_counter_with_limits(root, config, crate::DecodeLimits::default())
+    }
+    /// [`restart_counter`](Self::restart_counter) with a restart budget.
+    /// `limits.max_records` refuses a history declaring more records with
+    /// [`LocalError::RecordLimitExceeded`] before any record is read, leaving
+    /// the store unchanged. `max_collection_elements: None` keeps the ordinary
+    /// stored-byte collection budget rather than the 4,096 wire default.
+    pub fn restart_counter_with_limits(
+        root: &Path,
+        config: WriterConfig,
+        limits: crate::DecodeLimits,
+    ) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
         let n = usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?;
-        Self::restart(root, config, GCounter::new(n))
+        Self::restart_with_limits(root, config, GCounter::new(n), limits)
     }
     /// Reacquire the writer, read its committed writer count, then run checked replay.
     /// The root must already contain a durable counter store for this writer.
     pub fn restart_counter_from_store(root: &Path, writer: u64) -> Result<Self, LocalError> {
+        Self::restart_counter_from_store_with_limits(root, writer, crate::DecodeLimits::default())
+    }
+    /// [`restart_counter_from_store`](Self::restart_counter_from_store) with the
+    /// restart budget of [`restart_counter_with_limits`](Self::restart_counter_with_limits).
+    pub fn restart_counter_from_store_with_limits(
+        root: &Path,
+        writer: u64,
+        limits: crate::DecodeLimits,
+    ) -> Result<Self, LocalError> {
         let root = root.canonicalize()?;
         let fence = Self::lock_restart_fence(&root, writer)?;
         // The writer lock covers the metadata read and the same checked replay
         // used by restart_counter. A missing or truncated transaction is not fresh.
-        let bytes = fs::read(root.join(format!("writer-{writer}.transaction")))?;
+        let bytes = read_prefix(&root.join(format!("writer-{writer}.transaction")), 24)?;
         if bytes.len() < 24 {
             return Err(LocalError::RecoveryRequired);
         }
@@ -717,13 +811,7 @@ impl DurableReplica<GCounter> {
             return Err(LocalError::Configuration);
         }
         let n = usize::try_from(writers).map_err(|_| LocalError::Configuration)?;
-        Self::restart_locked(
-            &root,
-            fence,
-            config,
-            GCounter::new(n),
-            crate::CollectionLimits { max_elements: None },
-        )
+        Self::restart_locked(&root, fence, config, GCounter::new(n), limits)
     }
     pub fn counter(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
@@ -750,6 +838,19 @@ impl DurableReplica<OrSet<String, u64>> {
     pub fn restart_utf8_set(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
         Self::restart(root, config, OrSet::new())
     }
+    /// [`restart_utf8_set`](Self::restart_utf8_set) with a restart budget.
+    /// `limits.max_records` refuses a history declaring more records with
+    /// [`LocalError::RecordLimitExceeded`] before any record is read, leaving
+    /// the store unchanged. `max_collection_elements: None` keeps the ordinary
+    /// stored-byte collection budget; `Some(n)` matches
+    /// [`restart_utf8_set_with_max_collection_elements`](Self::restart_utf8_set_with_max_collection_elements).
+    pub fn restart_utf8_set_with_limits(
+        root: &Path,
+        config: WriterConfig,
+        limits: crate::DecodeLimits,
+    ) -> Result<Self, LocalError> {
+        Self::restart_with_limits(root, config, OrSet::new(), limits)
+    }
     /// Restart a stored set with an explicit collection ceiling instead of the
     /// ordinary stored-byte budget.
     pub fn restart_utf8_set_with_max_collection_elements(
@@ -757,12 +858,13 @@ impl DurableReplica<OrSet<String, u64>> {
         config: WriterConfig,
         max_elements: usize,
     ) -> Result<Self, LocalError> {
-        Self::restart_with_collection_limits(
+        Self::restart_with_limits(
             root,
             config,
             OrSet::new(),
-            crate::CollectionLimits {
-                max_elements: Some(max_elements),
+            crate::DecodeLimits {
+                max_records: None,
+                max_collection_elements: Some(max_elements),
             },
         )
     }
@@ -1458,6 +1560,160 @@ mod durable_tests {
             matches!(result, Err(LocalError::Io(ref error)) if error.kind() == io::ErrorKind::PermissionDenied)
         );
         assert!(!parent.join("store").exists());
+    }
+    // Seed a committed store of `records` records in one transaction: allocate
+    // and admit in memory through the owned writer, then commit once. Growing
+    // it by durable appends would rewrite the whole history per record.
+    fn seeded<C: Crdt>(
+        mut replica: DurableReplica<C>,
+        records: usize,
+        mut edit: impl FnMut(&mut LocalReplica<C>, u64),
+    ) -> DurableReplica<C>
+    where
+        C::Delta: OwnedDelta + Clone + PartialEq + WireEncode + WireSchema,
+    {
+        for index in 0..records as u64 {
+            edit(&mut replica.inner, index);
+        }
+        let inner = &replica.inner;
+        DurableReplica::<C>::commit(&replica.path, inner.config, &inner.log, inner.last_sequence)
+            .unwrap();
+        replica
+    }
+    fn store_files(root: &Path) -> Vec<(PathBuf, Vec<u8>, std::time::SystemTime)> {
+        let mut files: Vec<_> = fs::read_dir(root)
+            .unwrap()
+            .map(|entry| {
+                let path = entry.unwrap().path();
+                let modified = fs::metadata(&path).unwrap().modified().unwrap();
+                (path.clone(), fs::read(&path).unwrap(), modified)
+            })
+            .collect();
+        files.sort();
+        files
+    }
+    fn budget(max_records: usize) -> crate::DecodeLimits {
+        crate::DecodeLimits {
+            max_records: Some(max_records),
+            max_collection_elements: None,
+        }
+    }
+    fn assert_refused_by_name<C: Crdt>(
+        result: Result<DurableReplica<C>, LocalError>,
+        max_records: usize,
+    ) {
+        match result {
+            Err(error @ LocalError::RecordLimitExceeded { max_records: named }) => {
+                assert_eq!(named, max_records);
+                assert_eq!(
+                    error.to_string(),
+                    format!(
+                        "local history exceeds restart record budget: RecordLimitExceeded: {max_records}"
+                    )
+                );
+            }
+            Err(other) => panic!("expected RecordLimitExceeded, got {other:?}"),
+            Ok(replica) => panic!(
+                "store of {} records opened under a {max_records}-record budget",
+                replica.inner.log.records().len()
+            ),
+        }
+    }
+    #[test]
+    fn restart_budget_opens_supported_size_and_refuses_one_more() {
+        const N: usize = SUPPORTED_MAX_RECORDS;
+        // G-Counter: a store of N opens; one more durable bump makes N + 1.
+        let root = self::root();
+        let fresh = DurableReplica::counter(&root, config()).unwrap();
+        drop(seeded(fresh, N, |inner, index| {
+            inner.bump(inner.ticket(), index + 1).unwrap();
+        }));
+        let mut counter =
+            DurableReplica::restart_counter_with_limits(&root, config(), budget(N)).unwrap();
+        assert_eq!(counter.log().records().len(), N);
+        counter.bump(counter.ticket(), N as u64 + 1).unwrap();
+        drop(counter);
+        let before = store_files(&root);
+        assert_refused_by_name(
+            DurableReplica::restart_counter_with_limits(&root, config(), budget(N)),
+            N,
+        );
+        assert_refused_by_name(
+            DurableReplica::restart_counter_from_store_with_limits(&root, 0, budget(N)),
+            N,
+        );
+        assert_eq!(
+            store_files(&root),
+            before,
+            "refusal leaves the store untouched"
+        );
+        // Keep forever: the budget is the caller's; without it the store opens.
+        let reopened = DurableReplica::restart_counter(&root, config()).unwrap();
+        assert_eq!(reopened.log().records().len(), N + 1);
+        assert_eq!(reopened.state().value(), N as u128 + 1);
+        drop(reopened);
+        let reopened = DurableReplica::restart_counter_from_store(&root, 0).unwrap();
+        assert_eq!(reopened.log().records().len(), N + 1);
+
+        // UTF-8 OR-Set: the same boundary through one more durable add.
+        let root = self::root();
+        let fresh = DurableReplica::utf8_set(&root, config()).unwrap();
+        drop(seeded(fresh, N, |inner, index| {
+            inner.add(inner.ticket(), format!("m{index}")).unwrap();
+        }));
+        let mut set =
+            DurableReplica::restart_utf8_set_with_limits(&root, config(), budget(N)).unwrap();
+        assert_eq!(set.log().records().len(), N);
+        set.add(set.ticket(), "one more".into()).unwrap();
+        drop(set);
+        let before = store_files(&root);
+        assert_refused_by_name(
+            DurableReplica::restart_utf8_set_with_limits(&root, config(), budget(N)),
+            N,
+        );
+        assert_eq!(
+            store_files(&root),
+            before,
+            "refusal leaves the store untouched"
+        );
+        let reopened = DurableReplica::restart_utf8_set(&root, config()).unwrap();
+        assert_eq!(reopened.log().records().len(), N + 1);
+    }
+    #[test]
+    fn restart_budget_refuses_before_reading_records() {
+        let root = self::root();
+        let mut counter = DurableReplica::counter(&root, config()).unwrap();
+        for tally in 1..=3 {
+            counter.bump(counter.ticket(), tally).unwrap();
+        }
+        drop(counter);
+        // Keep the header through the declared count (3); drop every record and
+        // the CRC. Only a refusal from the declared count can name the budget.
+        let path = transaction_path(&root, config());
+        let bytes = fs::read(&path).unwrap();
+        let schema = <GCounterDelta as WireSchema>::wire_schema().len();
+        let header = 24 + 1 + 8 + 4 + 4 + schema + 1 + 8 + 4;
+        assert_eq!(bytes[header - 4..header], 3u32.to_le_bytes());
+        fs::write(&path, &bytes[..header]).unwrap();
+        let before = store_files(&root);
+        assert_refused_by_name(
+            DurableReplica::restart_counter_with_limits(&root, config(), budget(2)),
+            2,
+        );
+        assert_eq!(store_files(&root), before);
+        // Within budget, the full checked read reaches the missing records.
+        assert!(matches!(
+            DurableReplica::restart_counter_with_limits(&root, config(), budget(3)),
+            Err(LocalError::History(WireError::UnexpectedEof))
+        ));
+        fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            DurableReplica::restart_counter_with_limits(&root, config(), budget(3))
+                .unwrap()
+                .state()
+                .value(),
+            3
+        );
     }
     #[test]
     fn oversized_stored_orset_restarts_ordinary() {
