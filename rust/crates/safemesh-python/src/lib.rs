@@ -29,13 +29,12 @@ fn collection_budget(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<usize>
     }
 }
 
-// Capacity is a byte limit, not just a usize limit. Checking it here keeps
-// an unrepresentable Vec allocation from escaping as a PyO3 PanicException.
+// Bound the domain before allocating any coordinates.
 fn numeric_replicas(value: &Bound<'_, PyAny>) -> PyResult<usize> {
     let replicas: usize = numeric(value)?;
-    if replicas > isize::MAX as usize / std::mem::size_of::<u64>() {
+    if replicas > GCounter::MAX_REPLICAS {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "replicas exceeds counter capacity",
+            "replicas exceeds counter maximum (4096)",
         ));
     }
     Ok(replicas)
@@ -139,10 +138,24 @@ fn record_verdict(admission: safemesh_crdt::Admission) -> PyResult<String> {
             cause @ (safemesh_crdt::WireError::ZeroSequenceAdd { .. }
             | safemesh_crdt::WireError::ZeroSequenceRemove { .. }),
         ) => Err(pyo3::exceptions::PyValueError::new_err(cause.to_string())),
+        safemesh_crdt::Admission::Invalid(safemesh_crdt::WireError::OwnershipViolation) => Err(
+            pyo3::exceptions::PyValueError::new_err("writer replica does not match record author"),
+        ),
         safemesh_crdt::Admission::Invalid(_) => {
             Err(pyo3::exceptions::PyValueError::new_err("invalid record"))
         }
         admission => Ok(admission_name(admission)),
+    }
+}
+
+fn append_error(error: safemesh_crdt::AppendError) -> PyErr {
+    match error {
+        safemesh_crdt::AppendError::SequenceExhausted => {
+            pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
+        }
+        safemesh_crdt::AppendError::InvalidRecord(cause) => {
+            record_verdict(safemesh_crdt::Admission::Invalid(cause)).unwrap_err()
+        }
     }
 }
 
@@ -159,11 +172,14 @@ mod py_g_counter_python {
 
     #[pymethods]
     impl PyGCounter {
+        /// Construct a zero counter for at most 4096 replicas (the wire author limit).
+        /// Larger counts raise ValueError before allocation.
         #[new]
-        pub fn new(#[pyo3(from_py_with = "numeric_replicas")] replicas: usize) -> Self {
-            PyGCounter {
-                inner: GCounter::new(replicas),
-            }
+        pub fn new(#[pyo3(from_py_with = "numeric_replicas")] replicas: usize) -> PyResult<Self> {
+            Ok(PyGCounter {
+                inner: GCounter::try_new(replicas)
+                    .map_err(|error| pyo3::exceptions::PyMemoryError::new_err(error.to_string()))?,
+            })
         }
 
         pub fn apply_bump(
@@ -498,16 +514,19 @@ mod py_g_counter_replica_python {
 
     #[pymethods]
     impl PyGCounterReplica {
+        /// Construct a replica with at most 4096 coordinates (the wire author limit).
+        /// Larger counts raise ValueError before allocation.
         #[new]
         pub fn new(
             #[pyo3(from_py_with = "numeric")] replica_id: u64,
             #[pyo3(from_py_with = "numeric_replicas")] replicas: usize,
-        ) -> Self {
-            PyGCounterReplica {
+        ) -> PyResult<Self> {
+            Ok(PyGCounterReplica {
                 replica_id,
-                state: GCounter::new(replicas),
+                state: GCounter::try_new(replicas)
+                    .map_err(|error| pyo3::exceptions::PyMemoryError::new_err(error.to_string()))?,
                 log: EventLog::with_replica_count(replicas),
-            }
+            })
         }
 
         pub fn append_bump<'py>(
@@ -547,9 +566,7 @@ mod py_g_counter_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -679,9 +696,7 @@ mod py_enable_wins_flag_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -706,9 +721,7 @@ mod py_enable_wins_flag_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -831,9 +844,7 @@ mod py_lww_map_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -863,9 +874,7 @@ mod py_lww_map_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -997,9 +1006,7 @@ mod py_lww_register_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -1326,11 +1333,14 @@ mod py_pncounter_python {
     use super::*;
     #[pymethods]
     impl PyPnCounter {
+        /// Construct a zero counter for at most 4096 replicas (the wire author limit).
+        /// Larger counts raise ValueError before allocation.
         #[new]
-        pub fn new(#[pyo3(from_py_with = "numeric_replicas")] replicas: usize) -> Self {
-            Self {
-                inner: PnCounter::new(replicas),
-            }
+        pub fn new(#[pyo3(from_py_with = "numeric_replicas")] replicas: usize) -> PyResult<Self> {
+            Ok(Self {
+                inner: PnCounter::try_new(replicas)
+                    .map_err(|error| pyo3::exceptions::PyMemoryError::new_err(error.to_string()))?,
+            })
         }
 
         /// Exact signed read, including totals outside the 64-bit range.
@@ -1401,6 +1411,69 @@ mod tests {
     fn with_python<T>(f: impl FnOnce(Python<'_>) -> T) -> T {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(f)
+    }
+
+    // Run in a separate process so allocator refusal does not restrict other tests.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn python_counter_width_limit() {
+        if std::env::var_os("SAFEMESH_WIDTH_CHILD").is_none() {
+            let output = std::process::Command::new("bash")
+                .args(["-c", "ulimit -c 0; ulimit -v 524288; exec \"$1\" --exact tests::python_counter_width_limit --nocapture --test-threads=1", "width-test"])
+                .arg(std::env::current_exe().unwrap())
+                .env("SAFEMESH_WIDTH_CHILD", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "child status {:?}: {}{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        with_python(|py| {
+            let module = PyModule::new_bound(py, "safemesh_python").unwrap();
+            safemesh_python(&module).unwrap();
+            let globals = pyo3::types::PyDict::new_bound(py);
+            globals.set_item("sm", module).unwrap();
+            py.run_bound(
+                r#"
+for make in (sm.GCounter, sm.PnCounter, lambda n: sm.GCounterReplica(0, n)):
+    for width in (4097, 2**40, 2**32, (2**63 - 1)//8):
+        try:
+            make(width)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('replica maximum was not enforced')
+    for width, error in (((2**63 - 1)//8 + 1, ValueError),
+                         (-1, OverflowError), (1.5, TypeError), (True, TypeError)):
+        try:
+            make(width)
+        except error:
+            pass
+        else:
+            raise AssertionError('invalid width was accepted')
+    for width in (0, 1, 2, 4096):
+        make(width)
+g = sm.GCounter(2)
+g.apply_bump(0, 7)
+assert g.value() == 7
+assert len(sm.gcounter_delta_to_wire(0, 7)) == 17
+p = sm.PnCounter(2)
+p.apply_inc(0, 7)
+assert p.value() == 7
+r = sm.GCounterReplica(0, 2)
+assert len(r.append_bump(0, 7)) > 0
+assert r.value() == 7
+"#,
+                Some(&globals),
+                None,
+            )
+            .unwrap();
+        });
     }
 
     #[test]
@@ -1780,7 +1853,7 @@ for make, append, read in [
     #[test]
     fn checked_counter_raises_index_error_without_mutation() {
         with_python(|py| {
-            let mut counter = PyGCounter::new(2);
+            let mut counter = PyGCounter::new(2).unwrap();
             let error = counter.try_apply_bump(2, 9).unwrap_err();
             assert!(error.is_instance_of::<pyo3::exceptions::PyIndexError>(py));
             assert_eq!(
@@ -1791,7 +1864,7 @@ for make, append, read in [
             let error = counter.apply_bump(2, 9).unwrap_err();
             assert!(error.is_instance_of::<pyo3::exceptions::PyIndexError>(py));
             // Exercise PyO3 extraction as well as the native shape guard.
-            let exported = Py::new(py, PyGCounter::new(2)).unwrap();
+            let exported = Py::new(py, PyGCounter::new(2).unwrap()).unwrap();
             for replica in [1u64 << 32, 1u64 << 53] {
                 let error = exported
                     .bind(py)
@@ -1856,7 +1929,7 @@ for make, append, read in [
 
     #[test]
     fn python_counter_calls_rust_core() {
-        let mut counter = PyGCounter::new(3);
+        let mut counter = PyGCounter::new(3).unwrap();
         counter.apply_bump(1, 5).unwrap();
         counter.apply_bump(1, 2).unwrap();
         assert_eq!(counter.value(), 5);
@@ -1875,8 +1948,8 @@ for make, append, read in [
     #[test]
     fn python_replicas_exchange_canonical_record_bytes() {
         with_python(|py| {
-            let mut left = PyGCounterReplica::new(1, 3);
-            let mut right = PyGCounterReplica::new(2, 3);
+            let mut left = PyGCounterReplica::new(1, 3).unwrap();
+            let mut right = PyGCounterReplica::new(2, 3).unwrap();
 
             let bytes = left.append_bump(py, 1, 5).unwrap().as_bytes().to_vec();
             let expected = Record {
@@ -2090,6 +2163,84 @@ for make, append, read in [
     }
 
     #[test]
+    fn python_lww_foreign_writer_refused_in_single_and_log_merge() {
+        struct Unchecked<D>(std::marker::PhantomData<D>);
+        impl<D> safemesh_crdt::Mergeable for Unchecked<D> {
+            fn merge(&mut self, _: &Self) -> Result<(), safemesh_crdt::MergeError> {
+                Ok(())
+            }
+        }
+        impl<D> Crdt for Unchecked<D> {
+            type Delta = D;
+            fn validate_record(&self, _: RecordId, _: &D) -> Result<(), safemesh_crdt::WireError> {
+                Ok(())
+            }
+            fn apply_delta(&mut self, _: D) {}
+        }
+        with_python(|py| {
+            macro_rules! check {
+                ($replica:expr, $delta:expr) => {{
+                    let record = Record {
+                        id: RecordId {
+                            replica: 0,
+                            sequence: 1,
+                        },
+                        delta: $delta,
+                    };
+                    let mut replica = $replica;
+                    let state = replica.state.clone();
+                    let log = replica.log.clone();
+                    assert!(replica
+                        .merge_record_bytes(&record.to_wire_bytes().unwrap())
+                        .is_err());
+                    let unchecked = Unchecked(std::marker::PhantomData);
+                    let mut incoming = EventLog::new();
+                    assert_eq!(
+                        incoming.insert_record(&unchecked, record),
+                        safemesh_crdt::Admission::Accepted
+                    );
+                    assert!(replica
+                        .merge_log_bytes(&incoming.to_wire_bytes().unwrap(), None)
+                        .is_err());
+                    assert_eq!(replica.state, state);
+                    assert_eq!(replica.log, log);
+                    assert_eq!(replica.log.since(log.version()).len(), 0);
+                }};
+            }
+            for foreign in [1, 99, u32::MAX as u64 + 1, u64::MAX] {
+                check!(
+                    PyLwwRegisterReplica::new(0),
+                    LwwRegisterDelta {
+                        timestamp: 100,
+                        replica: foreign,
+                        value: 9
+                    }
+                );
+                check!(
+                    PyLwwMapReplica::new(0),
+                    LwwMapDelta::Set {
+                        key: 1,
+                        timestamp: 100,
+                        replica: foreign,
+                        value: 9
+                    }
+                );
+                check!(
+                    PyLwwMapReplica::new(0),
+                    LwwMapDelta::Remove {
+                        key: 1,
+                        timestamp: 100,
+                        replica: foreign
+                    }
+                );
+            }
+            let mut writer = PyLwwRegisterReplica::new(0);
+            writer.append_set(py, 1, 0, 7).unwrap();
+            assert_eq!(writer.value_or(0), 7);
+        });
+    }
+
+    #[test]
     fn python_lww_replicas_exchange_canonical_record_bytes() {
         with_python(|py| {
             let mut left = PyLwwRegisterReplica::new(1);
@@ -2163,7 +2314,7 @@ for make, append, read in [
             for (frame, found, [counter, flag, map, register]) in cases {
                 let core = WireError::LegacyEventLogFrame { found }.to_string();
                 let expected = format!("ValueError: failed to decode event log: {core}");
-                let mut c = PyGCounterReplica::new(0, 2);
+                let mut c = PyGCounterReplica::new(0, 2).unwrap();
                 let mut f = PyEnableWinsFlagReplica::new(0);
                 let mut m = PyLwwMapReplica::new(0);
                 let mut r = PyLwwRegisterReplica::new(0);
@@ -2259,7 +2410,7 @@ mod admission_tests {
                 }};
             }
             check!(
-                PyGCounterReplica::new(2, 2),
+                PyGCounterReplica::new(2, 2).unwrap(),
                 GCounterDelta {
                     replica: 1,
                     tally: 5
@@ -2386,7 +2537,7 @@ mod admission_tests {
         Python::with_gil(|_| {
             check!(
                 "GCounterReplica",
-                PyGCounterReplica::new(2, 2),
+                PyGCounterReplica::new(2, 2).unwrap(),
                 GCounterDelta {
                     replica: 1,
                     tally: 5
@@ -2472,7 +2623,7 @@ mod admission_tests {
             },
         };
 
-        let mut target = PyGCounterReplica::new(0, 2);
+        let mut target = PyGCounterReplica::new(0, 2).unwrap();
         assert_eq!(
             target
                 .merge_record_bytes(&existing.to_wire_bytes().unwrap())
@@ -2485,7 +2636,7 @@ mod admission_tests {
         );
         assert_eq!(target.state(), vec![5, 0]);
 
-        let mut one = PyGCounterReplica::new(0, 2);
+        let mut one = PyGCounterReplica::new(0, 2).unwrap();
         assert_eq!(
             one.merge_log_bytes(&wire([accepted.clone()]), None)
                 .unwrap(),
@@ -2532,7 +2683,7 @@ mod admission_tests {
         );
         assert_eq!(target.state(), before);
 
-        let mut late = PyGCounterReplica::new(0, 2);
+        let mut late = PyGCounterReplica::new(0, 2).unwrap();
         assert_eq!(
             late.merge_record_bytes(&existing.to_wire_bytes().unwrap())
                 .unwrap(),
@@ -2617,13 +2768,13 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
     fn persisted_counter_shape_mismatch_leaves_destination_unchanged() {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
-            let mut source = PyGCounterReplica::new(0, 2);
+            let mut source = PyGCounterReplica::new(0, 2).unwrap();
             source.append_bump(py, 0, 10).unwrap();
-            let mut second_writer = PyGCounterReplica::new(1, 2);
+            let mut second_writer = PyGCounterReplica::new(1, 2).unwrap();
             let second = second_writer.append_bump(py, 1, 20).unwrap();
             source.merge_record_bytes(second.as_bytes()).unwrap();
             let bytes = source.log.to_wire_bytes().unwrap();
-            let mut target = PyGCounterReplica::new(0, 3);
+            let mut target = PyGCounterReplica::new(0, 3).unwrap();
             let state = target.state.clone();
             let log = target.log.clone();
             assert!(target
@@ -2633,7 +2784,7 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
                 .contains("replica count mismatch"));
             assert_eq!(target.state, state);
             assert_eq!(target.log, log);
-            let mut matching = PyGCounterReplica::new(0, 2);
+            let mut matching = PyGCounterReplica::new(0, 2).unwrap();
             matching.merge_log_bytes(&bytes, None).unwrap();
             assert_eq!(matching.state, source.state);
         });
@@ -2643,7 +2794,7 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
     fn invalid_counter_coordinates_are_rejected_before_admission() {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
-            let mut replica = PyGCounterReplica::new(1, 2);
+            let mut replica = PyGCounterReplica::new(1, 2).unwrap();
             assert!(replica.append_bump(py, 2, 5).is_err());
             let mut errors = Vec::new();
             for (name, coordinate) in [("out-of-range", 2), ("not-owned", 0)] {
@@ -2685,7 +2836,7 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
     #[test]
     fn invalid_second_counter_log_record_admits_neither_record() {
         pyo3::prepare_freethreaded_python();
-        let mut replica = PyGCounterReplica::new(0, 2);
+        let mut replica = PyGCounterReplica::new(0, 2).unwrap();
         let good = Record {
             id: RecordId {
                 replica: 1,

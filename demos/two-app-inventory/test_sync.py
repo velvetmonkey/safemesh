@@ -4,6 +4,7 @@ A barrier in two forwarding peers makes both /sync handlers wait on outgoing
 HTTP before either delivery reaches the opposite application.
 """
 from concurrent.futures import ThreadPoolExecutor
+from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -88,6 +89,63 @@ class SimultaneousSync(unittest.TestCase):
                 else:
                     self.fail(f'{name} did not start')
                 self.assertEqual(rpc(ports[index], 'add', {}), {'tally': 1})
+
+            # Every mutating route rejects unsafe headers before touching state.
+            for port in ports:
+                authority = f'127.0.0.1:{port}'
+                bad_headers = [
+                    {'Content-Type': 'text/plain'},
+                    {'Content-Type': 'text/plain', 'Origin': 'https://evil.example'},
+                    {'Content-Type': 'application/json', 'Host': 'evil.example',
+                     'Origin': 'https://evil.example'},
+                    {'Content-Type': 'application/json', 'Host': 'evil.example'},
+                    {'Content-Type': 'application/json', 'Origin': 'https://evil.example'},
+                    {'Content-Type': 'application/json', 'Origin': 'null'},
+                    {'Content-Type': 'application/json', 'Host': f'[::1]:{port}'},
+                    {'Content-Type': 'application/json', 'Host': '127.0.0.1'},
+                    {'Content-Type': 'application/json', 'Host': ''},
+                    {'Content-Type': 'application/json', 'Host': f'127.0.0.1:{port + 1}'},
+                    {'Host': authority},
+                ]
+                for route, body in [('add', {}), ('link', {'online': False}),
+                                    ('records', {'records': []}), ('sync', {})]:
+                    for headers in bad_headers:
+                        with self.subTest(port=port, route=route, headers=headers):
+                            before = rpc(port, 'status')
+                            request = Request(f'http://{authority}/{route}',
+                                              json.dumps(body).encode(), headers)
+                            with self.assertRaises(HTTPError) as refused:
+                                urlopen(request, timeout=2)
+                            self.assertEqual(refused.exception.code, 400)
+                            refused.exception.close()
+                            self.assertEqual(rpc(port, 'status'), before)
+                # Missing Host and duplicate security headers are refused.
+                for extra in [[], [('Host', authority), ('Host', authority)],
+                              [('Host', authority), ('Origin', 'http://' + authority),
+                               ('Origin', 'http://' + authority)],
+                              [('Host', authority), ('Content-Type', 'application/json')]]:
+                    before = rpc(port, 'status')
+                    connection = HTTPConnection('127.0.0.1', port, timeout=2)
+                    try:
+                        connection.putrequest('POST', '/add', skip_host=True)
+                        connection.putheader('Content-Type', 'application/json')
+                        connection.putheader('Content-Length', '2')
+                        for key, value in extra:
+                            connection.putheader(key, value)
+                        connection.endheaders(b'{}')
+                        response = connection.getresponse()
+                        self.assertEqual(response.status, 400)
+                        response.read()
+                    finally:
+                        connection.close()
+                    self.assertEqual(rpc(port, 'status'), before)
+                for host in ('127.0.0.1', 'localhost'):
+                    request = Request(f'http://{authority}/records', b'{"records":[]}',
+                                      {'Host': f'{host}:{port}',
+                                       'Origin': f'http://{host}:{port}',
+                                       'Content-Type': 'application/json; charset=utf-8'})
+                    with urlopen(request, timeout=2) as response:
+                        self.assertEqual(json.load(response), {'accepted': 0, 'duplicates': 0})
 
             def timed_rpc(port, route, body):
                 start = time.monotonic()

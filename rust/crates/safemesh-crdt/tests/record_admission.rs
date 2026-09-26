@@ -2404,3 +2404,154 @@ fn retention_loader_record_budget_refuses_without_partial_history() {
     destination.merge_log_bytes(&bytes, exact).unwrap();
     assert_retention(&destination, &expected);
 }
+
+// A relayed record retains its original author; it cannot mint another writer's dot.
+#[test]
+fn lww_foreign_writer_is_refused_without_state_or_export() {
+    use safemesh_crdt::{
+        LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta, WireError, WireSchema,
+    };
+    fn check<C>(mut state: C, bad: C::Delta, good: C::Delta)
+    where
+        C: Crdt + Clone + PartialEq + std::fmt::Debug,
+        C::Delta: Clone + PartialEq + std::fmt::Debug + WireEncode + WireDecode + WireSchema,
+    {
+        let id = RecordId {
+            replica: 0,
+            sequence: 1,
+        };
+        let bad = Record { id, delta: bad };
+        let mut log = EventLog::for_crdt(&state);
+        let before_state = state.clone();
+        let before_log = log.clone();
+        let invalid = Admission::Invalid(WireError::OwnershipViolation);
+        assert_eq!(
+            state.validate_record(id, &bad.delta),
+            Err(WireError::OwnershipViolation)
+        );
+        assert_eq!(log.insert_record(&state, bad.clone()), invalid);
+        assert_eq!(log.merge_records(&state, [bad.clone()]), vec![invalid]);
+        assert_eq!(
+            log.admit_with(&mut state, bad, |_, _| panic!("foreign writer applied")),
+            invalid
+        );
+        assert_eq!(state, before_state);
+        assert_eq!(log, before_log);
+        let mut peer = before_log.clone();
+        assert!(log.since(peer.version()).is_empty());
+        // The local author may still write sequence one after refusal.
+        assert_eq!(
+            log.append_with(&mut state, 0, good, |s, d| s.apply_delta(d.clone()))
+                .unwrap(),
+            id
+        );
+        let offered = log.since(peer.version());
+        assert_eq!(offered.len(), 1);
+        assert_eq!(
+            peer.merge_records(&before_state, offered),
+            vec![Admission::Accepted]
+        );
+        let restored =
+            EventLog::<C::Delta>::from_wire_bytes_for(&log.to_wire_bytes().unwrap(), &before_state)
+                .unwrap();
+        assert_eq!(restored, log);
+    }
+    for foreign in [99, 1, u32::MAX as u64 + 1, u64::MAX] {
+        check(
+            LwwRegister::<u64>::new(),
+            LwwRegisterDelta {
+                timestamp: 100,
+                replica: foreign,
+                value: 9,
+            },
+            LwwRegisterDelta {
+                timestamp: 1,
+                replica: 0,
+                value: 7,
+            },
+        );
+        check(
+            LwwMap::<u64, u64>::new(),
+            LwwMapDelta::Set {
+                key: 1,
+                timestamp: 100,
+                replica: foreign,
+                value: 9,
+            },
+            LwwMapDelta::Set {
+                key: 1,
+                timestamp: 1,
+                replica: 0,
+                value: 7,
+            },
+        );
+        let mut map = LwwMap::<u64, u64>::new();
+        map.set(1, 1, 0, 7);
+        check(
+            map,
+            LwwMapDelta::Remove {
+                key: 1,
+                timestamp: 100,
+                replica: foreign,
+            },
+            LwwMapDelta::Remove {
+                key: 1,
+                timestamp: 2,
+                replica: 0,
+            },
+        );
+    }
+}
+
+#[test]
+fn lww_matching_full_width_writer_is_accepted() {
+    use safemesh_crdt::{LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta};
+    for replica in [0, 99, u32::MAX as u64 + 1, u64::MAX] {
+        let id = RecordId {
+            replica,
+            sequence: 1,
+        };
+        let mut register = LwwRegister::new();
+        let mut log = EventLog::new();
+        assert_eq!(
+            log.admit_with(
+                &mut register,
+                Record {
+                    id,
+                    delta: LwwRegisterDelta {
+                        timestamp: 1,
+                        replica,
+                        value: 7_u64,
+                    }
+                },
+                |s, d| s.apply_delta(d.clone())
+            ),
+            Admission::Accepted
+        );
+        assert_eq!(register.entry().unwrap().dot.replica, replica);
+        let map = LwwMap::<u64, u64>::new();
+        assert_eq!(
+            map.validate_record(
+                id,
+                &LwwMapDelta::Set {
+                    key: 1,
+                    timestamp: 1,
+                    replica,
+                    value: 7,
+                }
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            map.validate_record(
+                id,
+                &LwwMapDelta::Remove {
+                    key: 1,
+                    timestamp: 2,
+                    replica,
+                }
+            ),
+            Ok(())
+        );
+    }
+}

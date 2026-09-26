@@ -279,8 +279,23 @@ fn record_verdict(admission: safemesh_crdt::Admission) -> Result<String, Binding
         safemesh_crdt::Admission::Invalid(
             error @ (WireError::ZeroSequenceAdd { .. } | WireError::ZeroSequenceRemove { .. }),
         ) => Err(binding_error(1, error.to_string())),
+        safemesh_crdt::Admission::Invalid(WireError::OwnershipViolation) => Err(binding_error(
+            1,
+            "writer replica does not match record author",
+        )),
         safemesh_crdt::Admission::Invalid(_) => Err(binding_error(1, "invalid record")),
         admission => Ok(admission_name(admission)),
+    }
+}
+
+fn append_error(error: safemesh_crdt::AppendError) -> BindingError {
+    match error {
+        safemesh_crdt::AppendError::SequenceExhausted => {
+            binding_error(1, "event log sequence exhausted")
+        }
+        safemesh_crdt::AppendError::InvalidRecord(cause) => {
+            record_verdict(safemesh_crdt::Admission::Invalid(cause)).unwrap_err()
+        }
     }
 }
 
@@ -928,7 +943,7 @@ impl SafeMeshEnableWinsFlagReplica {
                     state.apply_delta(delta.clone());
                 },
             )
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+            .map_err(|error| JsValue::from(append_error(error)))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
@@ -2176,7 +2191,7 @@ impl SafeMeshEnableWinsFlagReplica {
                     state.apply_delta(delta.clone());
                 },
             )
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+            .map_err(|error| JsValue::from(append_error(error)))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
@@ -2218,7 +2233,7 @@ impl SafeMeshLwwMapReplica {
                     state.apply_delta(delta.clone());
                 },
             )
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+            .map_err(|error| JsValue::from(append_error(error)))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
@@ -2245,7 +2260,7 @@ impl SafeMeshLwwMapReplica {
                     state.apply_delta(delta.clone());
                 },
             )
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+            .map_err(|error| JsValue::from(append_error(error)))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
@@ -2293,7 +2308,7 @@ impl SafeMeshLwwRegisterReplica {
                     state.apply_delta(delta.clone());
                 },
             )
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+            .map_err(|error| JsValue::from(append_error(error)))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
@@ -4256,7 +4271,7 @@ impl SafeMeshPnCounterReplica {
                     state.apply_delta(delta.clone());
                 },
             )
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+            .map_err(|error| JsValue::from(append_error(error)))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
@@ -4295,7 +4310,7 @@ impl SafeMeshPnCounterReplica {
                     state.apply_delta(delta.clone());
                 },
             )
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+            .map_err(|error| JsValue::from(append_error(error)))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
