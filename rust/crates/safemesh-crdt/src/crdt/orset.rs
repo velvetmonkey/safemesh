@@ -109,16 +109,29 @@ impl<T: Ord + Clone, K: Ord + Clone> Mergeable for OrSet<T, K> {
 impl<T: Ord + Clone, K: Ord + Clone> Crdt for OrSet<T, K> {
     type Delta = OrSetDelta<T, K>;
 
-    /// Accepts every record. An add always joins the add set, even when its
-    /// token is already tombstoned (that is the observed-remove rule, and a fresh
-    /// set applies it). A remove tombstones every token it names whether or not
-    /// this replica observed them (`RecordKernel.payloadOwned .remove`), so a
-    /// fresh set applies it too. A remove naming no tokens is the lattice bottom:
-    /// the local writer emits it for an absent element, and joining `⊥` on any
-    /// carrier is the correct application of that record, not a dropped one.
-    /// Nothing decodable is outside the carrier, so nothing is refused here.
-    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
-        Ok(())
+    /// Refuses an add at sequence 0 with [`WireError::ZeroSequenceAdd`]. An add
+    /// mints its token at its record ID, and the Lean ownership rule only
+    /// allocates at positive sequences (`lean/SafeMesh/RecordKernel.lean`:
+    /// `allocateToken` requires `0 < sequence`, and `payloadOwned` for an add
+    /// requires that allocation). This check needs no writer count, so the raw
+    /// carrier applies it too. The rest of the ownership rule (author bound and
+    /// token value) needs a writer count and stays with the checked writers.
+    ///
+    /// Every other record is accepted. An add always joins the add set, even
+    /// when its token is already tombstoned (that is the observed-remove rule,
+    /// and a fresh set applies it). A remove tombstones every token it names
+    /// whether or not this replica observed them (`RecordKernel.payloadOwned
+    /// .remove`), so a fresh set applies it too. A remove naming no tokens is the
+    /// lattice bottom: the local writer emits it for an absent element, and
+    /// joining `⊥` on any carrier is the correct application of that record,
+    /// not a dropped one.
+    fn validate_record(&self, id: RecordId, delta: &Self::Delta) -> Result<(), WireError> {
+        match delta {
+            OrSetDelta::Add { .. } if id.sequence == 0 => Err(WireError::ZeroSequenceAdd {
+                replica: id.replica,
+            }),
+            _ => Ok(()),
+        }
     }
 
     fn apply_delta(&mut self, delta: Self::Delta) {
