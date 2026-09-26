@@ -80,11 +80,24 @@ impl SafeMeshBytes {
     }
 }
 
+/// Fresh counter. Returns NULL if the replica vector or handle cannot be allocated.
 #[no_mangle]
 pub extern "C" fn safemesh_gcounter_new(replicas: usize) -> *mut SafeMeshGCounter {
-    Box::into_raw(Box::new(SafeMeshGCounter {
-        inner: GCounter::new(replicas),
-    }))
+    let Ok(inner) = GCounter::try_new(replicas) else {
+        return core::ptr::null_mut();
+    };
+    // Box::new would abort on handle allocation failure. Allocate explicitly
+    // so this boundary returns NULL for that failure as well.
+    let layout = std::alloc::Layout::new::<SafeMeshGCounter>();
+    // SAFETY: nonzero layout; a successful allocation is aligned and large
+    // enough for the handle. Initialize it before exposing it to the caller.
+    unsafe {
+        let handle = std::alloc::alloc(layout).cast::<SafeMeshGCounter>();
+        if !handle.is_null() {
+            handle.write(SafeMeshGCounter { inner });
+        }
+        handle
+    }
 }
 
 /// Release a counter handle. Null is accepted and ignored.

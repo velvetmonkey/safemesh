@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{ownership, Crdt, MergeError, Mergeable, RecordId, WireError};
-use alloc::{vec, vec::Vec};
+use alloc::{collections::TryReserveError, vec::Vec};
 
 /// Delta for a grow-only counter: one replica coordinate and its asserted tally.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,8 +52,25 @@ pub struct GCounter {
 
 impl GCounter {
     /// Fresh counter for `n` replicas — the lattice bottom `⊥` (all zeros).
+    ///
+    /// # Panics
+    /// Panics if the width cannot be allocated. Use [`Self::try_new`] to receive
+    /// an allocation error instead.
     pub fn new(n: usize) -> Self {
-        GCounter { counts: vec![0; n] }
+        Self::try_new(n).expect("counter width cannot be allocated")
+    }
+
+    /// Fresh counter, returning a capacity or allocator error without panicking.
+    ///
+    /// No fixed replica limit is imposed: widths up to `isize::MAX / 8` are
+    /// representable, but success depends on the allocator. On systems with
+    /// overcommit, reservation can succeed before physical memory is available;
+    /// initializing the reserved coordinates still touches that memory.
+    pub fn try_new(n: usize) -> Result<Self, TryReserveError> {
+        let mut counts = Vec::new();
+        counts.try_reserve_exact(n)?;
+        counts.resize(n, 0);
+        Ok(GCounter { counts })
     }
 
     /// Number of replica coordinates.
@@ -165,5 +182,36 @@ impl Crdt for GCounter {
 
     fn apply_delta(&mut self, delta: Self::Delta) {
         self.apply_bump(delta.replica, delta.tally);
+    }
+}
+
+#[cfg(test)]
+mod construction_tests {
+    use super::*;
+    use crate::WireEncode;
+
+    #[test]
+    fn unallocatable_counter_width_returns_error() {
+        assert!(GCounter::try_new(usize::MAX).is_err());
+        assert!(crate::PnCounter::try_new(usize::MAX).is_err());
+        let largest = isize::MAX as usize / core::mem::size_of::<u64>();
+        assert!(GCounter::try_new(largest + 1).is_err());
+        for n in [0, 1, 2] {
+            assert_eq!(GCounter::try_new(n).unwrap(), GCounter::new(n));
+            assert_eq!(
+                crate::PnCounter::try_new(n).unwrap(),
+                crate::PnCounter::new(n)
+            );
+        }
+        let mut counter = GCounter::try_new(2).unwrap();
+        counter.try_apply_bump(0, 7).unwrap();
+        assert_eq!(counter.value(), 7);
+        assert!(!GCounterDelta {
+            replica: 0,
+            tally: 7
+        }
+        .to_wire_bytes()
+        .unwrap()
+        .is_empty());
     }
 }

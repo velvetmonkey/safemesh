@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Ben Cassie
 // SPDX-License-Identifier: Apache-2.0
 
+use alloc::collections::TryReserveError;
+
 use crate::{
     ownership, CoordinateError, Crdt, GCounter, MergeError, Mergeable, RecordId, WireError,
 };
@@ -28,11 +30,21 @@ pub enum PnCounterDelta {
 
 impl PnCounter {
     /// Fresh counter for `n` replicas — the lattice bottom `(⊥, ⊥)`.
+    ///
+    /// # Panics
+    /// Panics if either side cannot be allocated. Use [`Self::try_new`] for a
+    /// fallible constructor.
     pub fn new(n: usize) -> Self {
-        PnCounter {
-            p: GCounter::new(n),
-            n: GCounter::new(n),
-        }
+        Self::try_new(n).expect("counter width cannot be allocated")
+    }
+
+    /// Allocate both sides fallibly; if the second allocation fails, the first
+    /// is released before returning the error.
+    pub fn try_new(n: usize) -> Result<Self, TryReserveError> {
+        Ok(PnCounter {
+            p: GCounter::try_new(n)?,
+            n: GCounter::try_new(n)?,
+        })
     }
 
     /// Apply `SafeMesh.deltaBumpP replica tally` — increment side, one
