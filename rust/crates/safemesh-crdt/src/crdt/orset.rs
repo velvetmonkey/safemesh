@@ -6,11 +6,36 @@ use crate::{Crdt, MergeError, Mergeable, RecordId, WireError};
 use alloc::{collections::BTreeSet, vec::Vec};
 
 /// Delta for an observed-remove set.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum OrSetDelta<T, K> {
     Add { element: T, token: K },
     Remove { tokens: Vec<K> },
 }
+
+// Remove denotes a Finset in the Lean model. Compare that set for record
+// admission, while retaining the received vector for exact wire round trips.
+impl<T: PartialEq, K: Ord> PartialEq for OrSetDelta<T, K> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Add {
+                    element: a,
+                    token: x,
+                },
+                Self::Add {
+                    element: b,
+                    token: y,
+                },
+            ) => a == b && x == y,
+            (Self::Remove { tokens: a }, Self::Remove { tokens: b }) => {
+                a.iter().collect::<BTreeSet<_>>() == b.iter().collect::<BTreeSet<_>>()
+            }
+            _ => false,
+        }
+    }
+}
+
+impl<T: Eq, K: Ord> Eq for OrSetDelta<T, K> {}
 
 /// Observed-remove set with add-wins semantics.
 ///

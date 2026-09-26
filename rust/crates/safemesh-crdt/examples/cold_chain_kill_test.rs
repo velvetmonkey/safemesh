@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use safemesh_crdt::{
-    anti_entropy, EventLog, GCounter, GCounterDelta, GSet, InMemoryTransport, OrSet, OrSetDelta,
-    Record, Rga, RgaDelta, TransportAdapter, TransportError,
+    queue_anti_entropy, EventLog, GCounter, GCounterDelta, GSet, InMemoryTransport, OrSet,
+    OrSetDelta, Record, Rga, RgaDelta, TransportAdapter, TransportError,
 };
 
 const CLINIC: u64 = 0;
@@ -318,7 +318,7 @@ fn sync_pair(
     to: u64,
 ) -> Result<(), TransportError> {
     let remote_version = replicas[to as usize].log.version().clone();
-    anti_entropy(
+    queue_anti_entropy(
         transport,
         from,
         to,

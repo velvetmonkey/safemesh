@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Ben Cassie
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{EventLog, Record, VersionVector};
+use crate::{Admission, Crdt, EventLog, Record, RecordId, Replica, VersionVector};
 use alloc::{collections::BTreeSet, vec::Vec};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -198,7 +198,9 @@ impl<D: Clone> TransportAdapter<D> for InMemoryTransport<D> {
     }
 }
 
-pub fn anti_entropy<D, T>(
+/// Queue missing records. Admission happens at the receiver; use
+/// [`anti_entropy`] when both replicas are available to observe refusals.
+pub fn queue_anti_entropy<D, T>(
     transport: &mut T,
     from: u64,
     to: u64,
@@ -215,4 +217,40 @@ where
     } else {
         transport.send(from, to, records)
     }
+}
+
+/// Queue repair and admit the deliveries available for `to`, returning every
+/// record ID and verdict with its sending peer. In particular, Invalid is
+/// reported again on every retry, with its original reason. Refusals are not
+/// acknowledgements and are not cached: fixing the receiver permits the next
+/// ordinary sync to admit the record. Dropped or partitioned packets retain
+/// the adapter's usual delivery semantics.
+///
+/// All available envelopes for `to` are admitted, including previously queued
+/// deliveries from other peers. An empty result means no delivery, not an
+/// acknowledgement. Callers must inspect the verdicts, especially Invalid and
+/// Collision. This helper requires access to the receiving replica; network
+/// adapters must return equivalent admission feedback from the remote endpoint.
+#[must_use = "inspect sync admissions for Invalid and Collision refusals"]
+pub fn anti_entropy<C, T>(
+    transport: &mut T,
+    from: u64,
+    to: u64,
+    local: &EventLog<C::Delta>,
+    remote: &mut Replica<C>,
+) -> Result<Vec<(u64, RecordId, Admission)>, TransportError>
+where
+    C: Crdt,
+    C::Delta: Clone + PartialEq,
+    T: TransportAdapter<C::Delta>,
+{
+    queue_anti_entropy(transport, from, to, local, remote.version())?;
+    let mut admissions = Vec::new();
+    for envelope in transport.drain(to) {
+        for record in envelope.records {
+            let id = record.id;
+            admissions.push((envelope.from, id, remote.admit(record)));
+        }
+    }
+    Ok(admissions)
 }
