@@ -19,6 +19,8 @@ module is OUTSIDE the proof path: it is not in `defaultTargets`, is imported
 by nothing, and the axiom gate does not touch it.
 -/
 import SafeMesh
+import Mathlib.Data.Finset.Sort
+import Mathlib.Data.Prod.Basic
 
 open SafeMesh
 
@@ -161,20 +163,21 @@ def runRGA (c : RGACase) : RGANat :=
 def natList (l : List Nat) : String :=
   "[" ++ String.intercalate "," (l.map toString) ++ "]"
 
+/-- Every element, ascending. Replaces the `List.range 64` scan that
+    silently dropped any `n ≥ 64`. -/
 def sortedNatSet (s : Finset Nat) : List Nat :=
-  (List.range 64).filter fun n => n ∈ s
+  s.sort (· ≤ ·)
 
 def natSetJson (s : Finset Nat) : String :=
   natList (sortedNatSet s)
 
-def sortedNatPairsFrom (s : Finset (Nat × Nat)) : List Nat → List (Nat × Nat)
-  | [] => []
-  | a :: rest =>
-      ((List.range 128).filterMap fun b =>
-        if (a, b) ∈ s then some (a, b) else none) ++ sortedNatPairsFrom s rest
-
+/-- Every pair, lexicographic (`Prod.Lex`). Replaces the nested
+    `List.range 64` × `List.range 128` scan that silently dropped a first
+    component `≥ 64` or a second component `≥ 128`. `· ≤ ·` on `Nat × Nat`
+    does not synthesize `Std.Total` in this tree; `Prod.Lex` does, and
+    `Finset.sort` still cannot omit a member. -/
 def sortedNatPairs (s : Finset (Nat × Nat)) : List (Nat × Nat) :=
-  sortedNatPairsFrom s (List.range 64)
+  s.sort (Prod.Lex (· < ·) (· ≤ ·))
 
 def natPairJson (p : Nat × Nat) : String :=
   s!"[{p.1},{p.2}]"
