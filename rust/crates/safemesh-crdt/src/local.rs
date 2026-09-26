@@ -15,7 +15,28 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Errors from local writer and durable store operations.
+///
+/// Downstream callers must allow for future variants:
+///
+/// ```compile_fail,E0004
+/// use safemesh_crdt::local::LocalError;
+/// fn classify(error: LocalError) -> &'static str {
+///     match error {
+///         LocalError::Refused => "refused",
+///         LocalError::Exhausted => "exhausted",
+///         LocalError::RecoveryRequired => "recovery",
+///         LocalError::Configuration => "configuration",
+///         LocalError::InvalidRecord(_) => "record",
+///         LocalError::History(_) => "history",
+///         LocalError::InvalidHistory => "invalid history",
+///         LocalError::Io(_) => "io",
+///         LocalError::RecordLimitExceeded { .. } => "record limit",
+///     }
+/// }
+/// ```
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum LocalError {
     Refused,
     Exhausted,
