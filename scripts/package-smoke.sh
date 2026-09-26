@@ -186,3 +186,6 @@ node "$repo_root/rust/crates/safemesh-wasm/tests/node-since-batch.mjs" \
   "$tmp_dir/wasm-node-pkg"
 node "$repo_root/rust/crates/safemesh-wasm/examples/node-since-sync.mjs" \
   "$tmp_dir/wasm-node-pkg"
+
+node "$repo_root/rust/crates/safemesh-wasm/tests/node-managed-counter.mjs" \
+  "$tmp_dir/wasm-node-pkg"
