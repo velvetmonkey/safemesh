@@ -138,8 +138,10 @@ and a UTF-8 set, using `local::DurableReplica`:
   the wrong boundary and cause decoding to fail or recover incorrect members or
   tokens, a bug ASCII alone would not expose.
 - Durable stores live in `walk-logs/joined/counter` and `walk-logs/joined/set`.
-  Each `writer-<id>.transaction` holds allocation metadata and log bytes; an edit
-  succeeds only after replacement and file/directory sync. Keep the directories
+  Each `writer-<id>.journal` holds the writer configuration and a base log
+  frame, then one checksummed entry per committed record; an edit succeeds only
+  after its entry is appended and the file synced. Stores written before the
+  append log keep a whole-history `writer-<id>.transaction` instead. Keep the directories
   and `writer-<id>.fence` files in place: each fence stores the writer configuration
   and ticket generation and supplies the exclusive lock that prevents competing
   processes from writing as the same writer. Renewal invalidates old tickets;
@@ -167,7 +169,7 @@ If you run the walk twice against the same directory, the second run refuses to
 overwrite the durable store. The current harness reports a child
 `RecoveryRequired` panic followed by `left: "101"` / `right: "77"`: 77 is the
 intentional exit after the child's ACK; 101 is its unexpected panic exit.
-Keep `walk-logs`, including every fence and transaction file. Use the recovery
+Keep `walk-logs`, including every fence and journal file. Use the recovery
 command below to reopen it. To start a separate new walk, choose a different,
 unused directory.
 
@@ -253,18 +255,17 @@ repair damaged files or create replacement stores.
 | --- | --- |
 | Completed walk, with or without a subsequent overwrite refusal | Both writers reopen with the values above; exit 0. Keep using restart for this store. |
 | Child ACK persisted, but the parent did not finish | The same command reopens committed progress, not necessarily the final values. In the ACK-only case writer 0 has counter `[9, 0]` and `café☕` / `東京`; writer 1 is empty. Exit 0 does not certify that reconciliation finished. |
-| Missing path, an existing empty `walk-logs`, only the earlier non-durable logs, or missing fence/transaction files | `Io(...NotFound...)`. Confirm the path to the original durable store. If nothing was ever persisted, start the original walk in a separate unused directory. Preserve incomplete stores for investigation; do not manufacture missing fences. |
-| Another writer's fence/transaction placed at writer 0's path, or a different writer configuration | `Configuration` in the tested writer swap. Use the original application's configuration and paths; do not rename another writer's files into place. |
-| A set transaction at the counter path | `History(DeltaTypeMismatch)`. Use the matching CRDT restart API and original store. A different application's store with the same schema and writer configuration may be accepted: these APIs do not establish application identity. Verify provenance before opening it. |
-| Transaction truncated part way through its final record | Removing 7 bytes from the 252-byte `joined/counter/writer-0.transaction` produced `History(UnexpectedEof)`. Other corruption may report integrity, history or allocation errors. Preserve the damaged store; recover from a known-good backup with its matching ownership files, or investigate the failure. Restart does not salvage a torn record. |
+| Missing path, an existing empty `walk-logs`, only the earlier non-durable logs, or missing fence/journal files | `Io(...NotFound...)`. Confirm the path to the original durable store. If nothing was ever persisted, start the original walk in a separate unused directory. Preserve incomplete stores for investigation; do not manufacture missing fences. |
+| Another writer's fence/journal placed at writer 0's path, or a different writer configuration | `Configuration` in the tested writer swap. Use the original application's configuration and paths; do not rename another writer's files into place. |
+| A set journal at the counter path | `History(DeltaTypeMismatch)`. Use the matching CRDT restart API and original store. A different application's store with the same schema and writer configuration may be accepted: these APIs do not establish application identity. Verify provenance before opening it. |
+| Journal cut part way through its final record | Removing 7 bytes from the 328-byte `joined/counter/writer-0.journal` let writer 0 restart without that final record: counter `[12, 0]`, and `torn_tail()` reported `TornTail { offset: 270, discarded_bytes: 51 }`. Restart truncated the journal to 270 bytes, so the cut record is gone from this store; an append interrupted before its sync ends this way, and it was never acknowledged. The lost record here was writer 1's tally, received earlier: exchange with writer 1 again to restore it. A damaged record followed by other data is refused as `History(IntegrityMismatch)` without changing the journal; preserve that store. |
 | Another process holds the writer lock | `Refused`. Coordinate with that writer and retry after it releases the handle. Do not replace the fence or bypass its lock. |
 | Permissions/I/O failure, malformed ownership metadata, exhausted generation, unsupported platform/filesystem, or build failure | Recovery is not established. Retain the store, address the reported environment or metadata problem, and retry only with the original configuration. Do not treat an error as permission to initialize over existing data. |
 
 The wrong-type, wrong-writer, empty, missing-fence, lock and truncation cases above
-were exercised on disposable copies. Restoring the exact seven removed bytes
-from the original transaction made both writers recover the completed values
-again. This is a damage-detection control, not a power-loss or backup-restore
-guarantee.
+were exercised on disposable copies. After the truncation, a second reopen
+reported no torn tail and the same `[12, 0]`. This is a damage-detection control,
+not a power-loss or backup-restore guarantee.
 
 The example then runs the earlier `EventLog` walkthrough for both choices. Its
 `Replica<C>` wrapper and corresponding `journey` calls illustrate these lower-level
@@ -323,9 +324,9 @@ B's logs, replays them into fresh state, checks full state and log equality, wri
 new A files, reopens them, then reconciles both directions with B.
 
 This command is for `counter-b.log` and `utf8-orset-b.log`, **not** the
-`joined/` durable transactions. Do not replace or recreate a durable writer's
-fence or transaction from another writer's files. Recovery of a corrupt joined
-transaction from a peer is not established here; preserve its ownership files
+`joined/` durable journals. Do not replace or recreate a durable writer's
+fence or journal from another writer's files. Recovery of a corrupt joined
+journal from a peer is not established here; preserve its ownership files
 and use the durable recovery notes above.
 
 ```sh
@@ -605,21 +606,30 @@ carriers and `EventLog` do not themselves grant an exclusive writer lease.
 With `local-writer`, use `local::DurableReplica::counter` or `utf8_set` for
 acknowledged durable edits. Supply an existing, durably created directory on the
 supported Linux local filesystem and keep it and its fence files in place.
-The same ticket, ownership, append, and receive rules apply. Each accepted edit
-replaces one file containing allocation/ownership metadata and the unchanged log
-wire bytes; temporary-file write, file sync, rename, and directory sync finish
-before success reaches the caller. The example and adapter share this replacement
-routine. Any commit I/O error disables further writes and ticket renewal on that
-instance; an ambiguous failure may have committed the transaction despite the
+The same ticket, ownership, append, and receive rules apply. A fresh store's
+`writer-<id>.journal` is created whole by temporary-file write, file sync, rename
+and directory sync; each accepted edit then appends one entry (the record's
+unchanged wire bytes, its allocation sequence and a CRC-32) and syncs the file
+before success reaches the caller. A store written before the append log keeps
+`writer-<id>.transaction`, and each accepted edit still replaces that whole file
+through the replacement routine the example shares, until an explicit
+`migrate_counter_to_append_log` or `migrate_utf8_set_to_append_log`; restart
+never migrates. Any commit I/O error disables further writes and ticket renewal
+on that instance; an ambiguous failure may have committed the edit despite the
 error, so callers must not assume it was rolled back.
 
 `CommittedTransaction::read` reopens the committed metadata and log bytes without
-granting a write lease. It is a storage read, not checked history validation.
+granting a write lease, reassembling a journal's records into the whole-history
+frame. It is a storage read, not checked history validation.
 With `local-writer` on Linux, use `local::DurableReplica::restart_counter` or
 `local::DurableReplica::restart_utf8_set` to reopen an existing durable store with
 its `WriterConfig`. They reacquire the exclusive fence lock, validate and replay
 the committed history, check allocation metadata, and renew the write ticket
 before returning a writable replica. Any error returns no replica or write ticket.
+For a journal, restart first discards an unfinished final entry (an append
+interrupted before its sync) by truncating the file, and reports it through
+`torn_tail()`; a damaged entry followed by other data is refused as
+`History(IntegrityMismatch)` with the journal unchanged.
 The fresh `counter` and `utf8_set` constructors still return `RecoveryRequired`
 for an existing store. This path does not claim general power-loss certification.
 

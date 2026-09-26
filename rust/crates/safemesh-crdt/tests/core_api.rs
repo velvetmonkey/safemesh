@@ -731,7 +731,21 @@ mod durable_replacement {
             writers: 2,
             writer: 0,
         };
-        let mut replica = DurableReplica::counter(&store, config).unwrap();
+        // Only a transaction-format store replaces a file per edit, so start
+        // from the retained store the archived 3a9179b library wrote. An
+        // append-log store appends in place and needs no new directory entry.
+        fs::create_dir(&store).unwrap();
+        fs::write(
+            store.join("writer-0.fence"),
+            include_bytes!("fixtures/bootstrap/counter.fence"),
+        )
+        .unwrap();
+        fs::write(
+            store.join("writer-0.transaction"),
+            include_bytes!("fixtures/bootstrap/counter.transaction"),
+        )
+        .unwrap();
+        let mut replica = DurableReplica::restart_counter(&store, config).unwrap();
         replica.bump(replica.ticket(), 5).unwrap();
         let temporary = store.join("writer-0.tmp");
         let victim = directory.join("victim");

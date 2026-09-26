@@ -3,6 +3,12 @@
 //! Durable history retention benchmark: restart wall time, peak RSS, bytes on
 //! disk and write amplification for G-Counter and UTF-8 OR-Set stores.
 //!
+//! Each size is measured in both store formats: appends to the
+//! `writer-<id>.transaction` format written before the append log (every
+//! commit rewrites the whole history), then, after an explicit
+//! `migrate_*_to_append_log`, restart and appends on the append log
+//! (`writer-<id>.journal`, every commit appends one record).
+//!
 //! ```sh
 //! cd rust
 //! cargo run --release --locked -p safemesh-crdt --features local-writer \
@@ -43,42 +49,107 @@ mod bench {
         format!("member-{index:07}")
     }
 
+    #[derive(Clone, Copy)]
+    enum Format {
+        /// `writer-<id>.transaction`, as written before the append log.
+        Transaction,
+        /// `writer-<id>.journal` grown by one entry per record.
+        Journal,
+    }
+
     // Build the history in memory with the in-memory local writer (one append
-    // costs no persistence), then commit it as the durable store's single
-    // transaction. Growing a durable store append by append rewrites the whole
-    // history each time, which is exactly the cost this benchmark reports.
-    fn seed(kind: &str, records: u64, dir: &Path) -> PathBuf {
-        let scratch = dir.join("seed");
-        let store = dir.join("store");
-        let log = match kind {
+    // costs no persistence), then store it in `format` without paying a durable
+    // append per record. Restart replays and checks every record either way.
+    fn seed(kind: &str, records: u64, store: &Path, format: Format) {
+        let scratch = store.with_extension("seed");
+        let (log, entries) = match kind {
             "gcounter" => {
                 let mut replica = LocalReplica::counter(&scratch, CONFIG).unwrap();
                 for tally in 1..=records {
                     replica.bump(replica.ticket(), tally).unwrap();
                 }
-                drop(DurableReplica::counter(&store, CONFIG).unwrap());
-                replica.log().to_wire_bytes().unwrap()
+                drop(DurableReplica::counter(store, CONFIG).unwrap());
+                let log = replica.log();
+                let entries: Vec<_> = log
+                    .records()
+                    .iter()
+                    .map(|r| entry(r.id.sequence, &r.to_wire_bytes().unwrap()))
+                    .collect();
+                (log.to_wire_bytes().unwrap(), entries)
             }
             _ => {
                 let mut replica = LocalReplica::utf8_set(&scratch, CONFIG).unwrap();
                 for index in 0..records {
                     replica.add(replica.ticket(), element(index)).unwrap();
                 }
-                drop(DurableReplica::utf8_set(&store, CONFIG).unwrap());
-                replica.log().to_wire_bytes().unwrap()
+                drop(DurableReplica::utf8_set(store, CONFIG).unwrap());
+                let log = replica.log();
+                let entries: Vec<_> = log
+                    .records()
+                    .iter()
+                    .map(|r| entry(r.id.sequence, &r.to_wire_bytes().unwrap()))
+                    .collect();
+                (log.to_wire_bytes().unwrap(), entries)
             }
         };
         fs::remove_dir_all(&scratch).unwrap();
-        // The committed transaction: writer count, writer and last allocated
-        // sequence, then the EventLog frame. Restart replays and checks it all.
-        let mut bytes = [CONFIG.writers, CONFIG.writer, records]
-            .map(u64::to_le_bytes)
-            .concat();
-        bytes.extend(log);
-        let path = store.join(format!("writer-{}.transaction", CONFIG.writer));
+        let journal = store.join(format!("writer-{}.journal", CONFIG.writer));
+        let (path, bytes) = match format {
+            Format::Transaction => {
+                // Writer count, writer and last allocated sequence, then the
+                // EventLog frame. This store has no journal.
+                fs::remove_file(&journal).unwrap();
+                let mut bytes = [CONFIG.writers, CONFIG.writer, records]
+                    .map(u64::to_le_bytes)
+                    .concat();
+                bytes.extend(log);
+                let path = store.join(format!("writer-{}.transaction", CONFIG.writer));
+                (path, bytes)
+            }
+            Format::Journal => {
+                // The fresh constructor wrote the header and empty base frame;
+                // append one entry per record after it.
+                let mut bytes = fs::read(&journal).unwrap();
+                bytes.extend(entries.concat());
+                (journal, bytes)
+            }
+        };
         fs::write(&path, bytes).unwrap();
         fs::File::open(&path).unwrap().sync_all().unwrap();
-        store
+    }
+
+    // One journal entry, as a durable append writes it: payload length and its
+    // complement, the allocation sequence after the record, the record's wire
+    // bytes, then CRC-32 (ISO-HDLC) over everything before it.
+    fn entry(sequence: u64, record: &[u8]) -> Vec<u8> {
+        let len = (8 + record.len()) as u32;
+        let mut bytes = [len.to_le_bytes(), (!len).to_le_bytes()].concat();
+        bytes.extend(sequence.to_le_bytes());
+        bytes.extend(record);
+        let mut crc = u32::MAX;
+        for &byte in &bytes {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
+                crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
+            }
+        }
+        bytes.extend((!crc).to_le_bytes());
+        bytes
+    }
+
+    fn migrate(kind: &str, store: &Path) -> usize {
+        match kind {
+            "gcounter" => DurableReplica::migrate_counter_to_append_log(store, CONFIG)
+                .unwrap()
+                .log()
+                .records()
+                .len(),
+            _ => DurableReplica::migrate_utf8_set_to_append_log(store, CONFIG)
+                .unwrap()
+                .log()
+                .records()
+                .len(),
+        }
     }
 
     fn restart(kind: &str, store: &Path) -> usize {
@@ -118,31 +189,34 @@ mod bench {
     }
 
     // Child: restart untimed, then durably append `appends` records and report
-    // the bytes this process passed to write(2) (`wchar`) and the wall time.
+    // the bytes this process passed to write(2) (`wchar`) and each append's
+    // wall time.
     fn child_append(kind: &str, store: &Path, records: u64, appends: u64) {
         let written_before;
-        let start;
+        let mut micros = Vec::new();
         match kind {
             "gcounter" => {
                 let mut replica = DurableReplica::restart_counter(store, CONFIG).unwrap();
                 written_before = proc_field("/proc/self/io", "wchar:");
-                start = Instant::now();
                 for tally in records + 1..=records + appends {
+                    let start = Instant::now();
                     replica.bump(replica.ticket(), tally).unwrap();
+                    micros.push(start.elapsed().as_micros());
                 }
             }
             _ => {
                 let mut replica = DurableReplica::restart_utf8_set(store, CONFIG).unwrap();
                 written_before = proc_field("/proc/self/io", "wchar:");
-                start = Instant::now();
                 for index in records..records + appends {
+                    let start = Instant::now();
                     replica.add(replica.ticket(), element(index)).unwrap();
+                    micros.push(start.elapsed().as_micros());
                 }
             }
         }
-        let micros = start.elapsed().as_micros();
         let written = proc_field("/proc/self/io", "wchar:") - written_before;
-        println!("append {micros} {written}");
+        let times: Vec<String> = micros.iter().map(u128::to_string).collect();
+        println!("append {written} {}", times.join(" "));
     }
 
     fn run_child(args: &[String]) -> Vec<u128> {
@@ -167,58 +241,97 @@ mod bench {
         fs::metadata(path).unwrap().len()
     }
 
+    // Per-append cost in one store format.
+    struct Append {
+        written: f64,
+        growth: f64,
+        median_ms: f64,
+        max_ms: f64,
+    }
+
+    // Median restart time and the largest peak RSS over `runs` children.
+    struct Restart {
+        ms: f64,
+        peak_rss_mib: f64,
+    }
+
     struct Row {
         kind: &'static str,
         records: u64,
-        restart_ms: f64,
-        peak_rss_mib: f64,
+        transaction: Append,
+        journal: Append,
+        grown: Restart,
+        migrated: Restart,
         disk_bytes: u64,
-        written_per_append: f64,
-        append_growth: f64,
-        append_ms: f64,
     }
 
-    fn measure(kind: &'static str, records: u64, runs: usize, appends: u64, dir: &Path) -> Row {
-        let _ = fs::remove_dir_all(dir);
-        fs::create_dir_all(dir).unwrap();
-        let store = seed(kind, records, dir);
-        let transaction = store.join(format!("writer-{}.transaction", CONFIG.writer));
-        let fence = store.join(format!("writer-{}.fence", CONFIG.writer));
-        let disk_bytes = file_len(&transaction) + file_len(&fence);
-        let store_arg = store.to_str().unwrap().to_owned();
+    fn append(kind: &str, store: &Path, file: &Path, first: u64, appends: u64) -> Append {
+        let before = file_len(file);
+        let fields = run_child(&[
+            "--child-append".into(),
+            kind.into(),
+            store.to_str().unwrap().into(),
+            first.to_string(),
+            appends.to_string(),
+        ]);
+        let mut times = fields[1..].to_vec();
+        times.sort();
+        Append {
+            written: fields[0] as f64 / appends as f64,
+            growth: (file_len(file) - before) as f64 / appends as f64,
+            median_ms: times[times.len() / 2] as f64 / 1e3,
+            max_ms: *times.last().unwrap() as f64 / 1e3,
+        }
+    }
+
+    fn restarts(kind: &str, store: &Path, records: u64, runs: usize) -> Restart {
         let mut samples: Vec<(u128, u128)> = (0..runs)
             .map(|_| {
                 let fields = run_child(&[
                     "--child-restart".into(),
                     kind.into(),
-                    store_arg.clone(),
+                    store.to_str().unwrap().into(),
                     records.to_string(),
                 ]);
                 (fields[0], fields[1])
             })
             .collect();
         samples.sort();
-        let (restart_us, _) = samples[runs / 2];
-        let peak_kib = samples.iter().map(|&(_, peak)| peak).max().unwrap();
-        let before = file_len(&transaction);
-        let fields = run_child(&[
-            "--child-append".into(),
-            kind.into(),
-            store_arg,
-            records.to_string(),
-            appends.to_string(),
-        ]);
-        let growth = (file_len(&transaction) - before) as f64 / appends as f64;
+        Restart {
+            ms: samples[runs / 2].0 as f64 / 1e3,
+            peak_rss_mib: samples.iter().map(|&(_, peak)| peak).max().unwrap() as f64 / 1024.0,
+        }
+    }
+
+    fn measure(kind: &'static str, records: u64, runs: usize, appends: u64, dir: &Path) -> Row {
+        let _ = fs::remove_dir_all(dir);
+        fs::create_dir_all(dir).unwrap();
+        let file =
+            |store: &Path, suffix: &str| store.join(format!("writer-{}.{suffix}", CONFIG.writer));
+
+        // Before: appends to a transaction-format store, then the explicit move.
+        let old = dir.join("transaction");
+        seed(kind, records, &old, Format::Transaction);
+        let transaction = append(kind, &old, &file(&old, "transaction"), records, appends);
+        assert_eq!(migrate(kind, &old), (records + appends) as usize);
+        assert!(!file(&old, "transaction").exists());
+        let migrated = restarts(kind, &old, records + appends, runs);
+
+        // After: a journal grown by one entry per record, as a fresh store grows.
+        let new = dir.join("journal");
+        seed(kind, records, &new, Format::Journal);
+        let grown = restarts(kind, &new, records, runs);
+        let disk_bytes = file_len(&file(&new, "journal")) + file_len(&file(&new, "fence"));
+        let journal = append(kind, &new, &file(&new, "journal"), records, appends);
         fs::remove_dir_all(dir).unwrap();
         Row {
             kind,
             records,
-            restart_ms: restart_us as f64 / 1e3,
-            peak_rss_mib: peak_kib as f64 / 1024.0,
+            transaction,
+            journal,
+            grown,
+            migrated,
             disk_bytes,
-            written_per_append: fields[1] as f64 / appends as f64,
-            append_growth: growth,
-            append_ms: fields[0] as f64 / 1e3 / appends as f64,
         }
     }
 
@@ -264,34 +377,62 @@ mod bench {
     }
 
     fn table(rows: &[Row], appends: u64, runs: usize) -> String {
-        let mut out = format!(
-            "| CRDT | records | restart (median of {runs}) | peak RSS | bytes on disk | disk bytes/record | bytes written per appended record | file growth per appended record | write amplification | durable append latency |\n\
-             |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n"
+        let mut out = String::from(
+            "### Append cost: transaction format (before) and append log (after)\n\n\
+             | CRDT | records | before: bytes written per appended record | before: write amplification | before: median append | before: slowest append | after: bytes written per appended record | after: write amplification | after: median append | after: slowest append |\n\
+             |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n",
         );
+        for row in rows {
+            let (before, after) = (&row.transaction, &row.journal);
+            writeln!(
+                out,
+                "| {} | {} | {:.0} | {:.0}x | {:.2} ms | {:.2} ms | {:.0} | {:.1}x | {:.2} ms | {:.2} ms |",
+                row.kind,
+                row.records,
+                before.written,
+                before.written / before.growth,
+                before.median_ms,
+                before.max_ms,
+                after.written,
+                after.written / after.growth,
+                after.median_ms,
+                after.max_ms,
+            )
+            .unwrap();
+        }
+        writeln!(
+            out,
+            "\n### Append-log store: restart and size\n\n\
+             | CRDT | records | restart, one entry per record (median of {runs}) | peak RSS | bytes on disk | disk bytes/record | restart after migration (median of {runs}) | peak RSS after migration |\n\
+             |---|---:|---:|---:|---:|---:|---:|---:|"
+        )
+        .unwrap();
         for row in rows {
             writeln!(
                 out,
-                "| {} | {} | {:.1} ms | {:.1} MiB | {} | {:.1} | {:.0} | {:.1} | {:.0}x | {:.2} ms |",
+                "| {} | {} | {:.1} ms | {:.1} MiB | {} | {:.1} | {:.1} ms | {:.1} MiB |",
                 row.kind,
                 row.records,
-                row.restart_ms,
-                row.peak_rss_mib,
+                row.grown.ms,
+                row.grown.peak_rss_mib,
                 row.disk_bytes,
                 row.disk_bytes as f64 / row.records as f64,
-                row.written_per_append,
-                row.append_growth,
-                row.written_per_append / row.append_growth,
-                row.append_ms,
+                row.migrated.ms,
+                row.migrated.peak_rss_mib,
             )
             .unwrap();
         }
         writeln!(
             out,
             "\nBytes written are `wchar` from `/proc/self/io` over {appends} durable \
-             appends in a child process, divided by {appends}. Write amplification is \
-             bytes written per appended record divided by the file growth per appended \
-             record. Peak RSS is the largest restart child's `VmHWM`, including the \
-             process baseline."
+             appends in a child process, divided by {appends}; append times are the median \
+             and slowest of those {appends}. Write amplification is bytes written per \
+             appended record divided by the file growth per appended record. \"Before\" \
+             appends go to the transaction-format store, which is then moved to the append \
+             log by `migrate_*_to_append_log` (records plus {appends}, the whole history in \
+             the journal's base frame). \"After\" appends, restart and size are for a \
+             journal holding one entry per record, as a fresh store grows. Peak RSS is the \
+             largest restart child's `VmHWM`, including the process baseline."
         )
         .unwrap();
         out
@@ -353,7 +494,10 @@ mod bench {
              Do not edit by hand; rerun to regenerate.\n\n\
              Workload: one writer of three (`writers: 3, writer: 0`). G-Counter records are \
              `bump` tallies 1..=n; UTF-8 OR-Set records are `add` of distinct 14-byte \
-             elements `member-0000000`... Each store is one committed transaction plus its fence.\n\n\
+             elements `member-0000000`... Each size is seeded twice, without a durable \
+             append per record: once as a transaction-format store (the format written \
+             before the append log) and once as an append log with one entry per \
+             record.\n\n\
              ## Machine\n\n{machine}\n## Results\n\n{table}"
         );
         if let Some(parent) = out.parent() {
@@ -373,7 +517,13 @@ mod bench {
             for kind in super::KINDS {
                 let _ = std::fs::remove_dir_all(&dir);
                 std::fs::create_dir_all(&dir).unwrap();
-                let store = super::seed(kind, 1_000, &dir);
+                let store = dir.join("transaction");
+                super::seed(kind, 1_000, &store, super::Format::Transaction);
+                assert_eq!(super::restart(kind, &store), 1_000);
+                assert_eq!(super::migrate(kind, &store), 1_000);
+                assert_eq!(super::restart(kind, &store), 1_000);
+                let store = dir.join("journal");
+                super::seed(kind, 1_000, &store, super::Format::Journal);
                 assert_eq!(super::restart(kind, &store), 1_000);
             }
             std::fs::remove_dir_all(&dir).unwrap();
