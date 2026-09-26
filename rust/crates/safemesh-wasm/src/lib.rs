@@ -3333,10 +3333,11 @@ mod tests {
             identity.extend_from_slice(&word.to_le_bytes());
         }
         identity.extend_from_slice(&log_bytes);
-        let stored = match SafeMeshStringOrSetReplica::try_import_identity(&identity) {
-            Err(error) => error,
-            Ok(_) => panic!("identity with a sequence-0 remove was imported"),
-        };
+        let stored =
+            match SafeMeshStringOrSetReplica::try_import_identity_with_limits(&identity, None) {
+                Err(error) => error,
+                Ok(_) => panic!("identity with a sequence-0 remove was imported"),
+            };
         assert_eq!(
             (stored.code, stored.message.as_str()),
             (1, expected.as_str())
