@@ -175,7 +175,7 @@ The FFI spine lives in `rust/crates/safemesh-ffi`. It exposes opaque G-Counter h
 The first bindings are thin wrappers over the same Rust core:
 
 - `rust/crates/safemesh-wasm` exposes `SafeMeshGCounter`, `SafeMeshGCounterReplica`, `SafeMeshLwwRegister`, `SafeMeshLwwRegisterReplica`, `SafeMeshEnableWinsFlag`, `SafeMeshEnableWinsFlagReplica`, `SafeMeshLwwMap`, `SafeMeshLwwMapReplica`, `SafeMeshOrSet`, `SafeMeshStringOrSetReplica`, `SafeMeshStringOrSetAddEntry`, `SafeMeshStringOrSetRecord`, canonical record/log bytes, and merge-from-bytes through wasm-bindgen, with a committed TypeScript declaration file.
-- `rust/crates/safemesh-python` exposes G-Counter, LWW Register, Enable-wins Flag, LWW Map, and their replica/event-log surfaces through PyO3, with `pyproject.toml` configured for maturin.
+- `rust/crates/safemesh-python` exposes G-Counter, LWW Register, Enable-wins Flag, LWW Map, and their replica/event-log surfaces, plus a UTF-8 string OR-Set replica (`StringOrSetReplica`), through PyO3, with `pyproject.toml` configured for maturin.
 
 Neither binding reimplements merge logic. Runtime tested: Rust-side tests for both bindings exchange canonical record/log bytes and check convergence through the shared Rust core. Integration tested: the package smoke flow exercises an installed Python wheel and a generated WASM package in Node on Linux. Maintainer-supported status for both bindings is unknown. The G-Counter binding rides the Lean-backed surface; LWW Register, Enable-wins Flag, and LWW Map remain tested-not-proven.
 
