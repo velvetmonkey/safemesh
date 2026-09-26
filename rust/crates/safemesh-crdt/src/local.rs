@@ -139,13 +139,32 @@ impl<C: Crdt> Drop for LocalReplica<C> {
     }
 }
 
-// Persist each newly created entry, deepest first. Existing roots need no sync.
+// Without a fence, existing directories may be leftovers from interrupted mkdir.
+// No persistent provenance identifies a safe stopping ancestor, so sync the
+// resolved parent chain through the filesystem root before creating the fence.
+fn prepare_durable_root(root: &Path, config: WriterConfig) -> io::Result<()> {
+    if root
+        .join(format!("writer-{}.fence", config.writer))
+        .try_exists()?
+    {
+        return Ok(());
+    }
+    create_durable_root(root)
+}
 fn create_durable_root(root: &Path) -> io::Result<()> {
     create_durable_root_with(root, |parent| File::open(parent)?.sync_all())
 }
 
 fn create_durable_root_with(
     root: &Path,
+    sync_parent: impl FnMut(&Path) -> io::Result<()>,
+) -> io::Result<()> {
+    create_durable_root_using(root, |directory| fs::create_dir(directory), sync_parent)
+}
+
+fn create_durable_root_using(
+    root: &Path,
+    mut create: impl FnMut(&Path) -> io::Result<()>,
     mut sync_parent: impl FnMut(&Path) -> io::Result<()>,
 ) -> io::Result<()> {
     let root = std::path::absolute(root)?;
@@ -164,10 +183,9 @@ fn create_durable_root_with(
             Err(error) => return Err(error),
         }
     }
-    let mut created = Vec::new();
     for directory in missing.iter().rev() {
-        match fs::create_dir(directory) {
-            Ok(()) => created.push(directory),
+        match create(directory) {
+            Ok(()) => {}
             // A concurrent creator may have installed this directory after the walk.
             Err(error)
                 if error.kind() == io::ErrorKind::AlreadyExists
@@ -175,12 +193,9 @@ fn create_durable_root_with(
             Err(error) => return Err(error),
         }
     }
-    for directory in created.into_iter().rev() {
-        sync_parent(
-            directory
-                .parent()
-                .ok_or_else(|| io::Error::other("no parent"))?,
-        )?;
+    let resolved = root.canonicalize()?;
+    for parent in resolved.ancestors().skip(1) {
+        sync_parent(parent)?;
     }
     Ok(())
 }
@@ -191,7 +206,7 @@ where
 {
     fn fresh(root: &Path, config: WriterConfig, state: C) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
-        create_durable_root(root)?;
+        prepare_durable_root(root, config)?;
         let mut fence = OpenOptions::new()
             .read(true)
             .write(true)
@@ -607,7 +622,7 @@ where
     C::Delta: OwnedDelta + Clone + PartialEq + WireEncode + WireSchema,
 {
     fn fresh(root: &Path, config: WriterConfig, state: C) -> Result<Self, LocalError> {
-        create_durable_root(root)?;
+        prepare_durable_root(root, config)?;
         let root = root.canonicalize()?;
         // Never overwrite a transaction whose fence is missing.
         match fs::metadata(transaction_path(&root, config)) {
@@ -1222,14 +1237,21 @@ mod durable_tests {
             Ok(())
         })
         .unwrap();
-        assert_eq!(synced, vec![existing.join("ancestor"), existing.clone()]);
+        let expected: Vec<_> = nested
+            .canonicalize()
+            .unwrap()
+            .ancestors()
+            .skip(1)
+            .map(Path::to_path_buf)
+            .collect();
+        assert_eq!(synced, expected);
         synced.clear();
         create_durable_root_with(&nested, |parent| {
             synced.push(parent.to_path_buf());
             Ok(())
         })
         .unwrap();
-        assert!(synced.is_empty());
+        assert_eq!(synced, expected);
         let failed = existing.join("failed/store");
         let error = create_durable_root_with(&failed, |_| {
             Err(io::Error::other("injected parent sync failure"))
@@ -1238,6 +1260,63 @@ mod durable_tests {
         assert_eq!(error.to_string(), "injected parent sync failure");
         assert!(failed.is_dir());
     }
+    #[test]
+    fn fresh_root_syncs_leftover_parent_chain() {
+        let existing = root();
+        let leftover = existing.join("interrupted/store");
+        // Simulate an earlier call dying after mkdir, without any parent fsync.
+        fs::create_dir_all(&leftover).unwrap();
+        let mut synced = Vec::new();
+        create_durable_root_with(&leftover, |parent| {
+            synced.push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        let expected: Vec<_> = leftover
+            .canonicalize()
+            .unwrap()
+            .ancestors()
+            .skip(1)
+            .map(Path::to_path_buf)
+            .collect();
+        assert_eq!(synced, expected);
+        assert_eq!(synced[0], existing.join("interrupted"));
+        assert_eq!(synced[1], existing);
+        let replica = DurableReplica::counter(&leftover, config()).unwrap();
+        assert!(leftover.join("writer-0.fence").is_file());
+        drop(replica);
+    }
+
+    #[test]
+    fn fresh_root_syncs_concurrent_creator_parents() {
+        let existing = root();
+        let nested = existing.join("concurrent/store");
+        let mut synced = Vec::new();
+        let mut races = 0;
+        create_durable_root_using(
+            &nested,
+            |directory| {
+                fs::create_dir(directory)?;
+                races += 1;
+                Err(io::Error::from(io::ErrorKind::AlreadyExists))
+            },
+            |parent| {
+                synced.push(parent.to_path_buf());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(races, 2);
+        let expected: Vec<_> = nested
+            .canonicalize()
+            .unwrap()
+            .ancestors()
+            .skip(1)
+            .map(Path::to_path_buf)
+            .collect();
+        assert_eq!(synced, expected);
+    }
+
     fn config() -> WriterConfig {
         WriterConfig {
             writers: 2,
@@ -1800,6 +1879,40 @@ mod durable_tests {
         let replica = DurableReplica::restart_counter_from_store(&root, 0).unwrap();
         assert_eq!(replica.state().state(), &[5, 7]);
     }
+    #[test]
+    fn fresh_root_second_order() {
+        let parent = root();
+        for name in ["empty", "stray", "symlink"] {
+            let target = parent.join(format!("target-{name}"));
+            fs::create_dir(&target).unwrap();
+            if name == "stray" {
+                fs::write(target.join("stray"), b"keep").unwrap();
+            }
+            let store = if name == "symlink" {
+                let link = parent.join("link");
+                std::os::unix::fs::symlink(&target, &link).unwrap();
+                link
+            } else {
+                target.clone()
+            };
+            std::eprintln!("ROOT-PROBE fresh {}", store.display());
+            let replica = DurableReplica::counter(&store, config()).unwrap();
+            drop(replica);
+            std::eprintln!("ROOT-PROBE reopen {}", store.display());
+            let mut replica = DurableReplica::restart_counter(&store, config()).unwrap();
+            let ticket = replica.ticket();
+            replica.bump(ticket, 1).unwrap();
+            drop(replica);
+            std::eprintln!("ROOT-PROBE restart {}", store.display());
+            let replica = DurableReplica::restart_counter(&store, config()).unwrap();
+            assert_eq!(replica.state().value(), 1);
+            drop(replica);
+            if name == "stray" {
+                assert_eq!(fs::read(target.join("stray")).unwrap(), b"keep");
+            }
+        }
+    }
+
     #[test]
     fn fresh_durable_counter_creates_missing_root() {
         let store = root().join("fresh-counter");
