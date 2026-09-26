@@ -67,7 +67,7 @@ fn typescript_surface_lists_the_public_binding() {
     ));
     assert_eq!(
         DTS.matches(
-            "mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): (\"accepted\" | \"duplicate\" | \"collision\")[]"
+            "mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): (\"accepted\" | \"duplicate\" | \"collision\")[]"
         )
         .count(),
         6

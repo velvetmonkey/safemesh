@@ -21,6 +21,7 @@ pub enum LocalError {
     Exhausted,
     RecoveryRequired,
     Configuration,
+    InvalidRecord(WireError),
     History(WireError),
     InvalidHistory,
     Io(io::Error),
@@ -37,6 +38,7 @@ impl core::fmt::Display for LocalError {
             }
             Self::RecoveryRequired => f.write_str("local store requires recovery"),
             Self::Configuration => f.write_str("invalid or mismatched local writer configuration"),
+            Self::InvalidRecord(error) => error.fmt(f),
             Self::History(error) => write!(f, "local history wire validation failed: {error}"),
             Self::InvalidHistory => {
                 f.write_str("local history failed replay or sequence validation")
@@ -49,7 +51,7 @@ impl core::fmt::Display for LocalError {
 impl core::error::Error for LocalError {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
-            Self::History(error) => Some(error),
+            Self::InvalidRecord(error) | Self::History(error) => Some(error),
             Self::Io(error) => Some(error),
             _ => None,
         }
@@ -251,12 +253,21 @@ where
         local: bool,
         commit: impl FnOnce(&EventLog<C::Delta>, u64) -> Result<(), LocalError>,
     ) -> Result<Admission, LocalError> {
-        // The ownership guard below also rejects sequence zero. Preserve the
-        // OR-Set remove's specific recovery cause before that broader refusal.
-        if let Err(error @ WireError::ZeroSequenceRemove { .. }) =
-            self.state.validate_record(record.id, &record.delta)
+        // Preserve lease and ownership precedence, then surface the carrier cause
+        // for a received OR-Set sequence-zero add or remove.
+        if !local
+            && record.id.sequence == 0
+            && self.held
+            && ticket.0 == self.generation
+            && self.generation > 0
+            && record.id.replica < self.config.writers
         {
-            return Err(LocalError::History(error));
+            if let Err(
+                error @ (WireError::ZeroSequenceAdd { .. } | WireError::ZeroSequenceRemove { .. }),
+            ) = self.state.validate_record(record.id, &record.delta)
+            {
+                return Err(LocalError::InvalidRecord(error));
+            }
         }
         if refuses(
             self.context(ticket, local),
@@ -1041,13 +1052,14 @@ mod durable_tests {
             delta: OrSetDelta::Remove { tokens: vec![2] },
         };
         let before = fs::read(transaction_path(&root, config())).unwrap();
+        let log_before = replica.log().to_wire_bytes().unwrap();
         assert!(matches!(
             replica.receive(replica.ticket(), remove.clone()),
-            Err(LocalError::History(WireError::ZeroSequenceRemove {
+            Err(LocalError::InvalidRecord(WireError::ZeroSequenceRemove {
                 replica: 1
             }))
         ));
-        assert!(replica.log().records().is_empty());
+        assert_eq!(replica.log().to_wire_bytes().unwrap(), log_before);
         assert!(replica.state().tombstones().is_empty());
         assert_eq!(fs::read(transaction_path(&root, config())).unwrap(), before);
         drop(replica);
@@ -1073,6 +1085,163 @@ mod durable_tests {
         ));
         assert!(error.to_string().contains("Recovery: "));
         assert_eq!(fs::read(transaction_path(&root, config())).unwrap(), stored);
+    }
+    #[test]
+    fn durable_receive_zero_sequence_add_reports_cause_without_writing() {
+        let root = root();
+        let mut replica = DurableReplica::utf8_set(&root, config()).unwrap();
+        let transaction = transaction_path(&root, config());
+        let store_before = fs::read(&transaction).unwrap();
+        let log_before = replica.log().to_wire_bytes().unwrap();
+        let error = replica
+            .receive(
+                replica.ticket(),
+                Record {
+                    id: RecordId {
+                        replica: 1,
+                        sequence: 0,
+                    },
+                    delta: OrSetDelta::Add {
+                        element: "water".into(),
+                        token: 1,
+                    },
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            LocalError::InvalidRecord(WireError::ZeroSequenceAdd { replica: 1 })
+        ));
+        assert_eq!(
+            error.to_string(),
+            WireError::ZeroSequenceAdd { replica: 1 }.to_string()
+        );
+        assert_eq!(fs::read(&transaction).unwrap(), store_before);
+        assert_eq!(replica.log().to_wire_bytes().unwrap(), log_before);
+        assert!(replica.state().elements().is_empty());
+        std::println!(
+            "store={} log-bytes={}",
+            transaction.display(),
+            log_before.len()
+        );
+    }
+    #[test]
+    fn receive_other_refusals_keep_ownership_text() {
+        let expected = LocalError::Refused.to_string();
+        let mut set = DurableReplica::utf8_set(&root(), config()).unwrap();
+        let remove = set
+            .receive(
+                set.ticket(),
+                Record {
+                    id: RecordId {
+                        replica: 1,
+                        sequence: 0,
+                    },
+                    delta: OrSetDelta::Remove {
+                        tokens: alloc::vec![1],
+                    },
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(
+            remove,
+            LocalError::InvalidRecord(WireError::ZeroSequenceRemove { replica: 1 })
+        ));
+        assert_eq!(
+            remove.to_string(),
+            WireError::ZeroSequenceRemove { replica: 1 }.to_string()
+        );
+        let outside = set
+            .receive(
+                set.ticket(),
+                Record {
+                    id: RecordId {
+                        replica: 2,
+                        sequence: 1,
+                    },
+                    delta: OrSetDelta::Add {
+                        element: "water".into(),
+                        token: 4,
+                    },
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(outside, LocalError::Refused));
+        assert_eq!(outside.to_string(), expected);
+        let outside_zero = set
+            .receive(
+                set.ticket(),
+                Record {
+                    id: RecordId {
+                        replica: 2,
+                        sequence: 0,
+                    },
+                    delta: OrSetDelta::Add {
+                        element: "water".into(),
+                        token: 2,
+                    },
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(outside_zero, LocalError::Refused));
+        assert_eq!(outside_zero.to_string(), expected);
+        let stale = set.ticket();
+        set.renew(stale).unwrap();
+        let stale_zero = set
+            .receive(
+                stale,
+                Record {
+                    id: RecordId {
+                        replica: 1,
+                        sequence: 0,
+                    },
+                    delta: OrSetDelta::Add {
+                        element: "water".into(),
+                        token: 1,
+                    },
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(stale_zero, LocalError::Refused));
+        assert_eq!(stale_zero.to_string(), expected);
+
+        let mut counter = DurableReplica::counter(&root(), config()).unwrap();
+        let gcounter = counter
+            .receive(
+                counter.ticket(),
+                Record {
+                    id: RecordId {
+                        replica: 1,
+                        sequence: 0,
+                    },
+                    delta: GCounterDelta {
+                        replica: 1,
+                        tally: 7,
+                    },
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(gcounter, LocalError::Refused));
+        assert_eq!(gcounter.to_string(), expected);
+
+        let mut pn = DurableReplica::fresh(&root(), config(), crate::PnCounter::new(2)).unwrap();
+        let pncounter = pn
+            .receive(
+                pn.ticket(),
+                Record {
+                    id: RecordId {
+                        replica: 1,
+                        sequence: 0,
+                    },
+                    delta: crate::PnCounterDelta::Inc {
+                        replica: 1,
+                        tally: 7,
+                    },
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(pncounter, LocalError::Refused));
+        assert_eq!(pncounter.to_string(), expected);
     }
     #[test]
     fn restart_counter_from_store_replays_without_writer_count() {

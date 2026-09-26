@@ -72,6 +72,9 @@ let log = EventLog::<GSet<u64>>::from_wire_bytes_with_limits(
 assert_eq!(log.records().len(), 1);
 ```
 
+Python `merge_log_bytes(max_records=n)` and WASM `mergeLogBytes(bytes, undefined, n)`
+limit top-level input records before admission.
+
 For a destination CRDT, use `EventLog::from_wire_bytes_for_with_limits`
 to validate its shape before replay. `None` for `max_collection_elements`
 retains the 4,096 default for peer bytes. The Linux durable adapter's ordinary
