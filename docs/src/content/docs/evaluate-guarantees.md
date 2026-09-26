@@ -77,6 +77,10 @@ are separate routes, not equivalent persistence APIs. A WASM build is not browse
 runtime evidence. These fixtures hand bytes between objects after restart; they
 do not test a physical network, sudden power loss or storage hardware guarantees.
 
+For the toolchain and platform jobs current `main` runs, and for EventLog bytes
+written by an earlier checkout, see
+[Wire compatibility and upgrades](/safemesh/persist-and-restart/#wire-compatibility-and-upgrades).
+
 
 ## Limitations and fit
 
