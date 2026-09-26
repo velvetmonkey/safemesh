@@ -90,6 +90,7 @@ function retentionIds(bytes) {
 }
 
 function retention_wasm_merge_and_identity_all_5000() {
+  const started = performance.now();
   const SetReplica = wasm.SafeMeshStringOrSetReplica;
   const authors = [0n, 1n, 2n].map(a => SetReplica.createAllocated(3n, a));
   const expectedIds = [];
@@ -126,6 +127,6 @@ function retention_wasm_merge_and_identity_all_5000() {
   check(restored);
   assert.deepEqual(restored.exportIdentity(), identity, 'retention byte-identical identity');
   restored.free();
-  console.log('retention_wasm_merge_and_identity_all_5000 PASS');
+  console.log('retention_wasm_merge_and_identity_all_5000 PASS seconds=' + (performance.now() - started) / 1000);
 }
 retention_wasm_merge_and_identity_all_5000();

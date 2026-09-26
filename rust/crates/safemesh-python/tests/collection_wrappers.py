@@ -123,6 +123,8 @@ assert not hasattr(sm.PnCounter, 'from_wire_bytes')
 
 def retention_python_merge_log_bytes_all_5000():
     import struct
+    import time
+    started = time.perf_counter()
 
     def identities(frame):
         offset = 17 + struct.unpack_from('<I', frame, 13)[0]
@@ -167,7 +169,7 @@ def retention_python_merge_log_bytes_all_5000():
     assert target.visible_keys() == list(range(5000))
     for index in range(5000):
         assert target.value_or(index, 0) == index + 1
-    print('retention_python_merge_log_bytes_all_5000 PASS')
+    print('retention_python_merge_log_bytes_all_5000 PASS seconds=', time.perf_counter() - started)
 
 
 retention_python_merge_log_bytes_all_5000()
