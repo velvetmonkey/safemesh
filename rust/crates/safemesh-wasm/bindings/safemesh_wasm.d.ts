@@ -30,9 +30,27 @@ export class SafeMeshEnableWinsFlagReplica {
      */
     mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): "accepted" | "duplicate" | "collision";
     constructor(replica_id: bigint);
+    /**
+     * Every record ID in log order, as `[author, sequence, ...]` pairs.
+     * Reads IDs only; no record payload is decoded.
+     */
+    recordIds(): BigUint64Array;
+    /**
+     * The records a peer at `peerVersion` is missing, as one log batch
+     * for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
+     * as `versionVector` returns it; sequence-zero records are always
+     * included. The budgets are `mergeLogBytes`'s, in the same places,
+     * and a batch over them throws the error that merge would throw.
+     */
+    sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;
     tombstoneTokens(): BigUint64Array;
     value(): boolean;
     versionFor(replica: bigint): bigint;
+    /**
+     * `[author, versionFor(author), ...]` for every author with a
+     * nonzero prefix, sorted by author: a peer's `sinceLogBytes` input.
+     */
+    versionVector(): BigUint64Array;
 }
 
 export class SafeMeshGCounter {
@@ -68,15 +86,33 @@ export class SafeMeshGCounterReplica {
     mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): "accepted" | "duplicate" | "collision";
     constructor(replica_id: bigint, replicas: number);
     /**
+     * Every record ID in log order, as `[author, sequence, ...]` pairs.
+     * Reads IDs only; no record payload is decoded.
+     */
+    recordIds(): BigUint64Array;
+    /**
      * Compare the Rust-core carrier states without reproducing its equality in JavaScript.
      */
     sameStateAs(other: SafeMeshGCounterReplica): boolean;
+    /**
+     * The records a peer at `peerVersion` is missing, as one log batch
+     * for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
+     * as `versionVector` returns it; sequence-zero records are always
+     * included. The budgets are `mergeLogBytes`'s, in the same places,
+     * and a batch over them throws the error that merge would throw.
+     */
+    sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;
     state(): BigUint64Array;
     /**
      * The counter total as an exact `bigint`, also past the 64-bit boundary.
      */
     value(): bigint;
     versionFor(replica: bigint): bigint;
+    /**
+     * `[author, versionFor(author), ...]` for every author with a
+     * nonzero prefix, sorted by author: a peer's `sinceLogBytes` input.
+     */
+    versionVector(): BigUint64Array;
 }
 
 /**
@@ -124,13 +160,31 @@ export class SafeMeshLwwMapReplica {
      */
     mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): "accepted" | "duplicate" | "collision";
     constructor(replica_id: bigint);
+    /**
+     * Every record ID in log order, as `[author, sequence, ...]` pairs.
+     * Reads IDs only; no record payload is decoded.
+     */
+    recordIds(): BigUint64Array;
     removalKeys(): BigUint64Array;
+    /**
+     * The records a peer at `peerVersion` is missing, as one log batch
+     * for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
+     * as `versionVector` returns it; sequence-zero records are always
+     * included. The budgets are `mergeLogBytes`'s, in the same places,
+     * and a batch over them throws the error that merge would throw.
+     */
+    sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;
     /**
      * Canonical complete carrier, including hidden entries and remove dots.
      */
     stateBytes(): Uint8Array;
     valueOr(key: bigint, default_value: bigint): bigint;
     versionFor(replica: bigint): bigint;
+    /**
+     * `[author, versionFor(author), ...]` for every author with a
+     * nonzero prefix, sorted by author: a peer's `sinceLogBytes` input.
+     */
+    versionVector(): BigUint64Array;
     visibleKeys(): BigUint64Array;
 }
 
@@ -162,9 +216,27 @@ export class SafeMeshLwwRegisterReplica {
      */
     mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): "accepted" | "duplicate" | "collision";
     constructor(replica_id: bigint);
+    /**
+     * Every record ID in log order, as `[author, sequence, ...]` pairs.
+     * Reads IDs only; no record payload is decoded.
+     */
+    recordIds(): BigUint64Array;
+    /**
+     * The records a peer at `peerVersion` is missing, as one log batch
+     * for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
+     * as `versionVector` returns it; sequence-zero records are always
+     * included. The budgets are `mergeLogBytes`'s, in the same places,
+     * and a batch over them throws the error that merge would throw.
+     */
+    sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;
     timestampOr(default_value: bigint): bigint;
     valueOr(default_value: bigint): bigint;
     versionFor(replica: bigint): bigint;
+    /**
+     * `[author, versionFor(author), ...]` for every author with a
+     * nonzero prefix, sorted by author: a peer's `sinceLogBytes` input.
+     */
+    versionVector(): BigUint64Array;
     writerReplicaOr(default_value: bigint): bigint;
 }
 
@@ -208,9 +280,22 @@ export class SafeMeshPnCounterReplica {
     mergeRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): "accepted" | "duplicate" | "collision";
     constructor(replica_id: bigint, replicas: number);
     /**
+     * Every record ID in log order, as `[author, sequence, ...]` pairs.
+     * Reads IDs only; no record payload is decoded.
+     */
+    recordIds(): BigUint64Array;
+    /**
      * Compare the Rust-core carrier states without reproducing its equality in JavaScript.
      */
     sameStateAs(other: SafeMeshPnCounterReplica): boolean;
+    /**
+     * The records a peer at `peerVersion` is missing, as one log batch
+     * for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
+     * as `versionVector` returns it; sequence-zero records are always
+     * included. The budgets are `mergeLogBytes`'s, in the same places,
+     * and a batch over them throws the error that merge would throw.
+     */
+    sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;
     /**
      * Complete carrier: increment coordinates followed by decrement coordinates.
      */
@@ -220,6 +305,11 @@ export class SafeMeshPnCounterReplica {
      */
     value(): bigint;
     versionFor(replica: bigint): bigint;
+    /**
+     * `[author, versionFor(author), ...]` for every author with a
+     * nonzero prefix, sorted by author: a peer's `sinceLogBytes` input.
+     */
+    versionVector(): BigUint64Array;
 }
 
 /**
@@ -345,8 +435,26 @@ export class SafeMeshStringOrSetReplica {
      * Live add tokens for `element`, excluding tombstoned tokens.
      */
     observedTokens(element: string): BigUint64Array;
+    /**
+     * Every record ID in log order, as `[author, sequence, ...]` pairs.
+     * Reads IDs only; no record payload is decoded.
+     */
+    recordIds(): BigUint64Array;
+    /**
+     * The records a peer at `peerVersion` is missing, as one log batch
+     * for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
+     * as `versionVector` returns it; sequence-zero records are always
+     * included. The budgets are `mergeLogBytes`'s, in the same places,
+     * and a batch over them throws the error that merge would throw.
+     */
+    sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;
     tombstones(): BigUint64Array;
     versionFor(replica: bigint): bigint;
+    /**
+     * `[author, versionFor(author), ...]` for every author with a
+     * nonzero prefix, sorted by author: a peer's `sinceLogBytes` input.
+     */
+    versionVector(): BigUint64Array;
 }
 
 export function enableWinsFlagDisableDeltaToWire(tokens: BigUint64Array): Uint8Array;
