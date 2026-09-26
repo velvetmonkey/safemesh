@@ -247,6 +247,9 @@ fn admission_name(admission: safemesh_crdt::Admission) -> String {
 // duplicate or collision is a verdict, not an error. An invalid record throws.
 fn record_verdict(admission: safemesh_crdt::Admission) -> Result<String, BindingError> {
     match admission {
+        safemesh_crdt::Admission::Invalid(error @ WireError::ZeroSequenceAdd { .. }) => {
+            Err(binding_error(1, error.to_string()))
+        }
         safemesh_crdt::Admission::Invalid(_) => Err(binding_error(1, "invalid record")),
         admission => Ok(admission_name(admission)),
     }
@@ -1242,6 +1245,8 @@ fn event_log_decode_error(error: safemesh_crdt::WireError) -> BindingError {
             }
             safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch".to_string(),
             safemesh_crdt::WireError::MissingShape => "event log missing shape".to_string(),
+            // Same text as the single-record path: it names the record and a recovery step.
+            error @ safemesh_crdt::WireError::ZeroSequenceAdd { .. } => error.to_string(),
             other => format!("failed to decode event log: {other}"),
         },
     )
@@ -1389,6 +1394,11 @@ impl SafeMeshStringOrSetReplica {
         writers: u64,
         record: &Record<OrSetDelta<String, u64>>,
     ) -> Result<(), BindingError> {
+        // The core OR-Set hook runs first, so a sequence-0 add reads the same
+        // on allocated and legacy replicas, for one record or a whole log.
+        OrSet::<String, u64>::new()
+            .validate_record(record.id, &record.delta)
+            .map_err(|error| binding_error(1, error.to_string()))?;
         if record.id.replica >= writers || record.id.sequence == 0 {
             return Err(binding_error(
                 1,
@@ -2201,6 +2211,53 @@ mod tests {
                 token: 4
             }
         );
+    }
+
+    #[test]
+    fn legacy_event_log_fixtures_keep_the_core_text() {
+        use safemesh_crdt::LegacyFrame;
+        let cases: [(LegacyFrame, &[u8]); 2] = [
+            (
+                LegacyFrame::Tag02,
+                include_bytes!("../../safemesh-crdt/tests/fixtures/legacy-event-log/tag02/orset-utf8.log"),
+            ),
+            (
+                LegacyFrame::Tag03Unshaped,
+                include_bytes!(
+                    "../../safemesh-crdt/tests/fixtures/legacy-event-log/tag03-unshaped/orset-utf8.log"
+                ),
+            ),
+        ];
+        for (found, bytes) in cases {
+            let expected = format!(
+                "failed to decode event log: {}",
+                WireError::LegacyEventLogFrame { found }
+            );
+            let mut replica = SafeMeshStringOrSetReplica::new(0);
+            for error in [
+                replica.try_merge_log_bytes(bytes).unwrap_err(),
+                replica
+                    .try_merge_log_bytes_with_limits(bytes, Some(4096))
+                    .unwrap_err(),
+            ] {
+                assert_eq!((error.code, error.message.as_str()), (1, expected.as_str()));
+            }
+            assert!(replica.log.records().is_empty());
+            // A saved identity whose history is a legacy frame names it too.
+            let mut identity = b"SMOI\x01".to_vec();
+            for word in [2u64, 0, 1] {
+                identity.extend_from_slice(&word.to_le_bytes());
+            }
+            identity.extend_from_slice(bytes);
+            let Err(error) = SafeMeshStringOrSetReplica::try_import_identity(&identity) else {
+                panic!("legacy identity history imported");
+            };
+            assert_eq!((error.code, error.message.as_str()), (1, expected.as_str()));
+            println!(
+                "WASM {found:?}: code={} message={}",
+                error.code, error.message
+            );
+        }
     }
 
     #[test]
@@ -3101,6 +3158,77 @@ mod tests {
         let mut reader = SafeMeshStringOrSetReplica::new(2);
         reader.try_merge_log_bytes(&log).unwrap();
         assert_eq!(reader.elements(), vec!["vaccine".to_string()]);
+    }
+
+    #[test]
+    fn wasm_string_orset_refuses_sequence_zero_add_with_core_text() {
+        // Every WASM path surfaces the core `WireError::ZeroSequenceAdd` text:
+        // legacy and allocated, one record or a whole log, and stored identity.
+        let expected = WireError::ZeroSequenceAdd { replica: 1 }.to_string();
+        assert!(expected.contains("replica 1, sequence 0"));
+        assert!(expected.contains("Recovery: "));
+        let add = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 0,
+            },
+            delta: OrSetDelta::Add {
+                element: "water".to_string(),
+                token: 0,
+            },
+        };
+        let add_bytes = add.to_wire_bytes().unwrap();
+        // An inert batch, as a peer or an old store would hold it.
+        let mut log_bytes = Vec::new();
+        EventLog::encode_records(None, core::slice::from_ref(&add), &mut log_bytes).unwrap();
+
+        let mut legacy = SafeMeshStringOrSetReplica::new(0);
+        let single = legacy.try_merge_record_bytes(&add_bytes).unwrap_err();
+        assert_eq!(
+            (single.code, single.message.as_str()),
+            (1, expected.as_str())
+        );
+        let batch = legacy.try_merge_log_bytes(&log_bytes).unwrap_err();
+        assert_eq!((batch.code, batch.message.as_str()), (1, expected.as_str()));
+        assert!(legacy.log.records().is_empty());
+        assert!(legacy.elements().is_empty());
+
+        let mut allocated = SafeMeshStringOrSetReplica::try_create_allocated(2, 0).unwrap();
+        let single = allocated.try_merge_record_bytes(&add_bytes).unwrap_err();
+        assert_eq!(
+            (single.code, single.message.as_str()),
+            (1, expected.as_str())
+        );
+        let batch = allocated.try_merge_log_bytes(&log_bytes).unwrap_err();
+        assert_eq!((batch.code, batch.message.as_str()), (1, expected.as_str()));
+        assert!(allocated.log.records().is_empty());
+        assert!(allocated.elements().is_empty());
+        drop(allocated);
+
+        // Stored identity whose log holds a sequence-0 add fails loudly with
+        // the same text and creates no writer.
+        let mut identity = b"SMOI\x01".to_vec();
+        for word in [2u64, 0, 1] {
+            identity.extend_from_slice(&word.to_le_bytes());
+        }
+        identity.extend_from_slice(&log_bytes);
+        let stored = match SafeMeshStringOrSetReplica::try_import_identity(&identity) {
+            Err(error) => error,
+            Ok(_) => panic!("identity with a sequence-0 add was imported"),
+        };
+        assert_eq!(
+            (stored.code, stored.message.as_str()),
+            (1, expected.as_str())
+        );
+        assert!(SafeMeshStringOrSetReplica::try_create_allocated(2, 0).is_ok());
+
+        // Inspection only decodes; it neither admits nor refuses.
+        assert_eq!(
+            SafeMeshStringOrSetReplica::try_inspect_record_bytes(&add_bytes)
+                .unwrap()
+                .sequence(),
+            0
+        );
     }
 
     #[test]
