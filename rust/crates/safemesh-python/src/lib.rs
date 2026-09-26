@@ -88,7 +88,20 @@ fn event_log_decode_error(error: safemesh_crdt::WireError) -> PyErr {
 #[test]
 fn python_zero_sequence_remove_mapping_keeps_core_cause() {
     pyo3::prepare_freethreaded_python();
-    let cause = safemesh_crdt::WireError::ZeroSequenceRemove { replica: 1 };
+    let record = Record {
+        id: safemesh_crdt::RecordId {
+            replica: 1,
+            sequence: 0,
+        },
+        delta: safemesh_crdt::OrSetDelta::<u64, u64>::Remove { tokens: vec![2] },
+    };
+    let cause = OrSet::<u64, u64>::new()
+        .validate_record(record.id, &record.delta)
+        .unwrap_err();
+    assert_eq!(
+        cause,
+        safemesh_crdt::WireError::ZeroSequenceRemove { replica: 1 }
+    );
     let text = event_log_decode_error(cause).to_string();
     assert!(text.contains(&cause.to_string()), "{text}");
     assert!(text.contains("Recovery: "), "{text}");
