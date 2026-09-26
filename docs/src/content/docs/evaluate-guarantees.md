@@ -5,7 +5,7 @@ description: Separate model proofs, implementation tests, platform evidence and 
 
 ## Release status
 
-**v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
+**v0 scope:** G-Counter and OR-Set are the **v0 focus** types, within the [language-path limits](/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
 
 These guides use **main (unreleased)** source and a locally built WASM package.
 There is no published SafeMesh package to install; a successful local package build

@@ -1,6 +1,6 @@
 # SafeMesh WASM
 
-**v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](https://velvetmonkey.github.io/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
+**v0 scope:** G-Counter and OR-Set are the **v0 focus** types, within the [language-path limits](https://velvetmonkey.github.io/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
 
 
 SafeMesh's Rust crate floor for consumers is **Rust 1.89**. For the source builds,
@@ -99,6 +99,29 @@ Stdout:
 ```text
 5n 5n
 ```
+
+## Incremental sync
+
+Every replica class with `logBytes` can send a peer only what it lacks, using
+the core's `since` selection. `recordIds()` lists every record ID in log order
+as `[author, sequence, ...]` pairs, without decoding payloads.
+`versionVector()` returns `[author, versionFor(author), ...]` for each author
+with a nonzero prefix. `sinceLogBytes(peerVersion)` takes that shape as a
+`BigUint64Array` and returns one log batch for the peer's `mergeLogBytes`:
+
+```js
+const batch = a.sinceLogBytes(b.versionVector());
+b.mergeLogBytes(batch); // one "accepted" per record b was missing
+```
+
+A version at or ahead of the sender yields a batch with no records. A malformed
+version (odd length, a repeated author, a zero prefix, more than 4,096 authors,
+or not a `BigUint64Array`) throws `SafeMeshError` code 2 naming `peerVersion`.
+The optional second and third arguments are `mergeLogBytes`'s collection and
+record budgets; a batch over them throws the error that merge would throw.
+The pair shape cannot acknowledge sequence-zero records, so those are always
+included. Run [`examples/node-since-sync.mjs`](examples/node-since-sync.mjs)
+against a Node package, as in the demos below.
 
 ## Demos
 

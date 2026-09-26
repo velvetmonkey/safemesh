@@ -128,8 +128,8 @@ These language paths have different limits:
 - TypeScript/WASM `SafeMeshStringOrSetReplica`: UTF-8 `createAllocated`,
   `appendAllocatedAdd`, `exportIdentity`, `importIdentity`, `appendAdd`,
   `appendRemoveObserved`, `mergeRecordBytes`, `mergeLogBytes`, `logBytes`,
-  `versionFor`, `elements`, `observedTokens`, `tombstones`, `addEntries`, and
-  `inspectRecordBytes`.
+  `versionFor`, `versionVector`, `recordIds`, `sinceLogBytes`, `elements`,
+  `observedTokens`, `tombstones`, `addEntries`, and `inspectRecordBytes`.
 - Python: G-Counter mutation/exchange with caller-owned storage; numeric OR-Set
   mutation/remove/whole-state merge, without a UTF-8 replica or recovery promise.
 - C: G-Counter carrier mutation/read and delta encoding, and numeric OR-Set
@@ -137,7 +137,7 @@ These language paths have different limits:
 
 The [install matrix](https://github.com/velvetmonkey/safemesh/blob/main/README.md#install-matrix)
 records measured environments and artifact availability separately.
-For decrementing stock, use [paired supported G-Counters](/safemesh/getting-started/#decrement-with-supported-types).
+For decrementing stock, use [paired v0-focus G-Counters](/safemesh/getting-started/#decrement-with-v0-focus-types).
 Application schemas, custom durable replicas and delivery/retry/storage remain caller-owned.
 
 ## More entry points

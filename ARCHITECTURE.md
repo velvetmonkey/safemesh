@@ -1,6 +1,6 @@
 # SafeMesh architecture
 
-**v0 scope:** G-Counter and OR-Set are **supported**, within the [language-path limits](https://velvetmonkey.github.io/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
+**v0 scope:** G-Counter and OR-Set are the **v0 focus** types, within the [language-path limits](https://velvetmonkey.github.io/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
 
 
 SafeMesh's Rust crate floor for consumers is **Rust 1.89**. For the source builds,
@@ -78,6 +78,6 @@ These are engineered Rust mechanisms, not proofs of filesystem durability or pow
 - **Proven (universal):** everything in `lean/SafeMesh/` — kernel-checked, zero `sorry`, axioms ⊆ {propext, Classical.choice, Quot.sound}, pinned per-theorem by `#guard_msgs` in `Test/Axioms.lean` (a default build target, so the gate cannot silently not-run).
 - **Differentially tested (finite evidence over corpus C):** the Rust crate. The corpus is finite; conformance is evidence, not a universal theorem.
 - **Laws-tested (finite evidence over generated scenarios):** custom/user types, `LwwRegister`, `EnableWinsFlag`, `LwwMap`, and unproven implementation glue. The optional `laws` module checks merge laws, redelivery, shuffled delivery, and split/drop-then-merge recovery. This checks the merge contract but does not earn a Lean-proven label.
-- **Trusted (the named TCB of the bridge):** Lean's compiler evaluating the proven definitions in `lake exe corpus` (kept off the proof path — not a default target, imported by nothing in the proof tree, invisible to the axiom gate), the emitted JSON, and serde parsing in the std test harness. The `no_std` library itself has no dependencies and forbids `unsafe`.
+- **Trusted (the named TCB of the bridge):** Lean's compiler evaluating the proven definitions in `lake exe corpus` (kept off the proof path — not a default target, imported by nothing in the proof tree, invisible to the axiom gate), the emitted JSON, and serde parsing in the std test harness. The `no_std` library itself has no dependencies and denies `unsafe`.
 
 One proof, two bodies: the Lean development is the semantics; the Rust crate is a second body of the same object, held to the first by conformance.

@@ -7,7 +7,7 @@ The applications send SafeMesh record bytes directly to one another over real
 loopback HTTP sockets. The journey driver sends control requests and reads
 status; it never carries CRDT records between applications.
 
-This is an executable acceptance journey for the supported G-Counter path. It
+This is an executable acceptance journey for the [v0 focus](https://velvetmonkey.github.io/safemesh/#v0-support) G-Counter path. It
 counts cumulative receipts, not current stock: G-Counter cannot subtract units.
 The Python package is a locally built artifact; this does not claim a PyPI
 release. Only the public `safemesh_python.GCounterReplica` API performs CRDT
@@ -22,7 +22,6 @@ absolute scratch directory; existing journey directories are deliberately
 rejected to preserve evidence and prevent accidental reuse of replica identity.
 
 ```sh
-export PATH=/home/monkey/bin:$PATH
 DEMO_WORK="$HOME/scratch/two-app-inventory"
 mkdir -p "$DEMO_WORK/wheels" "$DEMO_WORK/tmp"
 export TMPDIR="$DEMO_WORK/tmp"
@@ -166,7 +165,7 @@ assumption, not part of the CRDT proof. HTTP is unauthenticated, loopback-only,
 with fault-injection controls: do not expose it as a production service.
 Cross-host transport, other Python/platform versions, hostile peers, many
 replicas, and larger histories remain unverified. Nothing here adds a new proof
-or extends the supported CRDT surface.
+or extends the [v0 focus](https://velvetmonkey.github.io/safemesh/#v0-support) CRDT surface.
 
 ## Simultaneous-sync regression
 
