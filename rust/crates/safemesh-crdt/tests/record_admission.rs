@@ -377,9 +377,15 @@ mod owned_local {
                 tally: 8,
             },
         };
-        r.receive(r.ticket(), last).unwrap();
+        assert!(matches!(
+            r.receive(r.ticket(), last),
+            Err(LocalError::PeerWriterAhead)
+        ));
         let before = snapshot(&r);
-        assert!(matches!(r.bump(r.ticket(), 9), Err(LocalError::Exhausted)));
+        assert!(matches!(
+            r.bump(r.ticket(), 9),
+            Err(LocalError::PeerWriterAhead)
+        ));
         assert_eq!(before, snapshot(&r));
         drop(r);
         let reopened = LocalReplica::counter(&path, config(0));

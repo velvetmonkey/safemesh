@@ -188,6 +188,7 @@ fn run() -> Result<(), RunError> {
     .map_err(|e| {
         let kind = match e {
             LocalError::Refused => "owned",
+            LocalError::PeerWriterAhead => "writer_ahead",
             LocalError::Io(_) => "storage",
             LocalError::Configuration => "configuration",
             LocalError::CounterWidth(_) => "counter_width",
