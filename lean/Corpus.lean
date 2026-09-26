@@ -145,6 +145,7 @@ structure RGACase where
 def rgaCases : List RGACase := [
   ⟨"rga_empty", []⟩,
   ⟨"rga_single", [.insert 10 100]⟩,
+  ⟨"rga_distinct_values_same_position", [.insert 5 50, .insert 5 51]⟩,
   ⟨"rga_sorted_read", [.insert 30 3, .insert 10 1, .insert 20 2]⟩,
   ⟨"rga_delete", [.insert 10 1, .insert 20 2, .delete 10]⟩,
   ⟨"rga_dupe_delivery", [.insert 5 50, .insert 5 50, .delete 5, .delete 5]⟩,

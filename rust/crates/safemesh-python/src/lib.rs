@@ -1835,6 +1835,8 @@ mod py_rga_python {
         pub fn live_entries(&self) -> Vec<(u64, u64)> {
             self.inner.live_entries()
         }
+        /// Sorted, duplicate-free live positions, matching Lean `read`.
+        /// Use `live_entries` to retrieve every live value at shared positions.
         pub fn read_positions(&self) -> Vec<u64> {
             self.inner.read_positions()
         }

@@ -221,6 +221,15 @@ fn rga_matches_lean_oracle() {
             &as_u64_set(&case["expected_tombstones"]),
             "RGA tombstones mismatch in {name}",
         );
+        let expected_live: Vec<_> = as_pair_set(&case["expected_placed"])
+            .into_iter()
+            .filter(|(position, _)| !as_u64_set(&case["expected_tombstones"]).contains(position))
+            .collect();
+        assert_eq!(
+            rga.live_entries(),
+            expected_live,
+            "RGA live values mismatch in {name}",
+        );
         assert_eq!(
             rga.read_positions(),
             as_u64_vec(&case["expected_read"]),
