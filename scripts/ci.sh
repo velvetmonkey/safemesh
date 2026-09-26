@@ -43,9 +43,12 @@ rustup target add thumbv7em-none-eabihf wasm32-unknown-unknown
   rm -f "$header"
 )
 
-# Build/lint the pipe-only reference app alongside the existing product gate.
+# Exercise the reference application alongside the existing product gate.
 cargo fmt --manifest-path "$repo_root/examples/fieldcheck/Cargo.toml" --check
 cargo clippy --manifest-path "$repo_root/examples/fieldcheck/Cargo.toml" --locked --all-targets -- -D warnings
+cargo test --locked --manifest-path "$repo_root/examples/fieldcheck/Cargo.toml"
+cargo build --locked --manifest-path "$repo_root/examples/fieldcheck/Cargo.toml"
+"$repo_root/scripts/fieldcheck-journey.py"
 
 "$repo_root/scripts/ffi-c-smoke.sh"
 

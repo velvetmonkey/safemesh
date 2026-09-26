@@ -73,6 +73,9 @@ pub use version_vector::{
 mod event_log;
 pub use event_log::{Admission, AppendError, EventLog};
 
+mod replica;
+pub use replica::{Replica, ReplicaError};
+
 mod transport;
 pub use transport::{
     anti_entropy, InMemoryTransport, TransportAdapter, TransportEnvelope, TransportError,
@@ -81,7 +84,7 @@ pub use transport::{
 mod codec;
 pub use codec::{
     write_bytes, write_len, write_u32, write_u64, write_u8, CollectionLimits, DecodeError,
-    DecodeLimits, WireCursor, WireDecode, WireEncode, WireError, WireSchema,
+    DecodeLimits, LegacyFrame, WireCursor, WireDecode, WireEncode, WireError, WireSchema,
 };
 
 use codec::*;
@@ -227,7 +230,7 @@ mod frame_tests {
     use alloc::vec;
 
     #[test]
-    fn legacy_integrity_frames_refuse_missing_shape() {
+    fn legacy_integrity_frames_name_the_unshaped_frame() {
         for records in [vec![], vec![record(1, 5)]] {
             let mut body = Vec::new();
             write_len(&mut body, records.len()).unwrap();
@@ -243,7 +246,9 @@ mod frame_tests {
             write_u32(&mut bytes, crc);
             assert_eq!(
                 EventLog::<GCounterDelta>::from_wire_bytes(&bytes),
-                Err(WireError::MissingShape)
+                Err(WireError::LegacyEventLogFrame {
+                    found: LegacyFrame::Tag03Unshaped
+                })
             );
         }
     }

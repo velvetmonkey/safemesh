@@ -10,6 +10,8 @@ use crate::{
 use alloc::{borrow::Cow, string::String, vec::Vec};
 
 pub(super) const TAG_RECORD: u8 = 0x01;
+/// Unchecked EventLog frame written before the CRC envelope; decoded only by migration.
+pub(super) const TAG_EVENT_LOG_LEGACY: u8 = 0x02;
 pub(super) const TAG_EVENT_LOG: u8 = 0x03;
 pub(super) const TAG_VERSION_VECTOR: u8 = 0x04;
 pub(super) const TAG_GCOUNTER_DELTA: u8 = 0x10;
@@ -35,8 +37,21 @@ pub(super) const TAG_LWW_MAP_REMOVE_U64: u8 = 0x71;
 pub(super) const TAG_LWW_MAP_U64: u8 = 0x72;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WireError {
     OwnershipViolation,
+    /// An OR-Set add record at sequence 0. An add mints a token at its record
+    /// ID, and the Lean ownership rule allocates tokens only at positive
+    /// sequences (`RecordKernel.allocateToken`, `RecordKernel.permitted`).
+    ZeroSequenceAdd {
+        /// Author of the refused record. Its sequence is 0.
+        replica: u64,
+    },
+    /// An OR-Set remove record at sequence 0, forbidden by RecordKernel.permitted.
+    ZeroSequenceRemove {
+        /// Author of the refused record. Its sequence is 0.
+        replica: u64,
+    },
     UnexpectedEof,
     InvalidTag,
     TrailingBytes,
@@ -45,8 +60,13 @@ pub enum WireError {
     DuplicateEntry,
     IntegrityMismatch,
     InvalidUtf8,
-    /// Legacy frame, or a fixed-domain log constructed without its arity.
+    /// A fixed-domain log constructed or saved without its arity.
     MissingShape,
+    /// A valid EventLog frame from an earlier encoder. Nothing was decoded;
+    /// migrate it once with [`EventLog::migrate_legacy_wire_bytes_for`].
+    LegacyEventLogFrame {
+        found: LegacyFrame,
+    },
     DeltaTypeMismatch,
     ReplicaCountMismatch {
         expected: usize,
@@ -75,6 +95,18 @@ impl core::fmt::Display for WireError {
             Self::OwnershipViolation => {
                 f.write_str("record violates replica ownership or coordinate bounds")
             }
+            Self::ZeroSequenceAdd { replica } => write!(
+                f,
+                "OR-Set add record (replica {replica}, sequence 0) refused: add sequences start at 1. \
+                 Recovery: re-add the element from replica {replica} at a positive sequence, \
+                 and remove this record from any stored log before loading it again"
+            ),
+            Self::ZeroSequenceRemove { replica } => write!(
+                f,
+                "OR-Set remove record (replica {replica}, sequence 0) refused: remove sequences start at 1. \
+                 Recovery: remove this record from any stored log, issue the remove again from replica {replica} \
+                 at a positive sequence, and write the log again"
+            ),
             Self::UnexpectedEof => f.write_str("unexpected end of wire input"),
             Self::InvalidTag => f.write_str("unexpected wire tag"),
             Self::TrailingBytes => f.write_str("unexpected trailing bytes after wire value"),
@@ -86,6 +118,13 @@ impl core::fmt::Display for WireError {
             Self::IntegrityMismatch => f.write_str("wire frame integrity check failed"),
             Self::InvalidUtf8 => f.write_str("wire string contains invalid UTF-8"),
             Self::MissingShape => f.write_str("wire frame is missing required shape metadata"),
+            Self::LegacyEventLogFrame { found } => write!(
+                f,
+                "legacy EventLog frame: found {found}, expected tag 0x03 with shape header; \
+                 migrate once with EventLog::migrate_legacy_wire_bytes_for(bytes, &destination) \
+                 or `cargo run -p safemesh-crdt --example migrate_event_log`, giving the \
+                 original replica count (safemesh-crdt README, \"Migrating a legacy EventLog\")"
+            ),
             Self::DeltaTypeMismatch => {
                 f.write_str("wire delta schema does not match the expected type")
             }
@@ -117,6 +156,25 @@ impl core::fmt::Display for WireError {
 }
 
 impl core::error::Error for WireError {}
+
+/// An EventLog frame layout written by an earlier encoder, named by
+/// [`WireError::LegacyEventLogFrame`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LegacyFrame {
+    /// Tag `0x02`: record count and records, with no length pair, CRC or shape.
+    Tag02,
+    /// Tag `0x03` with the CRC envelope but no shape header (schema and arity).
+    Tag03Unshaped,
+}
+
+impl core::fmt::Display for LegacyFrame {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::Tag02 => "tag 0x02 (no CRC, no shape header)",
+            Self::Tag03Unshaped => "tag 0x03 without shape header",
+        })
+    }
+}
 
 /// Optional count budget for each built-in collection and collection delta.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -377,6 +435,102 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
     }
 }
 
+impl<D: WireDecode + WireEncode + WireSchema + PartialEq> EventLog<D> {
+    /// Re-encode a legacy EventLog frame ([`LegacyFrame`]) as a current shaped
+    /// frame. This is explicit; no loader ever migrates automatically.
+    ///
+    /// Old frames record neither schema nor arity. The caller declares both:
+    /// the schema by choosing `D`, and the arity through `state`, a destination
+    /// carrier with the original replica count, verified independently. Do not
+    /// infer it from the largest coordinate in the log. Every record is decoded
+    /// and deduplicated as the old decoder did, then validated against `state`.
+    /// Record bytes and order are unchanged; only the frame gains its shape. Any
+    /// error returns no output. A current frame is validated the same way and
+    /// returned unchanged, so a repeated migration has no further effect.
+    /// Nested EventLog payloads are not rewritten; a legacy nested frame fails.
+    ///
+    /// ```
+    /// use safemesh_crdt::{EventLog, GCounter, GCounterDelta, LegacyFrame, WireDecode, WireError};
+    /// let old = [0x02, 0, 0, 0, 0]; // an empty tag 0x02 log
+    /// assert_eq!(EventLog::<GCounterDelta>::from_wire_bytes(&old),
+    ///     Err(WireError::LegacyEventLogFrame { found: LegacyFrame::Tag02 }));
+    /// let state = GCounter::new(2);
+    /// let new = EventLog::migrate_legacy_wire_bytes_for(&old, &state)?;
+    /// assert_eq!(EventLog::from_wire_bytes_for(&new, &state)?.replica_count(), Some(2));
+    /// # Ok::<(), WireError>(())
+    /// ```
+    pub fn migrate_legacy_wire_bytes_for<C: Crdt<Delta = D>>(
+        bytes: &[u8],
+        state: &C,
+    ) -> Result<Vec<u8>, WireError> {
+        match Self::migrate_legacy_wire_bytes_for_with_limits(bytes, state, DecodeLimits::default())
+        {
+            Ok(bytes) => Ok(bytes),
+            Err(DecodeError::Wire(error)) => Err(error),
+            Err(DecodeError::RecordLimitExceeded { .. }) => unreachable!("unbounded migration"),
+        }
+    }
+
+    /// Migrate a legacy frame with a budget for each input record occurrence.
+    /// Duplicate records count; the limit is checked before decoding the next record.
+    /// A current shaped frame uses the same limited decoder as ordinary loading.
+    pub fn migrate_legacy_wire_bytes_for_with_limits<C: Crdt<Delta = D>>(
+        bytes: &[u8],
+        state: &C,
+        limits: DecodeLimits,
+    ) -> Result<Vec<u8>, DecodeError> {
+        let mut cursor = WireCursor::new(bytes);
+        let mut body = match cursor.read_u8()? {
+            TAG_EVENT_LOG_LEGACY => cursor,
+            TAG_EVENT_LOG => {
+                let body = read_checked_body(&mut cursor)?;
+                if !cursor.is_empty() {
+                    return Err(WireError::TrailingBytes.into());
+                }
+                if WireCursor::new(body).read_u32()? == u32::MAX {
+                    Self::from_wire_bytes_for_with_limits(bytes, state, limits)?;
+                    return Ok(bytes.to_vec());
+                }
+                WireCursor::new(body)
+            }
+            _ => return Err(WireError::InvalidTag.into()),
+        };
+        let mut log = EventLog::for_crdt(state);
+        for index in 0..body.read_len()? {
+            if let Some(max_records) = limits.max_records {
+                if index >= max_records {
+                    return Err(DecodeError::RecordLimitExceeded { max_records });
+                }
+            }
+            let record_len = body.read_len()?;
+            let mut record_cursor = WireCursor::new(body.read_exact(record_len)?);
+            let record = Record::<D>::decode_wire_with_limits(
+                &mut record_cursor,
+                CollectionLimits {
+                    max_elements: limits
+                        .max_collection_elements
+                        .or(CollectionLimits::WIRE_DEFAULT.max_elements),
+                },
+                limits.max_records,
+            )?;
+            if !record_cursor.is_empty() {
+                return Err(WireError::TrailingBytes.into());
+            }
+            match log.identity_admission(&record) {
+                Admission::Collision => return Err(WireError::RecordCollision.into()),
+                Admission::Accepted => log.commit_record(record),
+                Admission::Duplicate => {}
+                Admission::Invalid(_) => unreachable!("identity check does not validate a carrier"),
+            }
+        }
+        if !body.is_empty() {
+            return Err(WireError::TrailingBytes.into());
+        }
+        log.validate_for(state)?;
+        Ok(log.to_wire_bytes()?)
+    }
+}
+
 /// Encode a payload using the canonical wire primitives.
 ///
 /// Custom payloads choose their own layout and, for persistence, a unique [`WireSchema`].
@@ -599,6 +753,46 @@ pub(super) fn frame_crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
+impl From<LegacyFrame> for WireError {
+    fn from(found: LegacyFrame) -> Self {
+        Self::LegacyEventLogFrame { found }
+    }
+}
+
+// After a 0x02 tag, a u32 count of length-prefixed records, each opening with
+// the record tag. This is structural only; migration decodes every record. A
+// current frame with a damaged tag fails here (its length complement is read
+// as a record length) and stays InvalidTag rather than being offered migration.
+fn walks_as_tag02_frame(cursor: &WireCursor<'_>) -> bool {
+    let mut rest = WireCursor::new(&cursor.bytes[cursor.offset..]);
+    let mut walk = || -> Result<(), WireError> {
+        for _ in 0..rest.read_len()? {
+            let len = rest.read_len()?;
+            if rest.read_exact(len)?.first() != Some(&TAG_RECORD) {
+                return Err(WireError::InvalidTag);
+            }
+        }
+        Ok(())
+    };
+    walk().is_ok()
+}
+
+// After the 0x03 tag: check the length pair, then the CRC over both length
+// fields and the body, and return the body without decoding any of it.
+fn read_checked_body<'a>(cursor: &mut WireCursor<'a>) -> Result<&'a [u8], WireError> {
+    let start = cursor.offset;
+    let len = cursor.read_u32()?;
+    if cursor.read_u32()? != !len {
+        return Err(WireError::IntegrityMismatch);
+    }
+    let body = cursor.read_exact(usize::try_from(len).map_err(|_| WireError::LengthOverflow)?)?;
+    let checksum = frame_crc32(&cursor.bytes[start..cursor.offset]);
+    if cursor.read_u32()? != checksum {
+        return Err(WireError::IntegrityMismatch);
+    }
+    Ok(body)
+}
+
 impl<D: WireEncode + WireSchema> EventLog<D> {
     /// Encode an inert batch without admitting it into a live log.
     ///
@@ -650,21 +844,16 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
         mut occurrence: impl FnMut(&Record<D>),
         mut before_record: impl FnMut(usize) -> Result<(), E>,
     ) -> Result<Self, E> {
-        read_tag(cursor, TAG_EVENT_LOG)?;
-        let start = cursor.offset;
-        let len = cursor.read_u32()?;
-        if cursor.read_u32()? != !len {
-            return Err(WireError::IntegrityMismatch.into());
+        match cursor.read_u8()? {
+            TAG_EVENT_LOG => {}
+            TAG_EVENT_LOG_LEGACY if walks_as_tag02_frame(cursor) => {
+                return Err(WireError::from(LegacyFrame::Tag02).into())
+            }
+            _ => return Err(WireError::InvalidTag.into()),
         }
-        let body =
-            cursor.read_exact(usize::try_from(len).map_err(|_| WireError::LengthOverflow)?)?;
-        let checksum = frame_crc32(&cursor.bytes[start..cursor.offset]);
-        if cursor.read_u32()? != checksum {
-            return Err(WireError::IntegrityMismatch.into());
-        }
-        let mut body = WireCursor::new(body);
+        let mut body = WireCursor::new(read_checked_body(cursor)?);
         if body.read_u32()? != u32::MAX {
-            return Err(WireError::MissingShape.into());
+            return Err(WireError::from(LegacyFrame::Tag03Unshaped).into());
         }
         let schema_len = body.read_len()?;
         if body.read_exact(schema_len)? != D::wire_schema().as_ref() {

@@ -72,6 +72,14 @@ let log = EventLog::<GSet<u64>>::from_wire_bytes_with_limits(
 assert_eq!(log.records().len(), 1);
 ```
 
+Python `merge_log_bytes(max_records=n)` and WASM `mergeLogBytes(bytes, undefined, n)`
+limit top-level input records before admission.
+Rust legacy migration accepts `migrate_legacy_wire_bytes_for_with_limits(bytes,
+state, DecodeLimits { max_records: Some(n), ..DecodeLimits::default() })`.
+WASM `SafeMeshStringOrSetReplica.importIdentity(bytes, n)` bounds the saved
+history before creating a live writer. Omitting either budget retains the
+previous unbounded behavior.
+
 For a destination CRDT, use `EventLog::from_wire_bytes_for_with_limits`
 to validate its shape before replay. `None` for `max_collection_elements`
 retains the 4,096 default for peer bytes. The Linux durable adapter's ordinary
@@ -194,5 +202,6 @@ Record-kernel proofs cover modeled atomic transitions and replay. They do not pr
 ## You need established distribution or maintainer support
 
 The source-building examples do not establish registry availability. The root install matrix labels maintainer support **UNKNOWN** for all four surfaces. A generated WASM package running in Node does not establish a browser/OS matrix; a Linux Python wheel smoke test does not establish every interpreter/platform combination. [Evidence: install and status matrix](https://github.com/velvetmonkey/safemesh/blob/main/README.md#status).
+The [wire compatibility and upgrades](/safemesh/persist-and-restart/#wire-compatibility-and-upgrades) section lists the toolchain and platform jobs current `main` runs, and names the upgrade behaviours that are not yet promised.
 
 If these limits fit your requirements, [try the local Rust example](/safemesh/getting-started/) and then [choose your integration](/safemesh/using-safemesh/).

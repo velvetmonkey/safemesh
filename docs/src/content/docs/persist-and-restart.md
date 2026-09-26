@@ -194,7 +194,22 @@ transaction has the wrong delta schema. For each, retain the damaged store for
 inspection; restart does not salvage the record. Investigate the failed write
 or transfer, and recover only from a known consistent history with its original
 identity and allocation metadata. Do not initialize over the damaged store.
+`LegacyEventLogFrame { found: Tag02 }` or `LegacyEventLogFrame { found:
+Tag03Unshaped }` from an `EventLog` loader (Display: `legacy EventLog frame:
+found tag 0x02 (no CRC, no shape header), expected tag 0x03 with shape header;
+migrate once with EventLog::migrate_legacy_wire_bytes_for(bytes, &destination)
+...`) means an earlier `safemesh-crdt` wrote the file, before the frame gained
+its CRC or its shape header. The bytes are intact and nothing was applied. Keep
+the file, then run the explicit migration once with the original replica count,
+reload the result, and replace the file:
+see "Migrating a legacy EventLog" in the
+[safemesh-crdt README](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md).
+Loaders never migrate on open. Durable stores postdate the shape header, so
+`restart` meets this only for a hand-edited transaction.
 See the [recovery evidence](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md).
+The [wire compatibility and upgrades](#wire-compatibility-and-upgrades) section
+is the policy for that refusal, the explicit migration, the toolchains current
+`main` checks, and the upgrade behaviours that are not yet promised.
 
 <a id="predict-then-run-a-concurrent-add-and-remove"></a>
 
@@ -372,6 +387,123 @@ The fixture passes an empty `Uint8Array` to `mergeRecordBytes`, catches the real
 asserts no log mutation. Reject the malformed input and check your record
 framing. Every WASM handle is freed in `finally`. Read the [complete TypeScript source and project configuration](/safemesh/using-safemesh/#wasm--typescript).
 
+<a id="wire-compatibility-and-upgrades"></a>
+
+## Wire compatibility and upgrades
+
+Current `main` already refuses older EventLog frames, keeps a retained corpus of
+those frames, and runs named toolchain and platform jobs. This section is that
+policy. It is not a support window.
+
+### Newer SafeMesh, older log
+
+A current EventLog loader refuses a log written with tag `0x02` or with unshaped
+tag `0x03` before it decodes any record. The error is
+`WireError::LegacyEventLogFrame`, naming the frame found.
+[`tests/legacy_event_log.rs`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/tests/legacy_event_log.rs)
+asserts that outcome on `from_wire_bytes`, `from_wire_bytes_for`,
+`records_from_wire_bytes_for`, and the bounded loader, then asserts lossless
+explicit migration and each file's pinned SHA-256.
+
+Python `merge_log_bytes` raises `ValueError` with
+`failed to decode event log: ` in front of that same core text, and does not
+apply the bytes
+([`safemesh-python` binding test](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-python/src/lib.rs)).
+WASM `mergeLogBytes` throws `SafeMeshError` code 1 with that same core text; a
+saved identity whose history is a legacy frame is refused the same way
+([`safemesh-wasm` binding test](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-wasm/src/lib.rs)).
+The generated Node package is exercised by
+[`node-error-shape.mjs`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-wasm/tests/node-error-shape.mjs),
+which [`package-smoke.sh`](https://github.com/velvetmonkey/safemesh/blob/main/scripts/package-smoke.sh)
+runs from the full gate
+([`scripts/ci.sh`](https://github.com/velvetmonkey/safemesh/blob/main/scripts/ci.sh)).
+
+Loaders never migrate on open. Migration is an explicit step. The crate README
+section [Migrating a legacy EventLog](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md#migrating-a-legacy-eventlog)
+is the single writer for the frame table, the replica-count rule, and the
+`migrate_event_log` commands.
+
+The retained corpus
+[`tests/fixtures/legacy-event-log/`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/tests/fixtures/legacy-event-log/README.md)
+holds each earlier frame for every built-in delta that could be persisted then.
+CI regenerates those files at the commits the fixture README claims, in
+[Regenerate legacy EventLog fixtures at claimed sources](https://github.com/velvetmonkey/safemesh/blob/main/.github/workflows/ci.yml),
+which runs
+[`check-legacy-event-log-fixtures.sh`](https://github.com/velvetmonkey/safemesh/blob/main/scripts/check-legacy-event-log-fixtures.sh).
+A separate retained bootstrap corpus is regenerated in
+[Regenerate bootstrap fixtures at claimed source](https://github.com/velvetmonkey/safemesh/blob/main/.github/workflows/ci.yml).
+Those files are last-writer commits on `main`, not release tags.
+
+### Older SafeMesh, newer log
+
+See [Not yet promised](#not-yet-promised). Current `main` has no job that runs
+an older decoder against a current EventLog frame.
+
+### Toolchains and platforms current main checks
+
+The checkout selects Rust **1.96.1** in
+[`rust-toolchain.toml`](https://github.com/velvetmonkey/safemesh/blob/main/rust-toolchain.toml).
+The crate floor is Rust **1.89**, from
+[`rust/Cargo.toml`](https://github.com/velvetmonkey/safemesh/blob/main/rust/Cargo.toml)
+`workspace.package.rust-version`. CI
+[Install declared Rust floor](https://github.com/velvetmonkey/safemesh/blob/main/.github/workflows/ci.yml),
+then [FLOOR COMPILE](https://github.com/velvetmonkey/safemesh/blob/main/.github/workflows/ci.yml)
+and [FLOOR TEST](https://github.com/velvetmonkey/safemesh/blob/main/.github/workflows/ci.yml)
+at that version. The
+[msrv](https://github.com/velvetmonkey/safemesh/blob/main/.github/workflows/ci.yml)
+job [Test at declared MSRV](https://github.com/velvetmonkey/safemesh/blob/main/.github/workflows/ci.yml)
+runs `cargo test --workspace --locked` at that same declared version.
+
+The
+[clippy](https://github.com/velvetmonkey/safemesh/blob/main/.github/workflows/ci.yml)
+job and the full-gate step
+[Check laws on a non-Linux target](https://github.com/velvetmonkey/safemesh/blob/main/.github/workflows/ci.yml)
+`cargo check` the `laws` feature for `x86_64-apple-darwin`. Those jobs run on
+`ubuntu-latest`; they are not a macOS runner. Clippy also builds `safemesh-crdt`
+for `thumbv7em-none-eabihf` and `safemesh-wasm` for `wasm32-unknown-unknown`.
+The full gate
+[builds those same targets](https://github.com/velvetmonkey/safemesh/blob/main/scripts/ci.sh).
+
+The
+[python](https://github.com/velvetmonkey/safemesh/blob/main/.github/workflows/ci.yml)
+job matrix is CPython 3.8–3.14 on `ubuntu-latest`, including
+`cargo test -p safemesh-python`. The full-gate job runs on `ubuntu-latest` and
+sets Node 24. The
+[documentation workflow](https://github.com/velvetmonkey/safemesh/blob/main/.github/workflows/docs.yml)
+uses Node 24. wasm-pack **0.15.0** is the locked installer in both the floor
+job and the full gate.
+
+These jobs are what current `main` checks. They are not a supported-platform
+matrix.
+
+### Not yet promised
+
+Before a first release, the project does not promise:
+
+- **Fixtures from previous releases.** No GitHub release exists
+  ([`release-status.mjs`](https://github.com/velvetmonkey/safemesh/blob/main/docs/release-status.mjs)
+  reads the GitHub releases list at docs build). The retained EventLog corpus is
+  generated from the last main-branch commit that wrote each frame, as
+  [`legacy-event-log/README.md`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/tests/fixtures/legacy-event-log/README.md)
+  states.
+- **Reproducible release builds.** There is no release build.
+- **A version-numbering promise**, including semantic versioning or a support
+  window. `safemesh-crdt`
+  [`Cargo.toml`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/Cargo.toml)
+  currently records `0.1.0` as an unpublished crate version; that number is not
+  a versioning promise.
+- **That an older decoder can read a current EventLog frame.** Current `main`
+  has no job that runs an older decoder against a new file.
+- **Maintainer support.** The root status matrix labels it UNKNOWN for all four
+  surfaces
+  ([README status](https://github.com/velvetmonkey/safemesh/blob/main/README.md#status)).
+- **Runtime on Windows, macOS hosts, ARM64 hosts, browsers, or Python/OS
+  combinations outside the jobs named above.**
+
+`WireError` is `#[non_exhaustive]` in
+[`codec.rs`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/codec.rs).
+The crate README records the matching rule for the first release; this section
+does not add a stability window for existing variants.
 
 Continue to [Connect replicas](/safemesh/connect-replicas/), or review the
 [proof boundary](/safemesh/evaluate-guarantees/#proof-boundary).

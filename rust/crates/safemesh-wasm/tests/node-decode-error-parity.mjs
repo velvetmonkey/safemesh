@@ -70,3 +70,63 @@ for (const [name, create, append] of replicas) {
 assert.deepEqual(failures, []);
 
 console.log("NODE_DECODE_ERROR_PARITY=true");
+
+// Decode only the public frame envelope to enumerate identities; payloads are
+// checked independently by the product loader and by unique visible elements.
+function retentionIds(bytes) {
+  const frame = Buffer.from(bytes);
+  let offset = 17 + frame.readUInt32LE(13); // tag, length pair, marker, schema length
+  const shape = frame[offset++];
+  if (shape === 1) offset += 8;
+  const count = frame.readUInt32LE(offset); offset += 4;
+  const ids = [];
+  for (let i = 0; i < count; i++) {
+    const length = frame.readUInt32LE(offset); offset += 4;
+    // A record opens with its tag followed by author and sequence.
+    ids.push(`${frame.readBigUInt64LE(offset + 1)}:${frame.readBigUInt64LE(offset + 9)}`);
+    offset += length;
+  }
+  return ids.sort();
+}
+
+function retention_wasm_merge_and_identity_all_5000() {
+  const started = performance.now();
+  const SetReplica = wasm.SafeMeshStringOrSetReplica;
+  const authors = [0n, 1n, 2n].map(a => SetReplica.createAllocated(3n, a));
+  const expectedIds = [];
+  for (let index = 0; index < 5000; index++) {
+    const author = index % 3;
+    const record = authors[author].appendAllocatedAdd(`retained-${String(index).padStart(4, '0')}`);
+    expectedIds.push(`${author}:${Math.floor(index / 3) + 1}`);
+    if (author !== 0) assert.equal(authors[0].mergeRecordBytes(record), 'accepted');
+  }
+  const log = authors[0].logBytes();
+  const identity = authors[0].exportIdentity();
+  const elements = authors[0].elements();
+  const check = replica => {
+    assert.equal(retentionIds(replica.logBytes()).length, 5000, 'retention count');
+    assert.deepEqual(retentionIds(replica.logBytes()), expectedIds.sort(), 'retention identity set');
+    assert.deepEqual(replica.elements(), elements, 'retention every unique element');
+    assert.deepEqual(replica.logBytes(), log, 'retention byte-identical log');
+  };
+  const fresh = new SetReplica(0n);
+  fresh.appendAdd('destination-before-refusal', 999999n);
+  const before = fresh.logBytes();
+  const stateBefore = fresh.elements();
+  assert.throws(() => fresh.mergeLogBytes(log, null, 4999), /RecordLimitExceeded/);
+  assert.deepEqual(fresh.logBytes(), before);
+  assert.deepEqual(fresh.elements(), stateBefore);
+  fresh.free();
+  const exact = new SetReplica(0n);
+  assert.deepEqual(exact.mergeLogBytes(log, null, 5000), Array(5000).fill('accepted'));
+  check(exact);
+  exact.free();
+  authors.forEach(a => a.free());
+  assert.throws(() => SetReplica.importIdentity(identity, 4999), /RecordLimitExceeded/);
+  const restored = SetReplica.importIdentity(identity, 5000);
+  check(restored);
+  assert.deepEqual(restored.exportIdentity(), identity, 'retention byte-identical identity');
+  restored.free();
+  console.log('retention_wasm_merge_and_identity_all_5000 PASS seconds=' + (performance.now() - started) / 1000);
+}
+retention_wasm_merge_and_identity_all_5000();

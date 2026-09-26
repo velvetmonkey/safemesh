@@ -15,8 +15,11 @@ every carrier shown. **Supported** below means selected for v0, within the
 Start with the [Rust and TypeScript gold paths](/safemesh/persist-and-restart/) to add
 the local library/package, make an edit, save it, restart in another process and
 sync a second replica. Those complete, CI-executed consumer fixtures include
-asserted output and ordinary malformed-record errors. The examples below explore
-modeled delivery failures after that first integration.
+asserted output and ordinary malformed-record errors. The
+[wire compatibility and upgrades](/safemesh/persist-and-restart/#wire-compatibility-and-upgrades)
+section states what current loaders do with saved EventLog bytes from an earlier
+checkout. The examples below explore modeled delivery failures after that first
+integration.
 
 The [Fieldcheck reference application](https://github.com/velvetmonkey/safemesh/blob/main/examples/fieldcheck/README.md)
 shows disk-backed inspections surviving a service SIGKILL and reconciling after a
