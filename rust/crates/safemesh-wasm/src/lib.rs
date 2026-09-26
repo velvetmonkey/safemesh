@@ -9,6 +9,7 @@ use safemesh_crdt::{
     OrSet, OrSetDelta, PnCounter, PnCounterDelta, Record, Replica, ReplicaError, Rga,
     VersionVector, VersionVectorLimits, WireDecode, WireEncode, WireError, WireSchema,
 };
+use safemesh_crdt::{CollisionVerdict, RecordId};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
@@ -49,8 +50,8 @@ export function installCollectionBudgetGuard(sample) {
             return original.call(this, bytes, budget);
         };
     }
-    // A since batch takes the budgets its receiver's mergeLogBytes takes.
-    for (const name of ['mergeLogBytes', 'sinceLogBytes']) {
+    // A since batch and a collision report take the budgets mergeLogBytes takes.
+    for (const name of ['mergeLogBytes', 'sinceLogBytes', 'mergeCollisionReportBytes']) {
         if (typeof prototype[name] !== 'function') continue;
         const original = prototype[name];
         prototype[name] = function(input, collectionBudget, recordBudget) {
@@ -448,6 +449,188 @@ record_exchange_methods!(SafeMeshStringOrSetReplica, |this| (
     this.replica.log()
 ));
 record_exchange_methods!(SafeMeshPnCounterReplica, |this| (&this.state, &this.log));
+
+/// One record ID this replica holds that a peer holds with a different
+/// payload: the collision alarm. `local()` and `remote()` are record wire
+/// bytes under the ID, for this replica's payload and the peer's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[wasm_bindgen]
+pub struct SafeMeshRecordCollision {
+    author: u64,
+    sequence: u64,
+    local: Vec<u8>,
+    remote: Vec<u8>,
+}
+
+#[wasm_bindgen]
+impl SafeMeshRecordCollision {
+    pub fn author(&self) -> u64 {
+        self.author
+    }
+
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    pub fn local(&self) -> Vec<u8> {
+        self.local.clone()
+    }
+
+    pub fn remote(&self) -> Vec<u8> {
+        self.remote.clone()
+    }
+}
+
+fn record_collisions<D: Clone + WireEncode>(
+    log: &EventLog<D>,
+) -> Result<Vec<SafeMeshRecordCollision>, JsValue> {
+    log.collisions()
+        .into_iter()
+        .map(|collision| {
+            let record = |delta| {
+                Record {
+                    id: collision.id,
+                    delta,
+                }
+                .to_wire_bytes()
+                .map_err(|_| safe_mesh_error(1, "failed to encode record"))
+            };
+            Ok(SafeMeshRecordCollision {
+                author: collision.id.replica,
+                sequence: collision.id.sequence,
+                local: record(collision.local)?,
+                remote: record(collision.remote)?,
+            })
+        })
+        .collect()
+}
+
+fn collision_verdicts(
+    verdicts: Result<Vec<(RecordId, CollisionVerdict)>, DecodeError>,
+) -> Result<Vec<String>, JsValue> {
+    let verdicts = verdicts.map_err(|error| match error {
+        DecodeError::Wire(WireError::CollectionElementLimitExceeded { max_elements }) => {
+            safe_mesh_error(
+                3,
+                &format!("maxCollectionElements limit exceeded: {max_elements}"),
+            )
+        }
+        DecodeError::Wire(cause) => {
+            safe_mesh_error(1, &format!("failed to decode collision report: {cause}"))
+        }
+        DecodeError::RecordLimitExceeded { max_records } => safe_mesh_error(
+            1,
+            &format!("failed to decode collision report: RecordLimitExceeded: {max_records}"),
+        ),
+    })?;
+    Ok(verdicts
+        .into_iter()
+        .map(|(_, verdict)| {
+            match verdict {
+                CollisionVerdict::Recorded => "recorded",
+                CollisionVerdict::Known => "known",
+                CollisionVerdict::Unheld => "unheld",
+                CollisionVerdict::Agrees => "agrees",
+                _ => "unknown",
+            }
+            .to_owned()
+        })
+        .collect())
+}
+
+/// The record-ID collision alarm for a replica class with an event log.
+/// `$log` reads the log; `$merge` merges report bytes under limits.
+macro_rules! collision_alarm_methods {
+    ($class:ty, |$this:ident| $log:expr, |$that:ident, $bytes:ident, $limits:ident| $merge:expr) => {
+        #[wasm_bindgen]
+        impl $class {
+            /// The collision alarm: every held record ID a peer holds with a
+            /// different payload, raised when a peer's record collided here or
+            /// a peer's report named one. In memory only; never merged into state.
+            pub fn collisions(&self) -> Result<Vec<SafeMeshRecordCollision>, JsValue> {
+                let $this = self;
+                record_collisions($log)
+            }
+
+            /// The collision report to send back to the peer whose batch was
+            /// just merged, or `undefined` when no alarm is raised here.
+            #[wasm_bindgen(js_name = collisionReportBytes)]
+            pub fn collision_report_bytes(&self) -> Result<Option<Vec<u8>>, JsValue> {
+                let $this = self;
+                let log = $log;
+                log.collision_report_bytes()
+                    .map_err(|_| safe_mesh_error(1, "failed to encode collision report"))
+            }
+
+            /// Merge a peer's collision report and return one verdict per
+            /// entry: `"recorded"` (alarm raised here now), `"known"` (already
+            /// raised), `"unheld"` (ID not held here) or `"agrees"` (the entry
+            /// names only the payload held here). Only `"recorded"` changes
+            /// anything, and only the alarm. A malformed report throws and
+            /// changes nothing. The budgets are `mergeLogBytes`'s.
+            #[wasm_bindgen(
+                js_name = mergeCollisionReportBytes,
+                unchecked_return_type = "(\"recorded\" | \"known\" | \"unheld\" | \"agrees\")[]"
+            )]
+            #[allow(non_snake_case)]
+            pub fn merge_collision_report_bytes(
+                &mut self,
+                bytes: &[u8],
+                max_collection_elements: Option<u32>,
+                maxRecords: Option<u32>,
+            ) -> Result<Vec<String>, JsValue> {
+                let $that = self;
+                let $bytes = bytes;
+                let $limits = decode_limits(max_collection_elements, maxRecords);
+                collision_verdicts($merge)
+            }
+        }
+    };
+}
+
+fn replica_report_error(error: ReplicaError) -> DecodeError {
+    match error {
+        ReplicaError::ReportDecode(error) => error,
+        _ => unreachable!("report decode returned a different error stage"),
+    }
+}
+
+collision_alarm_methods!(
+    SafeMeshGCounterReplica,
+    |this| this.replica.log(),
+    |this, bytes, limits| this
+        .replica
+        .merge_collision_report_bytes(bytes, limits)
+        .map_err(replica_report_error)
+);
+collision_alarm_methods!(
+    SafeMeshEnableWinsFlagReplica,
+    |this| &this.log,
+    |this, bytes, limits| this.log.merge_collision_report_bytes(bytes, limits)
+);
+collision_alarm_methods!(
+    SafeMeshLwwMapReplica,
+    |this| &this.log,
+    |this, bytes, limits| this.log.merge_collision_report_bytes(bytes, limits)
+);
+collision_alarm_methods!(
+    SafeMeshLwwRegisterReplica,
+    |this| &this.log,
+    |this, bytes, limits| this.log.merge_collision_report_bytes(bytes, limits)
+);
+collision_alarm_methods!(
+    SafeMeshStringOrSetReplica,
+    |this| this.replica.log(),
+    |this, bytes, limits| this
+        .replica
+        .merge_collision_report_bytes(bytes, limits)
+        .map_err(replica_report_error)
+);
+collision_alarm_methods!(
+    SafeMeshPnCounterReplica,
+    |this| &this.log,
+    |this, bytes, limits| this.log.merge_collision_report_bytes(bytes, limits)
+);
 
 #[wasm_bindgen]
 pub struct SafeMeshGCounter {
@@ -3066,6 +3249,138 @@ mod tests {
         );
         assert_eq!(replica.replica.state(), &state);
         assert_eq!(replica.replica.log(), &log);
+    }
+
+    #[test]
+    fn wasm_every_log_replica_raises_the_collision_alarm_on_both_sides() {
+        macro_rules! check {
+            ($make:expr, $first:expr, $second:expr) => {{
+                let id = RecordId {
+                    replica: 1,
+                    sequence: 1,
+                };
+                let first = Record { id, delta: $first };
+                let second = Record { id, delta: $second };
+                let (mut left, mut right) = ($make, $make);
+                left.merge_record_bytes(&first.to_wire_bytes().unwrap(), None)
+                    .unwrap();
+                right
+                    .merge_record_bytes(&second.to_wire_bytes().unwrap(), None)
+                    .unwrap();
+                let before = (left.log_bytes().unwrap(), right.log_bytes().unwrap());
+                assert_eq!(left.collision_report_bytes().unwrap(), None);
+                assert_eq!(
+                    right
+                        .merge_log_bytes(&left.log_bytes().unwrap(), None, None)
+                        .unwrap(),
+                    vec!["collision"]
+                );
+                let report = right.collision_report_bytes().unwrap().unwrap();
+                assert_eq!(
+                    left.merge_collision_report_bytes(&report, None, None)
+                        .unwrap(),
+                    vec!["recorded"]
+                );
+                for (replica, local, remote) in
+                    [(&left, &first, &second), (&right, &second, &first)]
+                {
+                    assert_eq!(
+                        replica.collisions().unwrap(),
+                        vec![SafeMeshRecordCollision {
+                            author: 1,
+                            sequence: 1,
+                            local: local.to_wire_bytes().unwrap(),
+                            remote: remote.to_wire_bytes().unwrap(),
+                        }]
+                    );
+                }
+                assert_eq!(
+                    (left.log_bytes().unwrap(), right.log_bytes().unwrap()),
+                    before
+                );
+
+                // Control: the equal payload is a duplicate and raises nothing.
+                let (mut same, mut twin) = ($make, $make);
+                for replica in [&mut same, &mut twin] {
+                    replica
+                        .merge_record_bytes(&first.to_wire_bytes().unwrap(), None)
+                        .unwrap();
+                }
+                assert_eq!(
+                    same.merge_log_bytes(&twin.log_bytes().unwrap(), None, None)
+                        .unwrap(),
+                    vec!["duplicate"]
+                );
+                assert_eq!(same.collision_report_bytes().unwrap(), None);
+                assert_eq!(same.collisions().unwrap(), vec![]);
+            }};
+        }
+        check!(
+            SafeMeshGCounterReplica::new(2, 2),
+            GCounterDelta {
+                replica: 1,
+                tally: 5
+            },
+            GCounterDelta {
+                replica: 1,
+                tally: 9
+            }
+        );
+        check!(
+            SafeMeshPnCounterReplica::new(2, 2),
+            PnCounterDelta::Inc {
+                replica: 1,
+                tally: 5
+            },
+            PnCounterDelta::Inc {
+                replica: 1,
+                tally: 9
+            }
+        );
+        check!(
+            SafeMeshEnableWinsFlagReplica::new(2),
+            EnableWinsFlagDelta::Enable { token: 5 },
+            EnableWinsFlagDelta::Enable { token: 9 }
+        );
+        check!(
+            SafeMeshLwwRegisterReplica::new(2),
+            LwwRegisterDelta {
+                timestamp: 1,
+                replica: 1,
+                value: 5
+            },
+            LwwRegisterDelta {
+                timestamp: 1,
+                replica: 1,
+                value: 9
+            }
+        );
+        check!(
+            SafeMeshLwwMapReplica::new(2),
+            LwwMapDelta::Set {
+                key: 1,
+                timestamp: 1,
+                replica: 1,
+                value: 5
+            },
+            LwwMapDelta::Set {
+                key: 1,
+                timestamp: 1,
+                replica: 1,
+                value: 9
+            }
+        );
+        check!(
+            SafeMeshStringOrSetReplica::new(2),
+            OrSetDelta::Add {
+                element: "x".to_owned(),
+                token: 5,
+            },
+            OrSetDelta::Add {
+                element: "x".to_owned(),
+                token: 9,
+            }
+        );
     }
 
     #[test]
