@@ -100,6 +100,29 @@ Stdout:
 5n 5n
 ```
 
+## Incremental sync
+
+Every replica class with `logBytes` can send a peer only what it lacks, using
+the core's `since` selection. `recordIds()` lists every record ID in log order
+as `[author, sequence, ...]` pairs, without decoding payloads.
+`versionVector()` returns `[author, versionFor(author), ...]` for each author
+with a nonzero prefix. `sinceLogBytes(peerVersion)` takes that shape as a
+`BigUint64Array` and returns one log batch for the peer's `mergeLogBytes`:
+
+```js
+const batch = a.sinceLogBytes(b.versionVector());
+b.mergeLogBytes(batch); // one "accepted" per record b was missing
+```
+
+A version at or ahead of the sender yields a batch with no records. A malformed
+version (odd length, a repeated author, a zero prefix, more than 4,096 authors,
+or not a `BigUint64Array`) throws `SafeMeshError` code 2 naming `peerVersion`.
+The optional second and third arguments are `mergeLogBytes`'s collection and
+record budgets; a batch over them throws the error that merge would throw.
+The pair shape cannot acknowledge sequence-zero records, so those are always
+included. Run [`examples/node-since-sync.mjs`](examples/node-since-sync.mjs)
+against a Node package, as in the demos below.
+
 ## Demos
 
 Run the Node convergence demo against a freshly generated Node-target package:

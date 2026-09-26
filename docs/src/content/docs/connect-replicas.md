@@ -145,6 +145,14 @@ admitted: fabricated acknowledgements can hide missing records. Retry repair aft
 lost messages; eventual delivery remains an application assumption. `since` retains
 all history and is not compaction.
 
+Every WASM replica class with `logBytes` exposes the same selection:
+`recordIds()` lists record IDs as `[author, sequence, ...]` pairs without
+decoding payloads, `versionVector()` returns `[author, versionFor(author), ...]`,
+and `sinceLogBytes(peerVersion)` returns the core's `since` selection as one batch
+for the peer's `mergeLogBytes`, under the same optional budgets. The pair shape
+carries no sequence-zero acknowledgement, so such records are always resent.
+The short example is `rust/crates/safemesh-wasm/examples/node-since-sync.mjs`.
+
 ## What the application owns
 
 | Responsibility | Application work |

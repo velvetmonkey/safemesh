@@ -182,3 +182,7 @@ node "$repo_root/rust/crates/safemesh-wasm/tests/safemesh-wasm-boundary-repros.m
 
 node "$repo_root/rust/crates/safemesh-wasm/tests/node-self-merge.mjs" \
   "$tmp_dir/wasm-node-pkg"
+node "$repo_root/rust/crates/safemesh-wasm/tests/node-since-batch.mjs" \
+  "$tmp_dir/wasm-node-pkg"
+node "$repo_root/rust/crates/safemesh-wasm/examples/node-since-sync.mjs" \
+  "$tmp_dir/wasm-node-pkg"
