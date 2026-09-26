@@ -29,6 +29,21 @@ for(const tally of [-1n,1n<<64n]) check(`tally ${tally} refuses without changing
 });
 const u32=n=>{const b=Buffer.alloc(4);b.writeUInt32LE(n>>>0);return b;};
 const crc32=bytes=>{let crc=0xffffffff;for(const byte of bytes){crc^=byte;for(let i=0;i<8;i++)crc=(crc>>>1)^(0xedb88320 & -(crc&1));}return (~crc)>>>0;};
+check('importIdentity record budget refuses before claim and permits append on retry',()=>{
+  const writer=OrSetReplica.createAllocated(2n,0n);
+  let saved;
+  try {
+    for(const element of ['first','second','third']) writer.appendAllocatedAdd(element);
+    saved=writer.exportIdentity();
+  } finally { writer.free(); }
+  assert.throws(()=>OrSetReplica.importIdentity(saved,2),error=>
+    error.code===1 && error.message==='failed to decode event log: RecordLimitExceeded: 2');
+  const restored=OrSetReplica.importIdentity(saved,3);
+  try {
+    restored.appendAllocatedAdd('fourth');
+    assert.deepEqual(restored.elements(),['first','fourth','second','third']);
+  } finally { restored.free(); }
+});
 function repeatFirst(frame){
   const body=Buffer.from(frame).subarray(9,-4);
   const arity=8+body.readUInt32LE(4);

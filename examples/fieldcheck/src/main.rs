@@ -191,9 +191,10 @@ fn run() -> Result<(), RunError> {
             LocalError::Io(_) => "storage",
             LocalError::Configuration => "configuration",
             LocalError::Exhausted => "storage",
-            LocalError::RecoveryRequired | LocalError::History(_) | LocalError::InvalidHistory => {
-                "replay"
-            }
+            LocalError::RecoveryRequired
+            | LocalError::InvalidRecord(_)
+            | LocalError::History(_)
+            | LocalError::InvalidHistory => "replay",
         };
         RunError::Recovery {
             kind,

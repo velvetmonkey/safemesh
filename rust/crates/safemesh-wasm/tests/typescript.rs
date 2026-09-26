@@ -33,7 +33,7 @@ fn typescript_surface_lists_the_public_binding() {
     ));
     assert!(DTS.contains("appendAllocatedAdd(element: string): Uint8Array"));
     assert!(DTS.contains("exportIdentity(): Uint8Array"));
-    assert!(DTS.contains("static importIdentity(bytes: Uint8Array): SafeMeshStringOrSetReplica"));
+    assert!(DTS.contains("static importIdentity(bytes: Uint8Array, maxRecords?: number | null): SafeMeshStringOrSetReplica"));
     assert!(DTS.contains("appendRemoveObserved(element: string): Uint8Array"));
     // Every replica's single-record merge names the verdicts its log merge names.
     assert_eq!(
@@ -67,7 +67,7 @@ fn typescript_surface_lists_the_public_binding() {
     ));
     assert_eq!(
         DTS.matches(
-            "mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): (\"accepted\" | \"duplicate\" | \"collision\")[]"
+            "mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): (\"accepted\" | \"duplicate\" | \"collision\")[]"
         )
         .count(),
         6

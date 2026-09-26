@@ -200,6 +200,11 @@ restored.appendAllocatedAdd("bandage"); // fresh token after restart
 view.free(); restored.free(); right.free();
 ```
 
+For untrusted saved history, `importIdentity(saved, maxRecords)` limits the
+number of log record occurrences before creating a live writer. A refused
+import leaves its allocation claim free for a later retry. Omitting the budget
+keeps the existing unbounded behavior.
+
 Stdout:
 
 ```text
@@ -243,3 +248,9 @@ checked before any admission. Legacy instances keep the caller-token behavior of
 use `appendAllocatedAdd(element)` for allocated adds, including after
 `exportIdentity()` and `importIdentity(bytes)`. Python and C numeric paths retain
 caller-owned tokens.
+
+Legacy and allocated instances both refuse add and remove records at sequence 0,
+as the core `OrSet` does. `mergeRecordBytes`, `mergeLogBytes` and `importIdentity`
+throw `SafeMeshError` code 1 with the core `WireError::ZeroSequenceAdd` or
+`WireError::ZeroSequenceRemove` text,
+which names the record's author and a recovery step. State and log are unchanged.
