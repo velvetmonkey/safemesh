@@ -681,3 +681,78 @@ fn counter_merge_equal_width_preserves_values() {
     assert_eq!(pn.value(), 5);
     assert_eq!(generic, pn);
 }
+
+#[cfg(all(feature = "local-writer", target_os = "linux"))]
+mod durable_replacement {
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    fn directory() -> std::path::PathBuf {
+        static SERIAL: AtomicU64 = AtomicU64::new(0);
+        let directory = std::env::temp_dir().join(format!(
+            "safemesh-durable-replace-{}-{}",
+            std::process::id(),
+            SERIAL.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&directory).unwrap();
+        directory
+    }
+    #[test]
+    fn durable_constructor_preserves_planted_symlink_and_restarts() {
+        use safemesh_crdt::local::DurableReplica;
+        use safemesh_crdt::ownership::WriterConfig;
+        let directory = directory();
+        let store = directory.join("store");
+        fs::create_dir(&store).unwrap();
+        let victim = directory.join("victim");
+        fs::write(&victim, b"victim bytes").unwrap();
+        std::os::unix::fs::symlink(&victim, store.join("writer-0.tmp")).unwrap();
+        let config = WriterConfig {
+            writers: 2,
+            writer: 0,
+        };
+        let mut replica = DurableReplica::counter(&store, config).unwrap();
+        assert_eq!(fs::read(&victim).unwrap(), b"victim bytes");
+        replica.bump(replica.ticket(), 5).unwrap();
+        let state = replica.state().state().to_vec();
+        drop(replica);
+        let replica = DurableReplica::restart_counter(&store, config).unwrap();
+        assert_eq!(replica.state().state(), state);
+        drop(replica);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn refused_write_then_remove_link_write_and_restart() {
+        use safemesh_crdt::local::DurableReplica;
+        use safemesh_crdt::ownership::WriterConfig;
+        let directory = directory();
+        let store = directory.join("store");
+        let config = WriterConfig {
+            writers: 2,
+            writer: 0,
+        };
+        let mut replica = DurableReplica::counter(&store, config).unwrap();
+        replica.bump(replica.ticket(), 5).unwrap();
+        let temporary = store.join("writer-0.tmp");
+        let victim = directory.join("victim");
+        fs::write(&victim, b"keep").unwrap();
+        std::os::unix::fs::symlink(&victim, &temporary).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&store, fs::Permissions::from_mode(0o555)).unwrap();
+        let refused = replica.bump(replica.ticket(), 8);
+        fs::set_permissions(&store, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(refused.is_err());
+        assert_eq!(fs::read(&victim).unwrap(), b"keep");
+        fs::remove_file(&temporary).unwrap();
+        drop(replica);
+        let mut replica = DurableReplica::restart_counter(&store, config).unwrap();
+        replica.bump(replica.ticket(), 8).unwrap();
+        let state = replica.state().state().to_vec();
+        assert_eq!(state[0], 8);
+        drop(replica);
+        let replica = DurableReplica::restart_counter(&store, config).unwrap();
+        assert_eq!(replica.state().state(), state);
+        drop(replica);
+        fs::remove_dir_all(directory).unwrap();
+    }
+}

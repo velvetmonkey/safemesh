@@ -130,6 +130,20 @@ def serve(name, coordinate):
 
         def do_POST(self):
             try:
+                # Check browser origin and rebinding authority before reading or
+                # applying any body, including local controls and peer delivery.
+                hosts = self.headers.get_all('Host', [])
+                allowed_hosts = {f'127.0.0.1:{self.server.server_port}',
+                                 f'localhost:{self.server.server_port}'}
+                if len(hosts) != 1 or hosts[0] not in allowed_hosts:
+                    raise ValueError('Host must name this loopback node and port')
+                origins = self.headers.get_all('Origin', [])
+                if origins and origins != ['http://' + hosts[0]]:
+                    raise ValueError('Origin must match this node')
+                content_types = self.headers.get_all('Content-Type', [])
+                if (len(content_types) != 1 or
+                        self.headers.get_content_type() != 'application/json'):
+                    raise ValueError('Content-Type must be application/json')
                 size = int(self.headers.get('Content-Length', '0'))
                 if not 0 < size <= 4 * 1024 * 1024:
                     raise ValueError('request must be between 1 byte and 4 MiB')
