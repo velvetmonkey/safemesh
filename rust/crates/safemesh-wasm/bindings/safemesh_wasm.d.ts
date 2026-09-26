@@ -316,7 +316,7 @@ export class SafeMeshStringOrSetReplica {
      * Allocation/history consistency check; failure never creates a fresh writer.
      * A self-consistent stale snapshot is not detected. There is no disk I/O.
      */
-    static importIdentity(bytes: Uint8Array): SafeMeshStringOrSetReplica;
+    static importIdentity(bytes: Uint8Array, maxRecords?: number | null): SafeMeshStringOrSetReplica;
     /**
      * Decode record bytes through the core without admitting them anywhere.
      *

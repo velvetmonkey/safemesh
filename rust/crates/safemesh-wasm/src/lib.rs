@@ -59,6 +59,18 @@ export function installCollectionBudgetGuard(sample) {
         };
     }
     const klass = sample.constructor;
+    if (typeof klass.importIdentity === 'function') {
+        const original = klass.importIdentity;
+        klass.importIdentity = function(bytes, recordBudget) {
+            if (recordBudget != null &&
+                (typeof recordBudget !== 'number' || !Number.isSafeInteger(recordBudget) ||
+                 recordBudget < 0 || recordBudget > 4294967295)) {
+                throw new SafeMeshError(2,
+                    'maxRecords must be a nonnegative integer at most 4294967295');
+            }
+            return original.call(this, bytes, recordBudget);
+        };
+    }
     if (typeof klass.inspectRecordBytes === 'function') {
         const original = klass.inspectRecordBytes;
         klass.inspectRecordBytes = function(bytes, budget) {
@@ -1501,7 +1513,10 @@ impl SafeMeshStringOrSetReplica {
         Ok(bytes)
     }
 
-    fn try_import_identity(bytes: &[u8]) -> Result<Self, BindingError> {
+    fn try_import_identity_with_limits(
+        bytes: &[u8],
+        max_records: Option<u32>,
+    ) -> Result<Self, BindingError> {
         if bytes.len() < 29 || &bytes[..5] != b"SMOI\x01" {
             return Err(binding_error(
                 1,
@@ -1511,8 +1526,12 @@ impl SafeMeshStringOrSetReplica {
         let word = |i| u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
         let (writers, author, next) = (word(5), word(13), word(21));
         let mut candidate = Self::new(author);
-        candidate.log = EventLog::from_wire_bytes_for(&bytes[29..], &candidate.state)
-            .map_err(event_log_decode_error)?;
+        candidate.log = EventLog::from_wire_bytes_for_with_limits(
+            &bytes[29..],
+            &candidate.state,
+            decode_limits(None, max_records),
+        )
+        .map_err(bounded_event_log_decode_error)?;
         if candidate.checked_next(writers)? != next {
             return Err(binding_error(
                 1,
@@ -1679,8 +1698,9 @@ impl SafeMeshStringOrSetReplica {
     /// Allocation/history consistency check; failure never creates a fresh writer.
     /// A self-consistent stale snapshot is not detected. There is no disk I/O.
     #[wasm_bindgen(js_name = importIdentity)]
-    pub fn import_identity(bytes: &[u8]) -> Result<Self, JsValue> {
-        Self::try_import_identity(bytes).map_err(JsValue::from)
+    #[allow(non_snake_case)]
+    pub fn import_identity(bytes: &[u8], maxRecords: Option<u32>) -> Result<Self, JsValue> {
+        Self::try_import_identity_with_limits(bytes, maxRecords).map_err(JsValue::from)
     }
 
     /// Append an add record for `(element, token)` and return its wire bytes.
@@ -2198,14 +2218,17 @@ mod tests {
         let mut left = SafeMeshStringOrSetReplica::try_create_allocated(2, 0).unwrap();
         left.try_append_allocated_add("water".into()).unwrap();
         let saved = left.try_export_identity().unwrap();
-        assert!(SafeMeshStringOrSetReplica::try_import_identity(&saved).is_err());
+        assert!(SafeMeshStringOrSetReplica::try_import_identity_with_limits(&saved, None).is_err());
         drop(left);
         for (offset, word) in [(5, 0u64), (5, 3), (13, 1), (21, 0), (21, u64::MAX)] {
             let mut bad = saved.clone();
             bad[offset..offset + 8].copy_from_slice(&word.to_le_bytes());
-            assert!(SafeMeshStringOrSetReplica::try_import_identity(&bad).is_err());
+            assert!(
+                SafeMeshStringOrSetReplica::try_import_identity_with_limits(&bad, None).is_err()
+            );
         }
-        let mut restored = SafeMeshStringOrSetReplica::try_import_identity(&saved).unwrap();
+        let mut restored =
+            SafeMeshStringOrSetReplica::try_import_identity_with_limits(&saved, None).unwrap();
         let next = restored.try_append_allocated_add("radio".into()).unwrap();
         let record = SafeMeshStringOrSetReplica::decode_record(&next).unwrap();
         assert_eq!(record.id.sequence, 2);
@@ -2215,6 +2238,36 @@ mod tests {
                 element: "radio".into(),
                 token: 4
             }
+        );
+    }
+
+    #[test]
+    fn identity_budget_refuses_before_claim_then_allows_retry_and_append() {
+        let mut writer = SafeMeshStringOrSetReplica::try_create_allocated(2, 0).unwrap();
+        for element in ["first", "second", "third"] {
+            writer.try_append_allocated_add(element.into()).unwrap();
+        }
+        let saved = writer.try_export_identity().unwrap();
+        drop(writer);
+        let Err(error) =
+            SafeMeshStringOrSetReplica::try_import_identity_with_limits(&saved, Some(2))
+        else {
+            panic!("over-budget identity imported");
+        };
+        assert_eq!(error.code, 1);
+        assert_eq!(
+            error.message,
+            "failed to decode event log: RecordLimitExceeded: 2"
+        );
+        let mut restored =
+            SafeMeshStringOrSetReplica::try_import_identity_with_limits(&saved, Some(3)).unwrap();
+        let fourth = restored.try_append_allocated_add("fourth".into()).unwrap();
+        assert_eq!(
+            SafeMeshStringOrSetReplica::decode_record(&fourth)
+                .unwrap()
+                .id
+                .sequence,
+            4
         );
     }
 
@@ -2254,7 +2307,9 @@ mod tests {
                 identity.extend_from_slice(&word.to_le_bytes());
             }
             identity.extend_from_slice(bytes);
-            let Err(error) = SafeMeshStringOrSetReplica::try_import_identity(&identity) else {
+            let Err(error) =
+                SafeMeshStringOrSetReplica::try_import_identity_with_limits(&identity, None)
+            else {
                 panic!("legacy identity history imported");
             };
             assert_eq!((error.code, error.message.as_str()), (1, expected.as_str()));
@@ -3226,10 +3281,11 @@ mod tests {
             identity.extend_from_slice(&word.to_le_bytes());
         }
         identity.extend_from_slice(&log_bytes);
-        let stored = match SafeMeshStringOrSetReplica::try_import_identity(&identity) {
-            Err(error) => error,
-            Ok(_) => panic!("identity with a sequence-0 add was imported"),
-        };
+        let stored =
+            match SafeMeshStringOrSetReplica::try_import_identity_with_limits(&identity, None) {
+                Err(error) => error,
+                Ok(_) => panic!("identity with a sequence-0 add was imported"),
+            };
         assert_eq!(
             (stored.code, stored.message.as_str()),
             (1, expected.as_str())
@@ -3277,10 +3333,11 @@ mod tests {
             identity.extend_from_slice(&word.to_le_bytes());
         }
         identity.extend_from_slice(&log_bytes);
-        let stored = match SafeMeshStringOrSetReplica::try_import_identity(&identity) {
-            Err(error) => error,
-            Ok(_) => panic!("identity with a sequence-0 remove was imported"),
-        };
+        let stored =
+            match SafeMeshStringOrSetReplica::try_import_identity_with_limits(&identity, None) {
+                Err(error) => error,
+                Ok(_) => panic!("identity with a sequence-0 remove was imported"),
+            };
         assert_eq!(
             (stored.code, stored.message.as_str()),
             (1, expected.as_str())

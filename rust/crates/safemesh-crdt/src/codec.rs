@@ -463,38 +463,71 @@ impl<D: WireDecode + WireEncode + WireSchema + PartialEq> EventLog<D> {
         bytes: &[u8],
         state: &C,
     ) -> Result<Vec<u8>, WireError> {
+        match Self::migrate_legacy_wire_bytes_for_with_limits(bytes, state, DecodeLimits::default())
+        {
+            Ok(bytes) => Ok(bytes),
+            Err(DecodeError::Wire(error)) => Err(error),
+            Err(DecodeError::RecordLimitExceeded { .. }) => unreachable!("unbounded migration"),
+        }
+    }
+
+    /// Migrate a legacy frame with a budget for each input record occurrence.
+    /// Duplicate records count; the limit is checked before decoding the next record.
+    /// A current shaped frame uses the same limited decoder as ordinary loading.
+    pub fn migrate_legacy_wire_bytes_for_with_limits<C: Crdt<Delta = D>>(
+        bytes: &[u8],
+        state: &C,
+        limits: DecodeLimits,
+    ) -> Result<Vec<u8>, DecodeError> {
         let mut cursor = WireCursor::new(bytes);
         let mut body = match cursor.read_u8()? {
             TAG_EVENT_LOG_LEGACY => cursor,
             TAG_EVENT_LOG => {
                 let body = read_checked_body(&mut cursor)?;
                 if !cursor.is_empty() {
-                    return Err(WireError::TrailingBytes);
+                    return Err(WireError::TrailingBytes.into());
                 }
                 if WireCursor::new(body).read_u32()? == u32::MAX {
-                    Self::from_wire_bytes_for(bytes, state)?;
+                    Self::from_wire_bytes_for_with_limits(bytes, state, limits)?;
                     return Ok(bytes.to_vec());
                 }
                 WireCursor::new(body)
             }
-            _ => return Err(WireError::InvalidTag),
+            _ => return Err(WireError::InvalidTag.into()),
         };
         let mut log = EventLog::for_crdt(state);
-        for _ in 0..body.read_len()? {
+        for index in 0..body.read_len()? {
+            if let Some(max_records) = limits.max_records {
+                if index >= max_records {
+                    return Err(DecodeError::RecordLimitExceeded { max_records });
+                }
+            }
             let record_len = body.read_len()?;
-            let record = Record::<D>::from_wire_bytes(body.read_exact(record_len)?)?;
+            let mut record_cursor = WireCursor::new(body.read_exact(record_len)?);
+            let record = Record::<D>::decode_wire_with_limits(
+                &mut record_cursor,
+                CollectionLimits {
+                    max_elements: limits
+                        .max_collection_elements
+                        .or(CollectionLimits::WIRE_DEFAULT.max_elements),
+                },
+                limits.max_records,
+            )?;
+            if !record_cursor.is_empty() {
+                return Err(WireError::TrailingBytes.into());
+            }
             match log.identity_admission(&record) {
-                Admission::Collision => return Err(WireError::RecordCollision),
+                Admission::Collision => return Err(WireError::RecordCollision.into()),
                 Admission::Accepted => log.commit_record(record),
                 Admission::Duplicate => {}
                 Admission::Invalid(_) => unreachable!("identity check does not validate a carrier"),
             }
         }
         if !body.is_empty() {
-            return Err(WireError::TrailingBytes);
+            return Err(WireError::TrailingBytes.into());
         }
         log.validate_for(state)?;
-        log.to_wire_bytes()
+        Ok(log.to_wire_bytes()?)
     }
 }
 
