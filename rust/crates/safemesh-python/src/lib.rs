@@ -29,13 +29,12 @@ fn collection_budget(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<usize>
     }
 }
 
-// Reject unrepresentable widths before allocation. Constructors also use
-// try_new so representable widths refused by the allocator become MemoryError.
+// Bound the domain before allocating any coordinates.
 fn numeric_replicas(value: &Bound<'_, PyAny>) -> PyResult<usize> {
     let replicas: usize = numeric(value)?;
-    if replicas > isize::MAX as usize / std::mem::size_of::<u64>() {
+    if replicas > GCounter::MAX_REPLICAS {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "replicas exceeds counter capacity",
+            "replicas exceeds counter maximum (4096)",
         ));
     }
     Ok(replicas)
@@ -159,6 +158,8 @@ mod py_g_counter_python {
 
     #[pymethods]
     impl PyGCounter {
+        /// Construct a zero counter for at most 4096 replicas (the wire author limit).
+        /// Larger counts raise ValueError before allocation.
         #[new]
         pub fn new(#[pyo3(from_py_with = "numeric_replicas")] replicas: usize) -> PyResult<Self> {
             Ok(PyGCounter {
@@ -499,6 +500,8 @@ mod py_g_counter_replica_python {
 
     #[pymethods]
     impl PyGCounterReplica {
+        /// Construct a replica with at most 4096 coordinates (the wire author limit).
+        /// Larger counts raise ValueError before allocation.
         #[new]
         pub fn new(
             #[pyo3(from_py_with = "numeric")] replica_id: u64,
@@ -1328,6 +1331,8 @@ mod py_pncounter_python {
     use super::*;
     #[pymethods]
     impl PyPnCounter {
+        /// Construct a zero counter for at most 4096 replicas (the wire author limit).
+        /// Larger counts raise ValueError before allocation.
         #[new]
         pub fn new(#[pyo3(from_py_with = "numeric_replicas")] replicas: usize) -> PyResult<Self> {
             Ok(Self {
@@ -1409,10 +1414,10 @@ mod tests {
     // Run in a separate process so allocator refusal does not restrict other tests.
     #[test]
     #[cfg(target_os = "linux")]
-    fn python_unallocatable_width_returns_memory_error() {
+    fn python_counter_width_limit() {
         if std::env::var_os("SAFEMESH_WIDTH_CHILD").is_none() {
             let output = std::process::Command::new("bash")
-                .args(["-c", "ulimit -c 0; ulimit -v 524288; exec \"$1\" --exact tests::python_unallocatable_width_returns_memory_error --nocapture --test-threads=1", "width-test"])
+                .args(["-c", "ulimit -c 0; ulimit -v 524288; exec \"$1\" --exact tests::python_counter_width_limit --nocapture --test-threads=1", "width-test"])
                 .arg(std::env::current_exe().unwrap())
                 .env("SAFEMESH_WIDTH_CHILD", "1")
                 .output()
@@ -1434,13 +1439,13 @@ mod tests {
             py.run_bound(
                 r#"
 for make in (sm.GCounter, sm.PnCounter, lambda n: sm.GCounterReplica(0, n)):
-    for width in (2**40, 2**32, (2**63 - 1)//8):
+    for width in (4097, 2**40, 2**32, (2**63 - 1)//8):
         try:
             make(width)
-        except MemoryError:
+        except ValueError:
             pass
         else:
-            raise AssertionError('allocator refusal was not reported')
+            raise AssertionError('replica maximum was not enforced')
     for width, error in (((2**63 - 1)//8 + 1, ValueError),
                          (-1, OverflowError), (1.5, TypeError), (True, TypeError)):
         try:
@@ -1449,7 +1454,7 @@ for make in (sm.GCounter, sm.PnCounter, lambda n: sm.GCounterReplica(0, n)):
             pass
         else:
             raise AssertionError('invalid width was accepted')
-    for width in (0, 1, 2):
+    for width in (0, 1, 2, 4096):
         make(width)
 g = sm.GCounter(2)
 g.apply_bump(0, 7)

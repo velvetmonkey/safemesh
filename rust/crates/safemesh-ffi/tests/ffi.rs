@@ -173,7 +173,19 @@ fn orset_c_abi_matches_core() {
 
 #[test]
 fn c_abi_unallocatable_width_returns_null() {
-    assert!(safemesh_gcounter_new(usize::MAX).is_null());
+    for n in [
+        4097,
+        usize::try_from(1u64 << 40).unwrap_or(usize::MAX),
+        usize::MAX,
+    ] {
+        assert!(safemesh_gcounter_new(n).is_null());
+    }
+    let maximum = safemesh_gcounter_new(4096);
+    assert!(!maximum.is_null());
+    unsafe {
+        assert_eq!(read_total(maximum), 0);
+        safemesh_gcounter_free(maximum);
+    }
     let counter = safemesh_gcounter_new(2);
     assert!(!counter.is_null());
     // SAFETY: live handle, exclusive access, released once below.

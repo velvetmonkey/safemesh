@@ -2,8 +2,6 @@
 // Copyright (C) 2026 Ben Cassie
 // SPDX-License-Identifier: Apache-2.0
 
-use alloc::collections::TryReserveError;
-
 use crate::{
     ownership, CoordinateError, Crdt, GCounter, MergeError, Mergeable, RecordId, WireError,
 };
@@ -32,15 +30,17 @@ impl PnCounter {
     /// Fresh counter for `n` replicas — the lattice bottom `(⊥, ⊥)`.
     ///
     /// # Panics
-    /// Panics if either side cannot be allocated. Use [`Self::try_new`] for a
-    /// fallible constructor.
+    /// Panics above [`GCounter::MAX_REPLICAS`] or if either side cannot be
+    /// allocated. Use [`Self::try_new`] for a fallible width check.
     pub fn new(n: usize) -> Self {
         Self::try_new(n).expect("counter width cannot be allocated")
     }
 
-    /// Allocate both sides fallibly; if the second allocation fails, the first
-    /// is released before returning the error.
-    pub fn try_new(n: usize) -> Result<Self, TryReserveError> {
+    /// Reject counts above [`GCounter::MAX_REPLICAS`] (4,096) before allocation.
+    /// This matches the wire author limit and bounds both sides to 64 KiB.
+    /// Allocate both sides through the zeroed allocator path, as on main.
+    /// Admitted allocation exhaustion follows the allocator's out-of-memory policy.
+    pub fn try_new(n: usize) -> Result<Self, CoordinateError> {
         Ok(PnCounter {
             p: GCounter::try_new(n)?,
             n: GCounter::try_new(n)?,

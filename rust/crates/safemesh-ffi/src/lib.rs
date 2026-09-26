@@ -80,7 +80,9 @@ impl SafeMeshBytes {
     }
 }
 
-/// Fresh counter. Returns NULL if the replica vector or handle cannot be allocated.
+/// Fresh counter, maximum 4096 replicas (the default wire author limit).
+/// Larger counts return NULL before allocation. Storage uses zeroed allocation.
+/// Returns NULL if the replica vector or handle cannot be allocated.
 #[no_mangle]
 pub extern "C" fn safemesh_gcounter_new(replicas: usize) -> *mut SafeMeshGCounter {
     let Ok(inner) = GCounter::try_new(replicas) else {
