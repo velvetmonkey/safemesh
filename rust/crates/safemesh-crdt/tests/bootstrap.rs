@@ -380,3 +380,58 @@ fn load_failures() {
         }
     }
 }
+
+#[test]
+fn retention_durable_persist_restart_all_5000() {
+    let root = scratch("retention");
+    let config = WriterConfig {
+        writers: 3,
+        writer: 0,
+    };
+    let mut durable = DurableReplica::utf8_set(&root, config).unwrap();
+    let mut expected = Replica::new(OrSet::<String, u64>::new());
+    for index in 0..5_000u64 {
+        let id = RecordId {
+            replica: index % 3,
+            sequence: index / 3 + 1,
+        };
+        let record = Record {
+            id,
+            delta: OrSetDelta::Add {
+                element: format!("retained-{index:04}"),
+                token: ownership::allocate_token(3, id.replica, id.sequence).unwrap(),
+            },
+        };
+        assert_eq!(
+            durable.receive(durable.ticket(), record.clone()).unwrap(),
+            Admission::Accepted
+        );
+        assert_eq!(expected.admit(record), Admission::Accepted);
+    }
+    let bytes = expected.log_bytes().unwrap();
+    let check = |actual: &DurableReplica<OrSet<String, u64>>| {
+        use std::collections::BTreeSet;
+        let ids = |log: &EventLog<OrSetDelta<String, u64>>| {
+            log.records()
+                .iter()
+                .map(|r| (r.id.replica, r.id.sequence))
+                .collect::<BTreeSet<_>>()
+        };
+        assert_eq!(actual.log().records().len(), 5_000);
+        assert_eq!(ids(actual.log()), ids(expected.log()));
+        assert_eq!(actual.state(), expected.state());
+        assert_eq!(actual.log().to_wire_bytes().unwrap(), bytes);
+    };
+    check(&durable);
+    assert_eq!(
+        CommittedTransaction::read(&root, config).unwrap().log_bytes,
+        bytes
+    );
+    drop(durable);
+    let restarted = DurableReplica::restart_utf8_set(&root, config).unwrap();
+    check(&restarted);
+    assert_eq!(
+        CommittedTransaction::read(&root, config).unwrap().log_bytes,
+        bytes
+    );
+}
