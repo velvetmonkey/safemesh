@@ -182,6 +182,12 @@ node "$repo_root/rust/crates/safemesh-wasm/tests/safemesh-wasm-boundary-repros.m
 
 node "$repo_root/rust/crates/safemesh-wasm/tests/node-self-merge.mjs" \
   "$tmp_dir/wasm-node-pkg"
+
+# Python StringOrSetReplica against WASM SafeMeshStringOrSetReplica, same steps.
+# The selftest first proves the comparison reports a planted difference.
+parity="$repo_root/rust/crates/safemesh-python/tests/string_orset_wasm_parity.py"
+"$tmp_dir/venv/bin/python" "$parity" --selftest "$tmp_dir/wasm-node-pkg"
+"$tmp_dir/venv/bin/python" "$parity" "$tmp_dir/wasm-node-pkg"
 node "$repo_root/rust/crates/safemesh-wasm/tests/node-since-batch.mjs" \
   "$tmp_dir/wasm-node-pkg"
 node "$repo_root/rust/crates/safemesh-wasm/examples/node-since-sync.mjs" \
