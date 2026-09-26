@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 import queue
 import signal
-import socket
 import subprocess
 import sys
 import tempfile
@@ -30,6 +29,7 @@ class Client:
         self.pid = None
         self.checklist = None
         self.network = None
+        self.listen_address = None
         self.process = subprocess.Popen(
             [sys.executable, str(ROOT / 'examples/fieldcheck/fieldcheck.py'),
              str(store), '--service', str(TARGET / 'debug/fieldcheck'),
@@ -57,6 +57,8 @@ class Client:
             if line not in self.printed:
                 print(line, flush=True)
                 self.printed.add(line)
+            if line.startswith('Listening '):
+                self.listen_address = line.removeprefix('Listening ')
             if line == 'Connected' or line.startswith('Disconnected'):
                 self.network = line
             if line == 'Does the latch hold when pulled?':
@@ -97,24 +99,17 @@ def interrupted(signum, frame):
     raise AssertionError('interrupted-' + signal.Signals(signum).name)
 
 
-def endpoint():
-    with socket.socket() as reservation:
-        reservation.bind(('127.0.0.1', 0))
-        address = '127.0.0.1:' + str(reservation.getsockname()[1])
-    print('TCP endpoint ' + address, flush=True)
-    return address
-
-
 def journey(directory):
     a_store, b_store = directory / 'a', directory / 'b'
-    initial_address = endpoint()
-    b = Client(b_store, 1, ('--listen', initial_address))
-    a = Client(a_store, 0, ('--connect', initial_address))
+    b = Client(b_store, 1, ('--listen', '127.0.0.1:0'))
+    check('initial-listen-address', b.listen_address is not None)
+    a = Client(a_store, 0, ('--connect', b.listen_address))
     connect_deadline = min(DEADLINE, time.monotonic() + 10)
     for client in (a, b):
         while True:
             state, _ = client.snapshot()
             check('initial-stores-empty', state['records'] == [])
+            check('initial-TCP-connection', not (client.network or '').startswith('Disconnected:'))
             if client.network == 'Connected':
                 break
             check('initial-TCP-connection-timeout', time.monotonic() < connect_deadline)
@@ -134,15 +129,16 @@ def journey(directory):
     check('saved-observation-survives-SIGKILL', recovered['records'] == [b_record])
     a.close()
     b.close()
-    address = endpoint()
-    b = Client(b_store, 1, ('--listen', address))
-    a = Client(a_store, 0, ('--connect', address))
+    b = Client(b_store, 1, ('--listen', '127.0.0.1:0'))
+    check('restart-listen-address', b.listen_address is not None)
+    a = Client(a_store, 0, ('--connect', b.listen_address))
     # Each show is a fresh observable snapshot, not a timing sleep or a journey retry.
     states = []
     exchange_deadline = min(DEADLINE, time.monotonic() + 10)
     for client in (a, b):
         while True:
             state, review = client.snapshot()
+            check('reconnect-TCP-connection', not (client.network or '').startswith('Disconnected:'))
             if state['peer_confirmed'] == 2 and len(state['records']) == 2:
                 states.append((state, review))
                 break

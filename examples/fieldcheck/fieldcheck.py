@@ -114,6 +114,8 @@ def main():
                                 say("Saved on this device")
                                 draft = None
                                 draft_path.unlink(missing_ok=True)
+                elif "listening" in value:
+                    say('Listening ' + value["listening"])
                 elif value.get("status"):
                     records = value["records"]
                     say(value["network"])
