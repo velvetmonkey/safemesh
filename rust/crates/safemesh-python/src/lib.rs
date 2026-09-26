@@ -76,6 +76,7 @@ fn event_log_decode_error(error: safemesh_crdt::WireError) -> PyErr {
         safemesh_crdt::WireError::OwnershipViolation => {
             "counter coordinate out of range or not owned by record author".to_owned()
         }
+        cause @ safemesh_crdt::WireError::ZeroSequenceAdd { .. } => cause.to_string(),
         cause => format!("failed to decode event log: {cause}"),
     })
 }
@@ -94,6 +95,9 @@ fn admission_name(admission: safemesh_crdt::Admission) -> String {
 // duplicate or collision is a verdict, not an error. An invalid record raises.
 fn record_verdict(admission: safemesh_crdt::Admission) -> PyResult<String> {
     match admission {
+        safemesh_crdt::Admission::Invalid(
+            cause @ safemesh_crdt::WireError::ZeroSequenceAdd { .. },
+        ) => Err(pyo3::exceptions::PyValueError::new_err(cause.to_string())),
         safemesh_crdt::Admission::Invalid(_) => {
             Err(pyo3::exceptions::PyValueError::new_err("invalid record"))
         }
@@ -1304,6 +1308,20 @@ mod tests {
     fn with_python<T>(f: impl FnOnce(Python<'_>) -> T) -> T {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(f)
+    }
+
+    #[test]
+    fn zero_sequence_add_uses_wire_cause_in_python_errors() {
+        with_python(|py| {
+            let cause = safemesh_crdt::WireError::ZeroSequenceAdd { replica: 1 };
+            for error in [
+                record_verdict(safemesh_crdt::Admission::Invalid(cause)).unwrap_err(),
+                event_log_decode_error(cause),
+            ] {
+                assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
+                assert_eq!(error.to_string(), format!("ValueError: {cause}"));
+            }
+        });
     }
 
     #[test]
