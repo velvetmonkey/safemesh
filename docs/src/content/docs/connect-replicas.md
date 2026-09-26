@@ -145,6 +145,11 @@ admitted: fabricated acknowledgements can hide missing records. Retry repair aft
 lost messages; eventual delivery remains an application assumption. `since` retains
 all history and is not compaction.
 
+A version vector tracks a contiguous prefix for each writer: if one sequence
+number never arrives, `since()` keeps offering every later record from that writer
+on every exchange. This is the designed behaviour; deliver the missing record
+to advance the prefix.
+
 For an in-process transport loop, `anti_entropy(transport, from, to,
 local_log, &mut remote_replica)` queues repair, admits available deliveries,
 and returns `(sending_peer, record_id, admission)` for every delivered record.
