@@ -358,3 +358,83 @@ fn owned_writes_match_lean_oracle() {
         allocations.len()
     );
 }
+
+/// RecordKernel compares Finset payloads; Corpus maps Remove via tokens.toFinset.
+/// Admission parity coverage without changing the generated oracle fixture.
+#[test]
+fn orset_remove_admission_matches_lean_finset() {
+    use safemesh_crdt::{
+        Admission, Crdt, EventLog, OrSetDelta, Record, RecordId, VersionVector, WireDecode,
+        WireEncode,
+    };
+    let record = |tokens| Record {
+        id: RecordId {
+            replica: 0,
+            sequence: 1,
+        },
+        delta: OrSetDelta::<String, u64>::Remove { tokens },
+    };
+    let first = record(vec![1, 2]);
+    let reordered = record(vec![2, 1]);
+    let repeated = record(vec![1, 2, 2]);
+    for r in [&first, &reordered, &repeated] {
+        let bytes = r.to_wire_bytes().unwrap();
+        let decoded = Record::<OrSetDelta<String, u64>>::from_wire_bytes(&bytes).unwrap();
+        assert_eq!(decoded.to_wire_bytes().unwrap(), bytes);
+    }
+    let mut states = [OrSet::new(), OrSet::new(), OrSet::new()];
+    let mut logs = [EventLog::new(), EventLog::new(), EventLog::new()];
+    let admit = |log: &mut EventLog<_>, state: &mut OrSet<_, _>, r| {
+        log.admit_with(state, r, |s, d| s.apply_delta(d.clone()))
+    };
+    assert_eq!(
+        admit(&mut logs[0], &mut states[0], first.clone()),
+        Admission::Accepted
+    );
+    assert_eq!(
+        admit(&mut logs[0], &mut states[0], reordered.clone()),
+        Admission::Duplicate
+    );
+    assert_eq!(
+        admit(&mut logs[0], &mut states[0], repeated),
+        Admission::Duplicate
+    );
+    assert_eq!(
+        admit(&mut logs[0], &mut states[0], record(vec![1, 3])),
+        Admission::Collision
+    );
+    assert_eq!(
+        admit(&mut logs[0], &mut states[0], record(vec![])),
+        Admission::Collision
+    );
+    assert_eq!(
+        admit(&mut logs[1], &mut states[1], reordered),
+        Admission::Accepted
+    );
+    for i in [1, 2] {
+        for r in logs[0].since(&VersionVector::new()) {
+            let bytes = r.to_wire_bytes().unwrap();
+            assert_eq!(bytes, first.to_wire_bytes().unwrap());
+            let decoded = Record::<OrSetDelta<String, u64>>::from_wire_bytes(&bytes).unwrap();
+            let expected = if i == 1 {
+                Admission::Duplicate
+            } else {
+                Admission::Accepted
+            };
+            assert_eq!(admit(&mut logs[i], &mut states[i], decoded), expected);
+        }
+    }
+    assert_eq!(states[0], states[1]);
+    assert_eq!(states[0], states[2]);
+    assert_eq!(logs[0], logs[1]);
+    assert_eq!(logs[0], logs[2]);
+    let mut empty = EventLog::new();
+    assert_eq!(
+        empty.insert_record(&states[0], record(vec![])),
+        Admission::Accepted
+    );
+    assert_eq!(
+        empty.insert_record(&states[0], record(vec![])),
+        Admission::Duplicate
+    );
+}
