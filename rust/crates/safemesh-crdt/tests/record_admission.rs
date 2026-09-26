@@ -596,7 +596,8 @@ fn seqzero_two_replica_exchange_and_persisted_replay() {
     use safemesh_crdt::{anti_entropy, InMemoryTransport, TransportAdapter, VersionVector};
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
-    // Sequence zero remains legal for a permissive carrier, but not a counter.
+    // Sequence zero remains legal for a carrier whose Lean model has no sequence
+    // rule (here an LWW register). A counter record or an OR-Set add at zero is refused.
     fn zero_record(sequence: u64, tally: u64) -> Record<safemesh_crdt::LwwRegisterDelta<u64>> {
         Record {
             id: RecordId {
@@ -690,6 +691,14 @@ fn seqzero_two_replica_exchange_and_persisted_replay() {
 #[test]
 fn seqzero_converged_replicas_quiesce_at_scale() {
     use safemesh_crdt::{anti_entropy, InMemoryTransport, TransportAdapter, VersionVector};
+    // Sequence-zero acknowledgement is a version-vector property, so this uses
+    // an LWW register payload, whose carrier has no sequence rule. OR-Set adds
+    // at sequence 0 are refused (`raw_orset_refuses_sequence_zero_add_on_every_path`).
+    let payload = |replica, sequence| safemesh_crdt::LwwRegisterDelta {
+        timestamp: sequence,
+        replica,
+        value: 7u64,
+    };
     for (authors, positives) in [(1, true), (1, false), (10, false), (100, false)] {
         let mut left = EventLog::new();
         let mut right = EventLog::new();
@@ -699,13 +708,10 @@ fn seqzero_converged_replicas_quiesce_at_scale() {
             for sequence in sequences {
                 let r = Record {
                     id: RecordId { replica, sequence },
-                    delta: safemesh_crdt::OrSetDelta::Add {
-                        element: 7u64,
-                        token: 0u64,
-                    },
+                    delta: payload(replica, sequence),
                 };
                 assert_eq!(
-                    left.insert_record(&safemesh_crdt::OrSet::new(), r),
+                    left.insert_record(&safemesh_crdt::LwwRegister::new(), r),
                     Admission::Accepted
                 );
             }
@@ -720,9 +726,10 @@ fn seqzero_converged_replicas_quiesce_at_scale() {
             for r in envelope.records {
                 let bytes = r.to_wire_bytes().unwrap();
                 let decoded =
-                    Record::<safemesh_crdt::OrSetDelta<u64, u64>>::from_wire_bytes(&bytes).unwrap();
+                    Record::<safemesh_crdt::LwwRegisterDelta<u64>>::from_wire_bytes(&bytes)
+                        .unwrap();
                 assert_eq!(
-                    right.insert_record(&safemesh_crdt::OrSet::new(), decoded),
+                    right.insert_record(&safemesh_crdt::LwwRegister::new(), decoded),
                     Admission::Accepted
                 );
                 recovered += 1;
@@ -740,9 +747,11 @@ fn seqzero_converged_replicas_quiesce_at_scale() {
                     sent += envelope.records.len();
                     for r in envelope.records {
                         assert_eq!(
-                            log.admit_with(&mut safemesh_crdt::OrSet::new(), r, |_, _| panic!(
-                                "converged duplicate applied"
-                            )),
+                            log.admit_with(
+                                &mut safemesh_crdt::LwwRegister::new(),
+                                r,
+                                |_, _| panic!("converged duplicate applied")
+                            ),
                             Admission::Duplicate
                         );
                     }
@@ -755,7 +764,7 @@ fn seqzero_converged_replicas_quiesce_at_scale() {
         );
         assert_eq!(series, vec![0; 10], "converged replicas must stay quiet");
         // Rebuild versions through the legacy log format, not a cloned cache.
-        let restored = EventLog::<safemesh_crdt::OrSetDelta<u64, u64>>::from_wire_bytes(
+        let restored = EventLog::<safemesh_crdt::LwwRegisterDelta<u64>>::from_wire_bytes(
             &left.to_wire_bytes().unwrap(),
         )
         .unwrap();
@@ -1359,6 +1368,177 @@ fn direct_raw_admission_refuses_invalid_counter_record() {
         Admission::Invalid(safemesh_crdt::WireError::OwnershipViolation)
     );
     assert!(log.records().is_empty());
+}
+
+// A log written by main at 3aac37e, before OR-Set adds at sequence 0 were
+// refused. EventLog<OrSetDelta<String, u64>> with two accepted adds:
+// (replica 0, sequence 1, "water", token 2) and (replica 1, sequence 0, "salt",
+// token 0). The old code loaded it and showed "salt" as a member.
+const OLD_SEQUENCE_ZERO_LOG: &str = "03820000007dffffffffffffff20000000736166656d6573682f6f727365742d64656c74612d757466382d7536342f763100020000002700000001000000000000000001000000000000001200000033050000007761746572020000000000000026000000010100000000000000000000000000000011000000330400000073616c7400000000000000003b522727";
+
+const ZERO_ADD_TEXT: &str =
+    "OR-Set add record (replica 1, sequence 0) refused: add sequences start at 1. \
+Recovery: re-add the element from replica 1 at a positive sequence, \
+and remove this record from any stored log before loading it again";
+
+fn zero_orset_record<T>(
+    element: T,
+    delta_is_add: bool,
+) -> Record<safemesh_crdt::OrSetDelta<T, u64>> {
+    Record {
+        id: RecordId {
+            replica: 1,
+            sequence: 0,
+        },
+        delta: if delta_is_add {
+            safemesh_crdt::OrSetDelta::Add { element, token: 0 }
+        } else {
+            safemesh_crdt::OrSetDelta::Remove { tokens: vec![0] }
+        },
+    }
+}
+
+#[test]
+fn raw_orset_refuses_sequence_zero_add_on_every_path() {
+    use safemesh_crdt::{OrSet, OrSetDelta, WireError};
+    // lean/SafeMesh/RecordKernel.lean: `allocateToken` requires `0 < sequence`
+    // and `payloadOwned (.add t)` requires that allocation. The raw carrier
+    // has no writer count, but the sequence clause does not need one.
+    let refusal = WireError::ZeroSequenceAdd { replica: 1 };
+    assert_eq!(refusal.to_string(), ZERO_ADD_TEXT);
+
+    let add = zero_orset_record("water".to_string(), true);
+    let mut state = OrSet::<String, u64>::new();
+    assert_eq!(state.validate_record(add.id, &add.delta), Err(refusal));
+    let mut log = EventLog::for_crdt(&state);
+    let before = log.clone();
+    assert_eq!(
+        log.admit_with(&mut state, add.clone(), |_, _| panic!("zero add applied")),
+        Admission::Invalid(refusal)
+    );
+    assert_eq!(
+        log.insert_record(&state, add.clone()),
+        Admission::Invalid(refusal)
+    );
+    assert_eq!(
+        log.merge_records(&state, [add.clone()]),
+        vec![Admission::Invalid(refusal)]
+    );
+    assert_eq!(log, before);
+    assert!(state.elements().is_empty());
+
+    // The numeric carrier shares the hook.
+    let numeric = zero_orset_record(7u64, true);
+    assert_eq!(
+        OrSet::<u64, u64>::new().validate_record(numeric.id, &numeric.delta),
+        Err(refusal)
+    );
+    assert_eq!(
+        EventLog::new().insert_record(&OrSet::<u64, u64>::new(), numeric),
+        Admission::Invalid(refusal)
+    );
+
+    // Positive controls: the ruling covers adds only. A sequence-0 remove and
+    // a sequence-1 add are still admitted.
+    let remove = zero_orset_record("water".to_string(), false);
+    assert_eq!(state.validate_record(remove.id, &remove.delta), Ok(()));
+    let one = Record {
+        id: RecordId {
+            replica: 1,
+            sequence: 1,
+        },
+        delta: OrSetDelta::Add {
+            element: "water".to_string(),
+            token: 0,
+        },
+    };
+    assert_eq!(log.insert_record(&state, one), Admission::Accepted);
+    assert_eq!(log.insert_record(&state, remove), Admission::Accepted);
+
+    // The single-record wire decode is inert; the refusal happens at admission,
+    // so the record still reaches the hook with its identity intact.
+    let decoded =
+        Record::<OrSetDelta<String, u64>>::from_wire_bytes(&add.to_wire_bytes().unwrap()).unwrap();
+    assert_eq!(
+        EventLog::new().insert_record(&OrSet::<String, u64>::new(), decoded),
+        Admission::Invalid(refusal)
+    );
+}
+
+#[test]
+fn stored_log_with_sequence_zero_add_fails_loudly() {
+    use safemesh_crdt::{DecodeError, DecodeLimits, OrSet, OrSetDelta, WireError};
+    let bytes: Vec<u8> = (0..OLD_SEQUENCE_ZERO_LOG.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&OLD_SEQUENCE_ZERO_LOG[i..i + 2], 16).unwrap())
+        .collect();
+    let refusal = WireError::ZeroSequenceAdd { replica: 1 };
+    let carrier = OrSet::<String, u64>::new();
+
+    // Every checked loader refuses the whole log and names the record.
+    let error =
+        EventLog::<OrSetDelta<String, u64>>::from_wire_bytes_for(&bytes, &carrier).unwrap_err();
+    assert_eq!(error, refusal);
+    let text = error.to_string();
+    println!("OLD LOG REFUSAL: {text}");
+    assert!(text.contains("replica 1, sequence 0"), "{text}");
+    assert!(text.contains("Recovery: "), "{text}");
+    assert_eq!(
+        EventLog::<OrSetDelta<String, u64>>::records_from_wire_bytes_for(&bytes, &carrier),
+        Err(refusal)
+    );
+    assert_eq!(
+        EventLog::<OrSetDelta<String, u64>>::from_wire_bytes_for_with_limits(
+            &bytes,
+            &carrier,
+            DecodeLimits::default()
+        ),
+        Err(DecodeError::Wire(refusal))
+    );
+    assert_eq!(
+        EventLog::<OrSetDelta<String, u64>>::records_from_wire_bytes_for_with_limits(
+            &bytes,
+            &carrier,
+            DecodeLimits::default()
+        ),
+        Err(DecodeError::Wire(refusal))
+    );
+
+    // Nothing is dropped: the inert decoder still returns both records, so a
+    // caller can find the sequence-0 add and follow the recovery step.
+    let inert = EventLog::<OrSetDelta<String, u64>>::from_wire_bytes(&bytes).unwrap();
+    let ids: Vec<_> = inert
+        .records()
+        .iter()
+        .map(|r| (r.id.replica, r.id.sequence))
+        .collect();
+    assert_eq!(ids, vec![(0, 1), (1, 0)]);
+
+    // Recovery: drop the named record, re-add its element at a positive
+    // sequence, and the rewritten log loads.
+    let mut repaired = OrSet::<String, u64>::new();
+    let mut log = EventLog::for_crdt(&repaired);
+    for r in inert.records().iter().filter(|r| r.id.sequence > 0) {
+        assert_eq!(
+            log.admit_with(&mut repaired, r.clone(), |s, d| s.apply_delta(d.clone())),
+            Admission::Accepted
+        );
+    }
+    log.append_with(
+        &mut repaired,
+        1,
+        OrSetDelta::Add {
+            element: "salt".to_string(),
+            token: 3,
+        },
+        |s, d| s.apply_delta(d.clone()),
+    )
+    .unwrap();
+    let rewritten = log.to_wire_bytes().unwrap();
+    let loaded =
+        EventLog::<OrSetDelta<String, u64>>::from_wire_bytes_for(&rewritten, &carrier).unwrap();
+    assert_eq!(loaded, log);
+    assert!(repaired.contains(&"salt".to_string()));
 }
 
 #[test]
