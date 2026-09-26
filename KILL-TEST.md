@@ -18,7 +18,7 @@ cargo run -p safemesh-crdt --example cold_chain_kill_test
 The scenario models a field sample moving from clinic to courier to lab while a lab-side freezer alert is recorded during a partition. The example uses:
 
 - `EventLog` for append/merge/since/version record exchange.
-- `InMemoryTransport` plus `anti_entropy` for drop, duplicate, reorder, partition, and heal.
+- `InMemoryTransport` plus `queue_anti_entropy` for drop, duplicate, reorder, partition, and heal.
 - `GSet` for known samples.
 - `OrSet` for active custody holders and active alerts.
 - `Rga` for ordered audit entries.
@@ -47,7 +47,7 @@ A genuine process-kill/restart check also exists: [`demos/two-app-inventory/jour
 | 1. Is the domain integrity-critical enough for verification to matter? | Yes. Silent loss, duplicate handling mistakes, or divergent custody state can invalidate sample handling decisions. | The scenario tracks sample identity, custody, alert, audit, and event count as state that must match after sync. |
 | 2. Can the v0 flat-first model express the workflow without references, trees, or moves? | Yes for this slice. The sample id is a value inside flat sets and sequences; there are no object references or tree moves. | `cold_chain_kill_test` uses only `GSet`, `OrSet`, `Rga`, and `GCounter`. |
 | 3. Does every replica converge after drop, duplication, reordering, partition, and heal? | Yes for the modeled state. | The example prints `CONVERGED=true` and has an example test under `cargo test -p safemesh-crdt --examples`. |
-| 4. Is packet delivery being claimed as proven? | No. The transport is engineered test infrastructure. | The example uses `InMemoryTransport` and `anti_entropy`; `CLAIMS.md` keeps delivery and radio correctness out of scope. |
+| 4. Is packet delivery being claimed as proven? | No. The transport is engineered test infrastructure. | The example uses `InMemoryTransport` and `queue_anti_entropy`; `CLAIMS.md` keeps delivery and radio correctness out of scope. |
 | 5. Does the vertical depend on custom reducer proof? | No for this slice. Domain events route into in-house flat CRDT carriers. | The state projection is composed from existing SafeMesh types; no arbitrary reducer earns a proven label. |
 | 6. Are domain conflicts hidden? | No. Concurrent or unresolved facts remain visible in the converged state. | Alerts are OR-Set entries; custody is explicit add/remove-token state. Application policy decides what an alert means. |
 | 7. Can a builder rerun the evidence locally? | Yes. | `cargo run -p safemesh-crdt --example cold_chain_kill_test` and `cargo test -p safemesh-crdt --examples`. |
