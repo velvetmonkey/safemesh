@@ -196,6 +196,8 @@ fn run() -> Result<(), RunError> {
             | LocalError::InvalidRecord(_)
             | LocalError::History(_)
             | LocalError::InvalidHistory => "replay",
+            // Preserve the Display reason and identify future local errors separately.
+            _ => "unknown_local_error",
         };
         RunError::Recovery {
             kind,
