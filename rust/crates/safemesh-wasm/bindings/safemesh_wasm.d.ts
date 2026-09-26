@@ -1,6 +1,27 @@
 /* tslint:disable */
 /* eslint-disable */
 
+export interface SafeMeshStore {
+    open(mode: "fresh" | "restart", writer: bigint): unknown;
+    readCommitted(lease: unknown): { bytes: Uint8Array; revision: bigint; anchor: bigint };
+    commit(lease: unknown, expectedRevision: bigint, nextBytes: Uint8Array): bigint;
+    close(lease: unknown): void;
+}
+export interface SafeMeshManagedCounterOptions {
+    mode: "fresh" | "restart";
+    writer: bigint;
+    writers?: number;
+}
+export type SafeMeshCounterEnvelopeVersion = 1;
+export type SafeMeshStoreErrorCode = "MISSING" | "CORRUPT" | "STALE" | "EXISTS" |
+"LOCKED" | "COMMIT" | "DISABLED" | "REENTRY" | "CLOSED" | "COLLISION";
+export interface SafeMeshStoreError extends Error {
+    name: "SafeMeshStoreError";
+    code: SafeMeshStoreErrorCode;
+}
+
+
+
 export class SafeMeshEnableWinsFlag {
     free(): void;
     [Symbol.dispose](): void;
@@ -238,6 +259,26 @@ export class SafeMeshLwwRegisterReplica {
      */
     versionVector(): BigUint64Array;
     writerReplicaOr(default_value: bigint): bigint;
+}
+
+/**
+ * Owns a synchronous Store lease. Call close explicitly before free.
+ * All exported methods borrow through try_borrow: callback reentry is rejected
+ * before touching state, including read/close/free attempts during commit.
+ */
+export class SafeMeshManagedGCounter {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    appendBump(tally: bigint): Uint8Array;
+    close(): void;
+    mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate")[];
+    mergeRecordBytes(bytes: Uint8Array): "accepted" | "duplicate";
+    static open(store: SafeMeshStore, options: SafeMeshManagedCounterOptions): SafeMeshManagedGCounter;
+    peerLogBytes(): Uint8Array;
+    state(): BigUint64Array;
+    value(): bigint;
+    versionFor(writer: bigint): bigint;
 }
 
 /**

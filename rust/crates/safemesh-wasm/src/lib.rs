@@ -4406,3 +4406,320 @@ impl SafeMeshRgaReplica {
         Ok(())
     }
 }
+// Managed Node persistence: the envelope is local storage, never peer bytes.
+#[wasm_bindgen(typescript_custom_section)]
+const MANAGED_STORE_TYPES: &str = r#"
+export interface SafeMeshStore {
+  open(mode: "fresh" | "restart", writer: bigint): unknown;
+  readCommitted(lease: unknown): { bytes: Uint8Array; revision: bigint; anchor: bigint };
+  commit(lease: unknown, expectedRevision: bigint, nextBytes: Uint8Array): bigint;
+  close(lease: unknown): void;
+}
+export interface SafeMeshManagedCounterOptions {
+  mode: "fresh" | "restart";
+  writer: bigint;
+  writers?: number;
+}
+export type SafeMeshCounterEnvelopeVersion = 1;
+export type SafeMeshStoreErrorCode = "MISSING" | "CORRUPT" | "STALE" | "EXISTS" |
+  "LOCKED" | "COMMIT" | "DISABLED" | "REENTRY" | "CLOSED" | "COLLISION";
+export interface SafeMeshStoreError extends Error {
+  name: "SafeMeshStoreError";
+  code: SafeMeshStoreErrorCode;
+}
+"#;
+
+#[wasm_bindgen(inline_js = r#"
+export function managedError(code, message) {
+    const error = new Error(message); error.name = 'SafeMeshStoreError'; error.code = code;
+    return error;
+}
+function sync(value) {
+    if (value != null && typeof value.then === 'function')
+        throw managedError('COMMIT', 'Store callbacks must be synchronous');
+    return value;
+}
+export function managedMode(options) {
+    if (options.mode !== 'fresh' && options.mode !== 'restart')
+        throw managedError('CORRUPT', 'mode must be fresh or restart');
+    if (options.mode === 'restart' && options.writers !== undefined)
+        throw managedError('CORRUPT', 'restart obtains writers only from committed metadata');
+    return options.mode;
+}
+export function managedWriter(options) {
+    if (typeof options.writer !== 'bigint' || options.writer < 0n || options.writer > 18446744073709551615n)
+        throw managedError('CORRUPT', 'writer must be u64 bigint');
+    return options.writer;
+}
+export function managedWriters(options) {
+    if (!Number.isSafeInteger(options.writers) || options.writers < 1 || options.writers > 1000000)
+        throw managedError('CORRUPT', 'writers must be an integer in 1..1000000');
+    return options.writers;
+}
+export function managedOpen(store, mode, writer) { return sync(store.open(mode, writer)); }
+export function managedRead(store, lease) {
+    const snapshot = sync(store.readCommitted(lease));
+    if (!snapshot || !(snapshot.bytes instanceof Uint8Array) || snapshot.bytes.length < 41 ||
+        typeof snapshot.revision !== 'bigint' || typeof snapshot.anchor !== 'bigint')
+        throw managedError('CORRUPT', 'invalid committed snapshot');
+    const revision = new DataView(snapshot.bytes.buffer, snapshot.bytes.byteOffset, snapshot.bytes.byteLength).getBigUint64(33, true);
+    if (revision !== snapshot.revision || revision < 1n || snapshot.anchor !== revision)
+        throw managedError('STALE', 'envelope revision differs from independent store anchor');
+    return Array.from(snapshot.bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+export function managedCommit(store, lease, revision, bytes) {
+    const next = sync(store.commit(lease, revision, Uint8Array.from(bytes)));
+    if (typeof next !== 'bigint' || next !== revision + 1n)
+        throw managedError('COMMIT', 'Store.commit returned wrong revision');
+}
+export function managedClose(store, lease) { sync(store.close(lease)); }
+"#)]
+extern "C" {
+    #[wasm_bindgen(js_name = managedError)]
+    fn managed_error(code: &str, message: &str) -> JsValue;
+    #[wasm_bindgen(catch, js_name = managedMode)]
+    fn managed_mode(options: &JsValue) -> Result<String, JsValue>;
+    #[wasm_bindgen(catch, js_name = managedWriter)]
+    fn managed_writer(options: &JsValue) -> Result<u64, JsValue>;
+    #[wasm_bindgen(catch, js_name = managedWriters)]
+    fn managed_writers(options: &JsValue) -> Result<u32, JsValue>;
+    #[wasm_bindgen(catch, js_name = managedOpen)]
+    fn managed_open(store: &JsValue, mode: &str, writer: u64) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = managedRead)]
+    fn managed_read(store: &JsValue, lease: &JsValue) -> Result<String, JsValue>;
+    #[wasm_bindgen(catch, js_name = managedCommit)]
+    fn managed_commit(
+        store: &JsValue,
+        lease: &JsValue,
+        revision: u64,
+        bytes: &[u8],
+    ) -> Result<(), JsValue>;
+    #[wasm_bindgen(catch, js_name = managedClose)]
+    fn managed_close(store: &JsValue, lease: &JsValue) -> Result<(), JsValue>;
+}
+
+struct ManagedCounterState {
+    counter: SafeMeshGCounterReplica,
+    revision: u64,
+    closed: bool,
+    disabled: bool,
+}
+
+/// Owns a synchronous Store lease. Call close explicitly before free.
+/// All exported methods borrow through try_borrow: callback reentry is rejected
+/// before touching state, including read/close/free attempts during commit.
+#[wasm_bindgen]
+pub struct SafeMeshManagedGCounter {
+    store: JsValue,
+    lease: JsValue,
+    inner: RefCell<ManagedCounterState>,
+}
+
+fn managed_envelope(counter: &SafeMeshGCounterReplica, revision: u64) -> Result<Vec<u8>, JsValue> {
+    let mut bytes = b"SMNODEGC".to_vec();
+    bytes.push(1); // envelope version; magic identifies the G-Counter kind
+    bytes.extend_from_slice(&(counter.replica.state().len() as u64).to_le_bytes());
+    bytes.extend_from_slice(&counter.replica_id.to_le_bytes());
+    bytes.extend_from_slice(&counter.version_for(counter.replica_id).to_le_bytes());
+    bytes.extend_from_slice(&revision.to_le_bytes());
+    bytes.extend_from_slice(&counter.log_bytes()?);
+    Ok(bytes)
+}
+
+fn managed_restore(bytes: &[u8], writer: u64) -> Result<(SafeMeshGCounterReplica, u64), JsValue> {
+    let corrupt = || managed_error("CORRUPT", "invalid managed counter envelope or replay");
+    if bytes.len() < 41 || &bytes[..8] != b"SMNODEGC" || bytes[8] != 1 {
+        return Err(corrupt());
+    }
+    let word = |offset| u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+    let count = word(9);
+    let author = word(17);
+    let cursor = word(25);
+    let revision = word(33);
+    if count == 0 || count > 1_000_000 || author != writer || author >= count || revision == 0 {
+        return Err(corrupt());
+    }
+    let mut counter = SafeMeshGCounterReplica::new(author, count as usize);
+    let verdicts = counter
+        .merge_log_bytes(&bytes[41..], None, None)
+        .map_err(|_| corrupt())?;
+    if verdicts.iter().any(|v| v != "accepted") || counter.version_for(author) != cursor {
+        return Err(corrupt());
+    }
+    // Canonical encoding also refuses omitted history, trailing or alternate encodings.
+    if managed_envelope(&counter, revision)? != bytes {
+        return Err(corrupt());
+    }
+    Ok((counter, revision))
+}
+
+impl SafeMeshManagedGCounter {
+    fn borrow(&self, write: bool) -> Result<std::cell::RefMut<'_, ManagedCounterState>, JsValue> {
+        let inner = self
+            .inner
+            .try_borrow_mut()
+            .map_err(|_| managed_error("REENTRY", "Store callback reentry"))?;
+        if inner.closed {
+            return Err(managed_error("CLOSED", "managed handle is closed"));
+        }
+        if write && inner.disabled {
+            return Err(managed_error(
+                "DISABLED",
+                "close and restart after failed commit",
+            ));
+        }
+        Ok(inner)
+    }
+    fn candidate(inner: &ManagedCounterState) -> Result<SafeMeshGCounterReplica, JsValue> {
+        let bytes = managed_envelope(&inner.counter, inner.revision)?;
+        Ok(managed_restore(&bytes, inner.counter.replica_id)?.0)
+    }
+    fn publish(
+        &self,
+        inner: &mut ManagedCounterState,
+        candidate: SafeMeshGCounterReplica,
+    ) -> Result<(), JsValue> {
+        let next = inner
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| managed_error("COMMIT", "revision exhausted"))?;
+        let bytes = managed_envelope(&candidate, next)?;
+        if let Err(error) = managed_commit(&self.store, &self.lease, inner.revision, &bytes) {
+            inner.disabled = true;
+            return Err(error);
+        }
+        inner.counter = candidate;
+        inner.revision = next;
+        Ok(())
+    }
+}
+
+#[wasm_bindgen]
+impl SafeMeshManagedGCounter {
+    #[wasm_bindgen(js_name = open)]
+    pub fn open(
+        #[wasm_bindgen(unchecked_param_type = "SafeMeshStore")] store: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "SafeMeshManagedCounterOptions")] options: JsValue,
+    ) -> Result<SafeMeshManagedGCounter, JsValue> {
+        let mode = managed_mode(&options)?;
+        let writer = managed_writer(&options)?;
+        let count = if mode == "fresh" {
+            Some(managed_writers(&options)?)
+        } else {
+            None
+        };
+        if count.is_some_and(|n| writer >= u64::from(n)) {
+            return Err(managed_error("CORRUPT", "writer outside committed count"));
+        }
+        let lease = managed_open(&store, &mode, writer)?;
+        let result = (|| {
+            if let Some(count) = count {
+                let counter = SafeMeshGCounterReplica::new(writer, count as usize);
+                managed_commit(&store, &lease, 0, &managed_envelope(&counter, 1)?)?;
+                Ok((counter, 1))
+            } else {
+                let hex = managed_read(&store, &lease)?;
+                let bytes: Result<Vec<u8>, _> = hex
+                    .as_bytes()
+                    .chunks_exact(2)
+                    .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16))
+                    .collect();
+                managed_restore(
+                    &bytes.map_err(|_| managed_error("CORRUPT", "invalid snapshot bytes"))?,
+                    writer,
+                )
+            }
+        })();
+        match result {
+            Ok((counter, revision)) => Ok(Self {
+                store,
+                lease,
+                inner: RefCell::new(ManagedCounterState {
+                    counter,
+                    revision,
+                    closed: false,
+                    disabled: false,
+                }),
+            }),
+            Err(error) => {
+                let _ = managed_close(&store, &lease);
+                Err(error)
+            }
+        }
+    }
+
+    #[wasm_bindgen(js_name = appendBump)]
+    pub fn append_bump(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] tally: JsValue,
+    ) -> Result<Vec<u8>, JsValue> {
+        let tally = checked_u64(tally, "tally")?;
+        let mut inner = self.borrow(true)?;
+        let mut candidate = Self::candidate(&inner)?;
+        let bytes = candidate.append_bump(candidate.replica_id as usize, tally)?;
+        self.publish(&mut inner, candidate)?;
+        Ok(bytes)
+    }
+
+    #[wasm_bindgen(js_name = mergeRecordBytes, unchecked_return_type = "\"accepted\" | \"duplicate\"")]
+    pub fn merge_record_bytes(&self, bytes: &[u8]) -> Result<String, JsValue> {
+        let mut inner = self.borrow(true)?;
+        let mut candidate = Self::candidate(&inner)?;
+        let verdict = candidate.merge_record_bytes(bytes, None)?;
+        match verdict.as_str() {
+            "accepted" => self.publish(&mut inner, candidate)?,
+            "duplicate" => (),
+            _ => return Err(managed_error("COLLISION", "peer record collision")),
+        }
+        Ok(verdict)
+    }
+
+    #[wasm_bindgen(js_name = mergeLogBytes, unchecked_return_type = "(\"accepted\" | \"duplicate\")[]")]
+    pub fn merge_log_bytes(&self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
+        let mut inner = self.borrow(true)?;
+        let mut candidate = Self::candidate(&inner)?;
+        let verdicts = candidate.merge_log_bytes(bytes, None, None)?;
+        if verdicts.iter().any(|v| v == "collision") {
+            return Err(managed_error("COLLISION", "peer batch collision"));
+        }
+        if verdicts.iter().any(|v| v == "accepted") {
+            self.publish(&mut inner, candidate)?;
+        }
+        Ok(verdicts)
+    }
+
+    #[wasm_bindgen(unchecked_return_type = "bigint")]
+    pub fn value(&self) -> Result<JsValue, JsValue> {
+        Ok(self.borrow(false)?.counter.value())
+    }
+    pub fn state(&self) -> Result<Vec<u64>, JsValue> {
+        Ok(self.borrow(false)?.counter.state())
+    }
+    #[wasm_bindgen(js_name = peerLogBytes)]
+    pub fn log_bytes(&self) -> Result<Vec<u8>, JsValue> {
+        self.borrow(false)?.counter.log_bytes()
+    }
+    #[wasm_bindgen(js_name = versionFor)]
+    pub fn version_for(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] writer: JsValue,
+    ) -> Result<u64, JsValue> {
+        Ok(self
+            .borrow(false)?
+            .counter
+            .version_for(checked_u64(writer, "writer")?))
+    }
+    pub fn close(&self) -> Result<(), JsValue> {
+        let mut inner = self
+            .inner
+            .try_borrow_mut()
+            .map_err(|_| managed_error("REENTRY", "Store callback reentry"))?;
+        if !inner.closed {
+            // A throwing close may have released the lease: retain no write authority.
+            inner.disabled = true;
+            managed_close(&self.store, &self.lease)?;
+            inner.closed = true;
+        }
+        Ok(())
+    }
+}
