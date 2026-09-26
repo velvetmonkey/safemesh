@@ -448,3 +448,39 @@ for (const name of ['SafeMeshGCounter', 'SafeMeshGCounterReplica']) {
 }
 console.log(`COUNTER_CAPACITY_CONSTRUCTORS=2 FAILURES=${capacityFailures.length}`);
 assert.deepEqual(capacityFailures, []);
+
+// Retained legacy EventLog fixtures: every JS log loader names the frame found,
+// the frame expected and the migration step, with the core text intact.
+{
+  const { readFileSync } = await import("node:fs");
+  const fixtures = new URL("../../safemesh-crdt/tests/fixtures/legacy-event-log/", import.meta.url);
+  const step = "expected tag 0x03 with shape header; migrate once with " +
+    "EventLog::migrate_legacy_wire_bytes_for(bytes, &destination) or " +
+    "`cargo run -p safemesh-crdt --example migrate_event_log`, giving the original " +
+    "replica count (safemesh-crdt README, \"Migrating a legacy EventLog\")";
+  const frames = [
+    ["tag02", "tag 0x02 (no CRC, no shape header)"],
+    ["tag03-unshaped", "tag 0x03 without shape header"],
+  ];
+  const loaders = [
+    ["gcounter.log", () => new wasm.SafeMeshGCounterReplica(0n, 2)],
+    ["pncounter.log", () => new wasm.SafeMeshPnCounterReplica(0n, 2)],
+    ["enable-wins-flag-u64.log", () => new wasm.SafeMeshEnableWinsFlagReplica(0n)],
+    ["lww-map-u64.log", () => new wasm.SafeMeshLwwMapReplica(0n)],
+    ["lww-register-u64.log", () => new wasm.SafeMeshLwwRegisterReplica(0n)],
+    ["orset-utf8.log", () => new wasm.SafeMeshStringOrSetReplica(0n)],
+  ];
+  let legacyCases = 0;
+  for (const [dir, found] of frames) {
+    const message = `failed to decode event log: legacy EventLog frame: found ${found}, ${step}`;
+    for (const [file, make] of loaders) {
+      const bytes = readFileSync(new URL(`${dir}/${file}`, fixtures));
+      const replica = make();
+      assertSafeMeshError(() => replica.mergeLogBytes(bytes), 1, message);
+      replica.free();
+      legacyCases += 1;
+    }
+    console.log(`WASM ${dir}: ${message}`);
+  }
+  console.log(`LEGACY_EVENT_LOG_CASES=${legacyCases}`);
+}

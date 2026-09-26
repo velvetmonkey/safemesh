@@ -442,8 +442,9 @@ cargo test -p safemesh-crdt --features laws
 
 ### EventLog persistence frame
 
-`EventLog` uses tag `0x03`, replacing the old `0x02` format without a compatibility
-path. The tag is followed by a little-endian u32 body length, its bitwise
+`EventLog` uses tag `0x03`. It replaced the unchecked `0x02` frame, which every
+loader now refuses with a named error; see [Migrating a legacy
+EventLog](#migrating-a-legacy-eventlog). The tag is followed by a little-endian u32 body length, its bitwise
 complement, the body, and a little-endian CRC-32/ISO-HDLC. The body contains the
 shape header described below, the record count and every length-prefixed record,
 including each payload. The CRC
@@ -494,15 +495,80 @@ CRDT. The limit does not cap bytes, nested records, or payload collection entrie
 CRC verification still scans the whole frame. Python/WASM loaders do not expose
 this Rust-only option yet.
 
-Existing `0x03` files without the shape header now return `MissingShape`.
-There is no automatic migration: old bytes cannot establish the original arity,
-including replicas that never emitted a delta. Preserve old files and use the
-old release plus independently verified original schema/arity to recover and
-re-encode records with the new API. Do not infer arity from the largest coordinate.
-New files are also incompatible with old decoders. A G-Counter frame grows by
+`0x03` files written before the shape header return
+`WireError::LegacyEventLogFrame { found: LegacyFrame::Tag03Unshaped }`, not
+`MissingShape`; see [Migrating a legacy EventLog](#migrating-a-legacy-eventlog).
+New files are incompatible with old decoders. A G-Counter frame grows by
 43 bytes; other overhead is 9 plus the schema byte length, plus 8 for fixed arity.
 External payloads persisted in EventLog must implement `WireSchema` with a stable,
 unique identity; external fixed-domain CRDTs must implement `Crdt::replica_count`.
+
+
+### Migrating a legacy EventLog
+
+Two earlier EventLog frames exist. Every loader refuses both before decoding any
+record (`from_wire_bytes`, `from_wire_bytes_for`, `records_from_wire_bytes_for`,
+their `_with_limits` forms, and the Python and WASM `mergeLogBytes` and identity
+loaders). Each returns a typed error that names the frame found, the frame
+expected and this step:
+
+| Frame found | Written by main | Error |
+| --- | --- | --- |
+| `0x02`: record count and records, no CRC, no shape | `ec5b0c5` to `3fb38cb` (#15) | `LegacyEventLogFrame { found: LegacyFrame::Tag02 }` |
+| `0x03` with CRC, no shape header | #16 and #17 (`773293d`, `4a12ae6`) | `LegacyEventLogFrame { found: LegacyFrame::Tag03Unshaped }` |
+
+```text
+legacy EventLog frame: found tag 0x02 (no CRC, no shape header), expected tag 0x03 with shape header; migrate once with EventLog::migrate_legacy_wire_bytes_for(bytes, &destination) or `cargo run -p safemesh-crdt --example migrate_event_log`, giving the original replica count (safemesh-crdt README, "Migrating a legacy EventLog")
+```
+
+Python raises `ValueError` and WASM throws `SafeMeshError` code 1, with
+`failed to decode event log: ` before this same text. An unshaped `0x03` frame
+that fails its CRC is still `IntegrityMismatch`. A `0x02` tag is named only when
+the rest walks as a 0x02 frame (a count, then length-prefixed records); a
+damaged current frame and any other tag are still `InvalidTag`. Durable local stores postdate the shape header, so only raw
+EventLog files can hold a legacy frame.
+
+Old frames record neither schema nor arity, so migration is an explicit call
+that never runs on open. You supply both: the schema by choosing the delta type,
+and the arity with a destination CRDT built with the original replica count.
+Verify that count independently. Do not infer it from the largest coordinate:
+replicas that never emitted a delta leave no trace.
+
+```rust
+let state = GCounter::new(original_replica_count);
+let migrated = EventLog::<GCounterDelta>::migrate_legacy_wire_bytes_for(&old_bytes, &state)?;
+let log = EventLog::from_wire_bytes_for(&migrated, &state)?; // then persist `migrated`
+```
+
+Or from a checkout, without writing Rust:
+
+```sh
+cd rust
+cargo run -p safemesh-crdt --example migrate_event_log -- gcounter 2 old.log      # check: exit 1, names the frame
+cargo run -p safemesh-crdt --example migrate_event_log -- gcounter 2 old.log new.log  # migrate: exit 0
+cargo run -p safemesh-crdt --example migrate_event_log -- gcounter 2 new.log      # check: exit 0, current frame
+```
+
+The example handles `gcounter` and `pncounter` (these take the replica count)
+and `orset-u64`, `orset-utf8`, `lww-register-u64`, `enable-wins-flag-u64` and
+`lww-map-u64` (these take `unbounded`). It never modifies the input and refuses
+to overwrite the output. Exit 1 prints the core error; exit 2 is a usage error.
+
+Migration decodes and deduplicates every record as the old decoder did. It
+validates every record against the destination, then re-encodes. Record
+bytes and order are unchanged; only the frame gains its shape. A collision,
+malformed record, trailing bytes, a damaged CRC, or a record outside the
+destination (for example a G-Counter coordinate at or above the given count)
+returns an error and no output. A current frame is validated and returned
+unchanged, so running the step twice is safe. Nested EventLog payloads are not
+rewritten. Keep the original file until the migrated one has been reloaded
+with `from_wire_bytes_for`, and write the result by atomic replacement.
+
+The retained corpus `tests/fixtures/legacy-event-log/` holds each frame for
+every built-in delta that could be persisted then, generated from the last
+commit that wrote it. CI regenerates it at those commits
+(`scripts/check-legacy-event-log-fixtures.sh`). `tests/legacy_event_log.rs`
+asserts each file's exact error and lossless migration, and pins its SHA-256.
 
 
 ## Checked local writers (Linux)
