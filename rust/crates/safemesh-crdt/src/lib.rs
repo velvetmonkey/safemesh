@@ -73,6 +73,9 @@ pub use version_vector::{
 mod event_log;
 pub use event_log::{Admission, AppendError, EventLog};
 
+mod replica;
+pub use replica::{Replica, ReplicaError};
+
 mod transport;
 pub use transport::{
     anti_entropy, InMemoryTransport, TransportAdapter, TransportEnvelope, TransportError,

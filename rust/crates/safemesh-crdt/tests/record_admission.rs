@@ -1,6 +1,6 @@
 use safemesh_crdt::{
     Admission, AppendError, Crdt, EventLog, GCounter, GCounterDelta, PnCounter, PnCounterDelta,
-    Record, RecordId, WireDecode, WireEncode,
+    Record, RecordId, Replica, ReplicaError, WireDecode, WireEncode,
 };
 
 fn record(sequence: u64, tally: u64) -> Record<GCounterDelta> {
@@ -1094,11 +1094,12 @@ fn inherited_types_accept_records_that_replay_subsumes() {
     assert_eq!(checked, 15);
 }
 
-fn accepts_absorbed<C>(mut carrier: C, mut fresh: C, delta: C::Delta)
+fn accepts_absorbed<C>(mut carrier: C, mut fresh: C, delta: C::Delta, accepts_zero: bool)
 where
     C: Crdt + Clone + PartialEq + std::fmt::Debug,
-    C::Delta: Clone,
+    C::Delta: Clone + PartialEq + std::fmt::Debug,
 {
+    let mut replica = Replica::new(fresh.clone());
     let id = RecordId {
         replica: 0,
         sequence: 1,
@@ -1108,7 +1109,64 @@ where
     assert_eq!(carrier.validate_record(id, &delta), Ok(()));
     assert_eq!(fresh.validate_record(id, &delta), Ok(()));
     carrier.apply_delta(delta.clone());
-    fresh.apply_delta(delta);
+    fresh.apply_delta(delta.clone());
+    let record = Record {
+        id,
+        delta: delta.clone(),
+    };
+    assert_eq!(replica.admit(record.clone()), Admission::Accepted);
+    assert_eq!(replica.admit(record), Admission::Duplicate);
+    assert_eq!(replica.state(), &fresh);
+    assert_eq!(
+        replica.log().records(),
+        &[Record {
+            id,
+            delta: delta.clone()
+        }]
+    );
+    assert_eq!(replica.version().get(0), 1);
+    assert_eq!(
+        replica.since(&safemesh_crdt::VersionVector::new()),
+        replica.log().records()
+    );
+    let zero_id = RecordId {
+        replica: 0,
+        sequence: 0,
+    };
+    assert_eq!(
+        carrier.validate_record(zero_id, &delta).is_ok(),
+        accepts_zero
+    );
+    if accepts_zero {
+        let zero = Record {
+            id: RecordId {
+                replica: 0,
+                sequence: 0,
+            },
+            delta: delta.clone(),
+        };
+        assert_eq!(replica.admit(zero.clone()), Admission::Accepted);
+        assert!(replica.version().includes(zero.id));
+        assert_eq!(replica.admit(zero), Admission::Duplicate);
+        assert_eq!(replica.state(), &fresh);
+    }
+    let mut explicit_state = replica.state().clone();
+    let mut explicit_log = replica.log().clone();
+    let expected_id = explicit_log
+        .append_with(&mut explicit_state, 0, delta.clone(), |s, d| {
+            s.apply_delta(d.clone())
+        })
+        .unwrap();
+    assert_eq!(
+        replica.append(0, delta.clone()),
+        Ok(Record {
+            id: expected_id,
+            delta
+        })
+    );
+    assert_eq!(replica.state(), &explicit_state);
+    assert_eq!(replica.log(), &explicit_log);
+    assert_eq!(replica.version(), explicit_log.version());
     assert_eq!(carrier, before, "replay is absorbed");
     assert_eq!(fresh, before, "fresh carrier holds the denoted state");
 }
@@ -1122,6 +1180,7 @@ fn gcounter_accepts_absorbed_record() {
             replica: 0,
             tally: 7,
         },
+        false,
     );
 }
 
@@ -1137,13 +1196,18 @@ fn pncounter_accepts_absorbed_record() {
             tally: 7,
         },
     ] {
-        accepts_absorbed(PnCounter::new(2), PnCounter::new(2), delta);
+        accepts_absorbed(PnCounter::new(2), PnCounter::new(2), delta, false);
     }
 }
 
 #[test]
 fn gset_accepts_absorbed_record() {
-    accepts_absorbed(safemesh_crdt::GSet::new(), safemesh_crdt::GSet::new(), 7u64);
+    accepts_absorbed(
+        safemesh_crdt::GSet::new(),
+        safemesh_crdt::GSet::new(),
+        7u64,
+        true,
+    );
 }
 
 #[test]
@@ -1155,6 +1219,7 @@ fn orset_accepts_absorbed_record() {
             element: 7u64,
             token: 1u64,
         },
+        false,
     );
 }
 
@@ -1167,6 +1232,7 @@ fn rga_accepts_absorbed_record() {
             position: 1u64,
             value: 7u64,
         },
+        true,
     );
 }
 
@@ -1176,6 +1242,7 @@ fn flag_accepts_absorbed_record() {
         safemesh_crdt::EnableWinsFlag::new(),
         safemesh_crdt::EnableWinsFlag::new(),
         safemesh_crdt::EnableWinsFlagDelta::Enable { token: 1u64 },
+        true,
     );
 }
 
@@ -1189,6 +1256,7 @@ fn register_accepts_absorbed_record() {
             replica: 0,
             value: 7u64,
         },
+        true,
     );
 }
 
@@ -1203,6 +1271,7 @@ fn map_accepts_absorbed_record() {
             replica: 0,
             value: 7u64,
         },
+        true,
     );
 }
 
@@ -1951,4 +2020,223 @@ fn plain_append_returns_invalid_record_without_mutation() {
     );
     assert_eq!(log, before_log);
     assert_eq!(state, before_state);
+}
+
+// The oracle deliberately retains the explicit EventLog + state operations.
+fn assert_replica_equal(
+    replica: &Replica<GCounter>,
+    state: &GCounter,
+    log: &EventLog<GCounterDelta>,
+) {
+    assert_eq!(replica.state(), state);
+    assert_eq!(replica.log(), log);
+    assert_eq!(replica.version(), log.version());
+    assert_eq!(replica.log_bytes().unwrap(), log.to_wire_bytes().unwrap());
+    assert_eq!(
+        replica.since(&safemesh_crdt::VersionVector::new()),
+        log.since(&safemesh_crdt::VersionVector::new())
+    );
+}
+
+fn explicit_merge(
+    state: &mut GCounter,
+    log: &mut EventLog<GCounterDelta>,
+    bytes: &[u8],
+    limits: safemesh_crdt::DecodeLimits,
+) -> Result<Vec<Admission>, ReplicaError> {
+    let records = EventLog::records_from_wire_bytes_for_with_limits(bytes, state, limits)
+        .map_err(ReplicaError::LogDecode)?;
+    Ok(records
+        .into_iter()
+        .map(|r| log.admit_with(state, r, |s, d| s.apply_delta(d.clone())))
+        .collect())
+}
+
+fn replica_frame(shape: usize, records: &[Record<GCounterDelta>]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    EventLog::encode_records(Some(shape), records, &mut bytes).unwrap();
+    bytes
+}
+
+#[test]
+fn replica_differential_admit_append_gaps_exhaustion() {
+    let mut state = GCounter::new(2);
+    let mut log = EventLog::for_crdt(&state);
+    let mut replica = Replica::new(state.clone());
+    for r in [record(2, 5), record(2, 5), record(2, 9), record(0, 8)] {
+        let expected = log.admit_with(&mut state, r.clone(), |s, d| s.apply_delta(d.clone()));
+        assert_eq!(replica.admit(r), expected);
+        assert_replica_equal(&replica, &state, &log);
+    }
+    let delta = record(1, 9).delta;
+    let id = log
+        .append_with(&mut state, 1, delta.clone(), |s, d| {
+            s.apply_delta(d.clone())
+        })
+        .unwrap();
+    assert_eq!(replica.append(1, delta.clone()), Ok(Record { id, delta }));
+    assert_eq!(id.sequence, 3);
+    assert_eq!(replica.version().get(1), 0);
+    let missing = record(1, 4);
+    assert_eq!(
+        replica.admit(missing.clone()),
+        log.admit_with(&mut state, missing, |s, d| s.apply_delta(d.clone()))
+    );
+    assert_eq!(replica.version().get(1), 3);
+    assert_replica_equal(&replica, &state, &log);
+    let r = record(u64::MAX, 10);
+    assert_eq!(
+        replica.admit(r.clone()),
+        log.admit_with(&mut state, r, |s, d| s.apply_delta(d.clone()))
+    );
+    let delta = record(1, 11).delta;
+    assert_eq!(
+        replica.append(1, delta.clone()),
+        log.append_with(&mut state, 1, delta, |s, d| s.apply_delta(d.clone()))
+            .map(|id| Record {
+                id,
+                delta: record(1, 11).delta
+            })
+            .map_err(ReplicaError::Append)
+    );
+    assert_replica_equal(&replica, &state, &log);
+}
+
+#[test]
+fn replica_differential_frames_restore_and_second_merge() {
+    use safemesh_crdt::{CollectionLimits, DecodeLimits};
+    let limits = DecodeLimits::default();
+    let mut state = GCounter::new(2);
+    let mut log = EventLog::for_crdt(&state);
+    let mut replica = Replica::new(state.clone());
+    let frame = replica_frame(2, &[record(1, 5), record(1, 5), record(2, 9)]);
+    assert_eq!(
+        replica.decode_log_bytes(&frame, limits).unwrap(),
+        vec![record(1, 5), record(1, 5), record(2, 9)]
+    );
+    for expected in [
+        vec![
+            Admission::Accepted,
+            Admission::Duplicate,
+            Admission::Accepted,
+        ],
+        vec![Admission::Duplicate; 3],
+    ] {
+        assert_eq!(
+            explicit_merge(&mut state, &mut log, &frame, limits).unwrap(),
+            expected
+        );
+        assert_eq!(replica.merge_log_bytes(&frame, limits).unwrap(), expected);
+        assert_replica_equal(&replica, &state, &log);
+    }
+    // A collision with the destination remains a verdict (the input itself is valid).
+    let collision = replica_frame(2, &[record(1, 99)]);
+    assert_eq!(
+        replica.merge_log_bytes(&collision, limits),
+        explicit_merge(&mut state, &mut log, &collision, limits)
+    );
+    assert_replica_equal(&replica, &state, &log);
+    let exported = replica.log_bytes().unwrap();
+    println!("REPLICA_SECOND_ORDER bytes={exported:02x?} first=[accepted, duplicate, accepted] second=[duplicate, duplicate, duplicate]");
+    let restored = Replica::restore(GCounter::new(2), &exported, limits).unwrap();
+    let old_restored =
+        EventLog::from_wire_bytes_for_with_limits(&exported, &GCounter::new(2), limits).unwrap();
+    let mut replay = GCounter::new(2);
+    for r in old_restored.records() {
+        replay.apply_delta(r.delta.clone());
+    }
+    assert_replica_equal(&restored, &replay, &old_restored);
+    assert_eq!(restored.state(), replica.state());
+    // Restore deduplicates occurrence frames, then replays each retained record once.
+    let restored_occurrences = Replica::restore(GCounter::new(2), &frame, limits).unwrap();
+    assert_replica_equal(&restored_occurrences, &state, &log);
+    let mut fresh = Replica::new(GCounter::new(2));
+    let mut fresh_state = GCounter::new(2);
+    let mut fresh_log = EventLog::for_crdt(&fresh_state);
+    for _ in 0..2 {
+        assert_eq!(
+            fresh.merge_log_bytes(&exported, limits),
+            explicit_merge(&mut fresh_state, &mut fresh_log, &exported, limits)
+        );
+        assert_replica_equal(&fresh, &fresh_state, &fresh_log);
+        assert_eq!(fresh.log_bytes().unwrap(), exported);
+    }
+    let mut trailing = frame.clone();
+    trailing.push(0);
+    let mut corrupt = frame.clone();
+    let last = corrupt.len() - 1;
+    corrupt[last] ^= 1;
+    let invalid = Record {
+        id: RecordId {
+            replica: 1,
+            sequence: 3,
+        },
+        delta: GCounterDelta {
+            replica: 0,
+            tally: 8,
+        },
+    };
+    for (bytes, budget) in [
+        (replica_frame(2, &[record(3, 12), invalid]), limits),
+        (corrupt, limits),
+        (trailing, limits),
+        (replica_frame(3, &[record(3, 12)]), limits),
+        (
+            replica_frame(2, &[record(3, 12), record(3, 12)]),
+            DecodeLimits {
+                max_records: Some(1),
+                ..limits
+            },
+        ),
+        (replica_frame(2, &[record(3, 12), record(3, 13)]), limits),
+    ] {
+        let before_state = state.clone();
+        let before_log = log.clone();
+        let expected = explicit_merge(&mut state, &mut log, &bytes, budget);
+        assert!(expected.is_err());
+        assert_eq!(replica.merge_log_bytes(&bytes, budget), expected);
+        assert_eq!(state, before_state);
+        assert_eq!(log, before_log);
+        assert_replica_equal(&replica, &state, &log);
+        assert_eq!(
+            Replica::restore(GCounter::new(2), &bytes, budget).err(),
+            expected.err()
+        );
+    }
+    for r in [record(3, 12), record(3, 12), record(3, 13), record(0, 4)] {
+        let bytes = r.to_wire_bytes().unwrap();
+        assert_eq!(
+            Replica::<GCounter>::inspect_record_bytes(&bytes, CollectionLimits::WIRE_DEFAULT),
+            Ok(r.clone())
+        );
+        let decoded =
+            Record::from_wire_bytes_with_collection_limits(&bytes, CollectionLimits::WIRE_DEFAULT)
+                .unwrap();
+        assert_eq!(
+            replica.merge_record_bytes(&bytes, CollectionLimits::WIRE_DEFAULT),
+            Ok(log.admit_with(&mut state, decoded, |s, d| s.apply_delta(d.clone())))
+        );
+        assert_replica_equal(&replica, &state, &log);
+    }
+    let mut trailing_record = record(4, 14).to_wire_bytes().unwrap();
+    trailing_record.push(0);
+    for bytes in [vec![0], trailing_record] {
+        let expected = Record::<GCounterDelta>::from_wire_bytes_with_collection_limits(
+            &bytes,
+            CollectionLimits::WIRE_DEFAULT,
+        )
+        .map_err(ReplicaError::RecordDecode);
+        assert!(expected.is_err());
+        assert_eq!(
+            Replica::<GCounter>::inspect_record_bytes(&bytes, CollectionLimits::WIRE_DEFAULT),
+            expected
+        );
+        assert_eq!(
+            replica
+                .merge_record_bytes(&bytes, CollectionLimits::WIRE_DEFAULT)
+                .err(),
+            expected.err()
+        );
+        assert_replica_equal(&replica, &state, &log);
+    }
 }
