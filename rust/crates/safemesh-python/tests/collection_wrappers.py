@@ -173,3 +173,38 @@ def retention_python_merge_log_bytes_all_5000():
 
 
 retention_python_merge_log_bytes_all_5000()
+
+# A refused foreign writer must neither consume a sequence nor poison delivery.
+for foreign in (1, 99, 2**32, 2**64 - 1):
+    for kind in ("register", "map-set", "map-remove"):
+        cls = sm.LwwRegisterReplica if kind == "register" else sm.LwwMapReplica
+        author, receiver = cls(0), cls(2)
+        def append(writer):
+            if kind == "register":
+                return author.append_set(1, writer, 7)
+            if kind == "map-set":
+                return author.append_set(1, 1, writer, 7)
+            return author.append_remove(1, 1, writer)
+        before = author.log_bytes()
+        try:
+            append(foreign)
+        except ValueError as error:
+            assert str(error) == "writer replica does not match record author", str(error)
+        else:
+            raise AssertionError("foreign writer accepted")
+        assert author.log_bytes() == before
+        assert author.version_for(0) == 0
+        valid = append(0)
+        assert author.version_for(0) == 1
+        invalid = bytearray(valid)
+        offset = 30 if kind == "register" else 38
+        invalid[offset:offset + 8] = foreign.to_bytes(8, "little")
+        try:
+            receiver.merge_record_bytes(bytes(invalid))
+        except ValueError as error:
+            assert str(error) == "writer replica does not match record author", str(error)
+        else:
+            raise AssertionError("foreign record accepted")
+        assert receiver.version_for(0) == 0
+        assert receiver.merge_record_bytes(valid) == "accepted"
+print("LWW_FOREIGN_APPEND_RECOVERY_CASES=12")
