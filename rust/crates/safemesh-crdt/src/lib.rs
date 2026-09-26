@@ -78,7 +78,8 @@ pub use replica::{Replica, ReplicaError};
 
 mod transport;
 pub use transport::{
-    anti_entropy, InMemoryTransport, TransportAdapter, TransportEnvelope, TransportError,
+    anti_entropy, queue_anti_entropy, InMemoryTransport, TransportAdapter, TransportEnvelope,
+    TransportError,
 };
 
 mod codec;
@@ -780,7 +781,7 @@ mod version_vector_tests {
         let mut transport = InMemoryTransport::new();
         transport.subscribe(1);
         transport.subscribe(2);
-        anti_entropy(&mut transport, 1, 2, &local, &malicious).unwrap();
+        queue_anti_entropy(&mut transport, 1, 2, &local, &malicious).unwrap();
         assert_eq!(transport.pending_len(), 1);
         assert_eq!(transport.drain(2)[0].records.len(), 4);
     }
