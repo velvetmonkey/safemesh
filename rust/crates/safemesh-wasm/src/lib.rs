@@ -1361,8 +1361,7 @@ impl SafeMeshStringOrSetRecord {
 pub struct SafeMeshStringOrSetReplica {
     replica_id: u64,
     allocated_writers: Option<u64>,
-    state: OrSet<String, u64>,
-    log: EventLog<OrSetDelta<String, u64>>,
+    replica: Replica<OrSet<String, u64>>,
 }
 
 // Scoped to one WASM instance (one thread in native host tests). This is not
@@ -1440,7 +1439,7 @@ impl SafeMeshStringOrSetReplica {
         .map_err(|_| binding_error(2, "invalid writer configuration"))?;
         let mut last = 0;
         let mut count = 0;
-        for record in self.log.records() {
+        for record in self.replica.log().records() {
             Self::check_owned_record(writers, record)?;
             if record.id.replica == self.replica_id {
                 last = last.max(record.id.sequence);
@@ -1473,7 +1472,12 @@ impl SafeMeshStringOrSetReplica {
         if let Some(writers) = self.allocated_writers {
             Self::check_owned_record(writers, record)?;
             if record.id.replica == self.replica_id
-                && !self.log.records().iter().any(|known| known.id == record.id)
+                && !self
+                    .replica
+                    .log()
+                    .records()
+                    .iter()
+                    .any(|known| known.id == record.id)
             {
                 return Err(binding_error(1, "incoming record claims the local author"));
             }
@@ -1502,11 +1506,12 @@ impl SafeMeshStringOrSetReplica {
         for word in [writers, self.replica_id, next] {
             bytes.extend_from_slice(&word.to_le_bytes());
         }
-        bytes.extend(
-            self.log.to_wire_bytes().map_err(|error| {
-                binding_error(1, format!("failed to encode event log: {error:?}"))
-            })?,
-        );
+        bytes.extend(self.replica.log_bytes().map_err(|error| {
+            let ReplicaError::LogEncode(error) = error else {
+                unreachable!()
+            };
+            binding_error(1, format!("failed to encode event log: {error:?}"))
+        })?);
         Ok(bytes)
     }
 
@@ -1523,20 +1528,17 @@ impl SafeMeshStringOrSetReplica {
         let word = |i| u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
         let (writers, author, next) = (word(5), word(13), word(21));
         let mut candidate = Self::new(author);
-        candidate.log = EventLog::from_wire_bytes_for_with_limits(
-            &bytes[29..],
-            &candidate.state,
-            decode_limits(None, max_records),
-        )
-        .map_err(bounded_event_log_decode_error)?;
+        candidate.replica =
+            Replica::restore(OrSet::new(), &bytes[29..], decode_limits(None, max_records))
+                .map_err(|error| match error {
+                    ReplicaError::LogDecode(error) => bounded_event_log_decode_error(error),
+                    _ => unreachable!(),
+                })?;
         if candidate.checked_next(writers)? != next {
             return Err(binding_error(
                 1,
                 "allocation/history consistency: next sequence mismatch",
             ));
-        }
-        for record in candidate.log.records() {
-            candidate.state.apply_delta(record.delta.clone());
         }
         // Claim only after all checks; a failed import creates no live writer.
         candidate.claim(writers)?;
@@ -1544,30 +1546,16 @@ impl SafeMeshStringOrSetReplica {
     }
 
     fn append(&mut self, delta: OrSetDelta<String, u64>) -> Result<Vec<u8>, BindingError> {
-        let id = self
-            .log
-            .append_with(
-                &mut self.state,
-                self.replica_id,
-                delta.clone(),
-                |state, delta| {
-                    state.apply_delta(delta.clone());
-                },
-            )
-            .map_err(|_| binding_error(1, "event log sequence exhausted"))?;
-        Record { id, delta }
+        self.replica
+            .append(self.replica_id, delta)
+            .map_err(|_| binding_error(1, "event log sequence exhausted"))?
             .to_wire_bytes()
             .map_err(|error| binding_error(1, format!("failed to encode record: {error:?}")))
     }
 
     fn admit(&mut self, record: Record<OrSetDelta<String, u64>>) -> Result<String, BindingError> {
         self.check_incoming(&record)?;
-        record_verdict(
-            self.log
-                .admit_with(&mut self.state, record, |state, delta| {
-                    state.apply_delta(delta.clone());
-                }),
-        )
+        record_verdict(self.replica.admit(record))
     }
 
     #[cfg(test)]
@@ -1579,16 +1567,21 @@ impl SafeMeshStringOrSetReplica {
         bytes: &[u8],
         max_collection_elements: Option<u32>,
     ) -> Result<Record<OrSetDelta<String, u64>>, BindingError> {
-        Record::<OrSetDelta<String, u64>>::from_wire_bytes_with_collection_limits(
+        Replica::<OrSet<String, u64>>::inspect_record_bytes(
             bytes,
             collection_limits(max_collection_elements),
         )
-        .map_err(|error| match error {
-            WireError::CollectionElementLimitExceeded { max_elements } => binding_error(
-                3,
-                format!("maxCollectionElements limit exceeded: {max_elements}"),
-            ),
-            other => binding_error(1, format!("failed to decode record: {other}")),
+        .map_err(|error| {
+            let ReplicaError::RecordDecode(error) = error else {
+                unreachable!()
+            };
+            match error {
+                WireError::CollectionElementLimitExceeded { max_elements } => binding_error(
+                    3,
+                    format!("maxCollectionElements limit exceeded: {max_elements}"),
+                ),
+                other => binding_error(1, format!("failed to decode record: {other}")),
+            }
         })
     }
 
@@ -1617,24 +1610,20 @@ impl SafeMeshStringOrSetReplica {
         max_collection_elements: Option<u32>,
         max_records: Option<u32>,
     ) -> Result<Vec<String>, BindingError> {
-        let log = EventLog::<OrSetDelta<String, u64>>::records_from_wire_bytes_for_with_limits(
-            bytes,
-            &self.state,
-            decode_limits(max_collection_elements, max_records),
-        )
-        .map_err(bounded_event_log_decode_error)?;
+        let log = self
+            .replica
+            .decode_log_bytes(bytes, decode_limits(max_collection_elements, max_records))
+            .map_err(|error| match error {
+                ReplicaError::LogDecode(error) => bounded_event_log_decode_error(error),
+                _ => unreachable!(),
+            })?;
         for record in &log {
             self.check_incoming(record)?;
         }
         Ok(log
             .iter()
             .cloned()
-            .map(|record| {
-                self.log
-                    .admit_with(&mut self.state, record, |state, delta| {
-                        state.apply_delta(delta.clone());
-                    })
-            })
+            .map(|record| self.replica.admit(record))
             .map(admission_name)
             .collect())
     }
@@ -1719,7 +1708,12 @@ impl SafeMeshStringOrSetReplica {
         if let Some(writers) = self.allocated_writers {
             self.checked_write_next(writers).map_err(JsValue::from)?;
         }
-        let tokens = self.state.observed_tokens(&element).into_iter().collect();
+        let tokens = self
+            .replica
+            .state()
+            .observed_tokens(&element)
+            .into_iter()
+            .collect();
         self.append(OrSetDelta::Remove { tokens })
             .map_err(JsValue::from)
     }
@@ -1763,9 +1757,12 @@ impl SafeMeshStringOrSetReplica {
 
     #[wasm_bindgen(js_name = logBytes)]
     pub fn log_bytes(&self) -> Result<Vec<u8>, JsValue> {
-        self.log
-            .to_wire_bytes()
-            .map_err(|error| safe_mesh_error(1, &format!("failed to encode event log: {error:?}")))
+        self.replica.log_bytes().map_err(|error| {
+            let ReplicaError::LogEncode(error) = error else {
+                unreachable!()
+            };
+            safe_mesh_error(1, &format!("failed to encode event log: {error:?}"))
+        })
     }
 
     #[wasm_bindgen(js_name = versionFor)]
@@ -1779,23 +1776,28 @@ impl SafeMeshStringOrSetReplica {
 
     /// Live members, sorted and unique, as the core computes them.
     pub fn elements(&self) -> Vec<String> {
-        self.state.elements().into_iter().collect()
+        self.replica.state().elements().into_iter().collect()
     }
 
     /// Live add tokens for `element`, excluding tombstoned tokens.
     #[wasm_bindgen(js_name = observedTokens)]
     pub fn observed_tokens(&self, element: String) -> Vec<u64> {
-        self.state.observed_tokens(&element).into_iter().collect()
+        self.replica
+            .state()
+            .observed_tokens(&element)
+            .into_iter()
+            .collect()
     }
 
     pub fn tombstones(&self) -> Vec<u64> {
-        self.state.tombstones().iter().copied().collect()
+        self.replica.state().tombstones().iter().copied().collect()
     }
 
     /// Every `(element, token)` add pair the core holds, tombstoned or not.
     #[wasm_bindgen(js_name = addEntries)]
     pub fn add_entries(&self) -> Vec<SafeMeshStringOrSetAddEntry> {
-        self.state
+        self.replica
+            .state()
             .adds()
             .iter()
             .map(|(element, token)| SafeMeshStringOrSetAddEntry {
@@ -2174,8 +2176,7 @@ impl SafeMeshStringOrSetReplica {
         SafeMeshStringOrSetReplica {
             replica_id,
             allocated_writers: None,
-            state: OrSet::new(),
-            log: EventLog::new(),
+            replica: Replica::new(OrSet::new()),
         }
     }
 
@@ -2191,7 +2192,7 @@ impl SafeMeshStringOrSetReplica {
     }
 
     pub fn version_for(&self, replica: u64) -> u64 {
-        self.log.version().get(replica)
+        self.replica.version().get(replica)
     }
 }
 
@@ -2200,10 +2201,171 @@ mod tests {
     use super::*;
     use safemesh_crdt::{RecordId, WireEncode};
 
+    // Explicit pre-migration EventLog + state oracle from main 7bb4e9a7.
+    // Keep binding preflight independent of the migrated wrapper.
+    struct LegacyStringOrSet {
+        replica_id: u64,
+        allocated_writers: Option<u64>,
+        state: OrSet<String, u64>,
+        log: EventLog<OrSetDelta<String, u64>>,
+    }
+
+    impl LegacyStringOrSet {
+        fn new(replica_id: u64, allocated_writers: Option<u64>) -> Self {
+            Self {
+                replica_id,
+                allocated_writers,
+                state: OrSet::new(),
+                log: EventLog::new(),
+            }
+        }
+        fn check_owned_record(
+            writers: u64,
+            record: &Record<OrSetDelta<String, u64>>,
+        ) -> Result<(), BindingError> {
+            // The core OR-Set hook runs first, so a sequence-0 add reads the same
+            // on allocated and legacy replicas, for one record or a whole log.
+            OrSet::<String, u64>::new()
+                .validate_record(record.id, &record.delta)
+                .map_err(|error| binding_error(1, error.to_string()))?;
+            if record.id.replica >= writers || record.id.sequence == 0 {
+                return Err(binding_error(
+                    1,
+                    "allocation/history consistency: invalid record author or sequence",
+                ));
+            }
+            if let OrSetDelta::Add { token, .. } = &record.delta {
+                if allocate_token(writers, record.id.replica, record.id.sequence) != Some(*token) {
+                    return Err(binding_error(
+                        1,
+                        "allocation/history consistency: token mismatch",
+                    ));
+                }
+            }
+            Ok(())
+        }
+
+        // Check every add, including tombstoned adds, and require a complete local
+        // history. Peer histories may contain gaps during ordinary record exchange.
+        fn checked_next(&self, writers: u64) -> Result<u64, BindingError> {
+            WriterConfig {
+                writers,
+                writer: self.replica_id,
+            }
+            .validate()
+            .map_err(|_| binding_error(2, "invalid writer configuration"))?;
+            let mut last = 0;
+            let mut count = 0;
+            for record in self.log.records() {
+                Self::check_owned_record(writers, record)?;
+                if record.id.replica == self.replica_id {
+                    last = last.max(record.id.sequence);
+                    count += 1;
+                }
+            }
+            if count != last {
+                return Err(binding_error(
+                    1,
+                    "allocation/history consistency: incomplete local history",
+                ));
+            }
+            let next = last
+                .checked_add(1)
+                .ok_or_else(|| binding_error(1, "allocation sequence exhausted"))?;
+            Ok(next)
+        }
+
+        fn check_incoming(
+            &self,
+            record: &Record<OrSetDelta<String, u64>>,
+        ) -> Result<(), BindingError> {
+            if let Some(writers) = self.allocated_writers {
+                Self::check_owned_record(writers, record)?;
+                if record.id.replica == self.replica_id
+                    && !self.log.records().iter().any(|known| known.id == record.id)
+                {
+                    return Err(binding_error(1, "incoming record claims the local author"));
+                }
+            }
+            Ok(())
+        }
+
+        fn append(&mut self, delta: OrSetDelta<String, u64>) -> Vec<u8> {
+            let id = self
+                .log
+                .append_with(
+                    &mut self.state,
+                    self.replica_id,
+                    delta.clone(),
+                    |state, delta| state.apply_delta(delta.clone()),
+                )
+                .unwrap();
+            Record { id, delta }.to_wire_bytes().unwrap()
+        }
+        fn merge(
+            &mut self,
+            bytes: &[u8],
+            max_records: Option<u32>,
+        ) -> Result<Vec<String>, BindingError> {
+            let records =
+                EventLog::<OrSetDelta<String, u64>>::records_from_wire_bytes_for_with_limits(
+                    bytes,
+                    &self.state,
+                    decode_limits(None, max_records),
+                )
+                .map_err(bounded_event_log_decode_error)?;
+            for record in &records {
+                self.check_incoming(record)?;
+            }
+            Ok(records
+                .into_iter()
+                .map(|record| {
+                    admission_name(
+                        self.log
+                            .admit_with(&mut self.state, record, |state, delta| {
+                                state.apply_delta(delta.clone())
+                            }),
+                    )
+                })
+                .collect())
+        }
+        fn identity(&self) -> Vec<u8> {
+            let writers = self.allocated_writers.unwrap();
+            let mut bytes = b"SMOI\x01".to_vec();
+            for word in [
+                writers,
+                self.replica_id,
+                self.checked_next(writers).unwrap(),
+            ] {
+                bytes.extend_from_slice(&word.to_le_bytes());
+            }
+            bytes.extend(self.log.to_wire_bytes().unwrap());
+            bytes
+        }
+        fn assert_same(&self, actual: &SafeMeshStringOrSetReplica) {
+            assert_eq!(&self.state, actual.replica.state());
+            assert_eq!(&self.log, actual.replica.log());
+            assert_eq!(self.log.version(), actual.replica.version());
+            assert_eq!(
+                self.log.to_wire_bytes().unwrap(),
+                actual.log_bytes().unwrap()
+            );
+            if self.allocated_writers.is_some() {
+                assert_eq!(self.identity(), actual.try_export_identity().unwrap());
+            }
+        }
+    }
+
     #[test]
     fn allocated_identity_checks_history_and_restarts() {
         let mut left = SafeMeshStringOrSetReplica::try_create_allocated(2, 0).unwrap();
         left.try_append_allocated_add("water".into()).unwrap();
+        let mut old = LegacyStringOrSet::new(0, Some(2));
+        old.append(OrSetDelta::Add {
+            element: "water".into(),
+            token: 2,
+        });
+        old.assert_same(&left);
         let saved = left.try_export_identity().unwrap();
         assert!(SafeMeshStringOrSetReplica::try_import_identity_with_limits(&saved, None).is_err());
         drop(left);
@@ -2216,6 +2378,11 @@ mod tests {
         }
         let mut restored =
             SafeMeshStringOrSetReplica::try_import_identity_with_limits(&saved, None).unwrap();
+        old.assert_same(&restored);
+        let expected = old.append(OrSetDelta::Add {
+            element: "radio".into(),
+            token: 4,
+        });
         let next = restored.try_append_allocated_add("radio".into()).unwrap();
         let record = SafeMeshStringOrSetReplica::decode_record(&next).unwrap();
         assert_eq!(record.id.sequence, 2);
@@ -2226,15 +2393,46 @@ mod tests {
                 token: 4
             }
         );
+        assert_eq!(next, expected);
+        old.assert_same(&restored);
+        let log = restored.log_bytes().unwrap();
+        let mut peer = SafeMeshStringOrSetReplica::try_create_allocated(2, 1).unwrap();
+        let mut old_peer = LegacyStringOrSet::new(1, Some(2));
+        for _ in 0..2 {
+            let expected = old_peer.merge(&log, None).unwrap();
+            let actual = peer.try_merge_log_bytes(&log).unwrap();
+            assert_eq!(actual, expected);
+            old_peer.assert_same(&peer);
+        }
     }
 
     #[test]
     fn identity_budget_refuses_before_claim_then_allows_retry_and_append() {
         let mut writer = SafeMeshStringOrSetReplica::try_create_allocated(2, 0).unwrap();
+        LegacyStringOrSet::new(0, Some(2)).assert_same(&writer);
         for element in ["first", "second", "third"] {
             writer.try_append_allocated_add(element.into()).unwrap();
         }
         let saved = writer.try_export_identity().unwrap();
+        let mut old = LegacyStringOrSet::new(0, Some(2));
+        for (element, token) in [("first", 2), ("second", 4), ("third", 6)] {
+            old.append(OrSetDelta::Add {
+                element: element.into(),
+                token,
+            });
+        }
+        old.assert_same(&writer);
+        // With an already-live author, budget failure must still win over claim.
+        let error =
+            match SafeMeshStringOrSetReplica::try_import_identity_with_limits(&saved, Some(2)) {
+                Err(error) => error,
+                Ok(_) => panic!("over-budget live identity imported"),
+            };
+        assert_eq!(
+            (error.code, error.message.as_str()),
+            (1, "failed to decode event log: RecordLimitExceeded: 2")
+        );
+        assert!(ALLOCATED_AUTHORS.with(|authors| authors.borrow().contains(&0)));
         drop(writer);
         let Err(error) =
             SafeMeshStringOrSetReplica::try_import_identity_with_limits(&saved, Some(2))
@@ -2246,8 +2444,16 @@ mod tests {
             error.message,
             "failed to decode event log: RecordLimitExceeded: 2"
         );
+        assert!(!ALLOCATED_AUTHORS.with(|authors| authors.borrow().contains(&0)));
         let mut restored =
             SafeMeshStringOrSetReplica::try_import_identity_with_limits(&saved, Some(3)).unwrap();
+        old.assert_same(&restored);
+        assert_eq!(restored.elements(), vec!["first", "second", "third"]);
+        assert!(ALLOCATED_AUTHORS.with(|authors| authors.borrow().contains(&0)));
+        let expected = old.append(OrSetDelta::Add {
+            element: "fourth".into(),
+            token: 8,
+        });
         let fourth = restored.try_append_allocated_add("fourth".into()).unwrap();
         assert_eq!(
             SafeMeshStringOrSetReplica::decode_record(&fourth)
@@ -2256,6 +2462,8 @@ mod tests {
                 .sequence,
             4
         );
+        assert_eq!(fourth, expected);
+        old.assert_same(&restored);
     }
 
     #[test]
@@ -2287,7 +2495,7 @@ mod tests {
             ] {
                 assert_eq!((error.code, error.message.as_str()), (1, expected.as_str()));
             }
-            assert!(replica.log.records().is_empty());
+            assert!(replica.replica.log().records().is_empty());
             // A saved identity whose history is a legacy frame names it too.
             let mut identity = b"SMOI\x01".to_vec();
             for word in [2u64, 0, 1] {
@@ -2311,22 +2519,19 @@ mod tests {
     fn allocated_history_refuses_gaps_zero_and_max_sequence() {
         for sequence in [0, 2, u64::MAX] {
             let mut replica = SafeMeshStringOrSetReplica::new(0);
-            let admission = replica.log.insert_record(
-                &replica.state,
-                Record {
-                    id: RecordId {
-                        replica: 0,
-                        sequence,
-                    },
-                    delta: OrSetDelta::Remove { tokens: vec![] },
+            let admission = replica.replica.admit(Record {
+                id: RecordId {
+                    replica: 0,
+                    sequence,
                 },
-            );
+                delta: OrSetDelta::Remove { tokens: vec![] },
+            });
             if sequence == 0 {
                 assert_eq!(
                     admission,
                     safemesh_crdt::Admission::Invalid(WireError::ZeroSequenceRemove { replica: 0 })
                 );
-                assert!(replica.log.records().is_empty());
+                assert!(replica.replica.log().records().is_empty());
             } else {
                 assert_eq!(admission, safemesh_crdt::Admission::Accepted);
                 assert!(replica.checked_next(1).is_err());
@@ -2664,11 +2869,11 @@ mod tests {
         };
         let mut replica = SafeMeshStringOrSetReplica::new(2);
         replica.admit(first).unwrap();
-        let state = replica.state.clone();
-        let log = replica.log.clone();
-        let mut incoming = EventLog::for_crdt(&replica.state);
+        let state = replica.replica.state().clone();
+        let log = replica.replica.log().clone();
+        let mut incoming = EventLog::for_crdt(replica.replica.state());
         assert_eq!(
-            incoming.insert_record(&replica.state, second),
+            incoming.insert_record(replica.replica.state(), second),
             safemesh_crdt::Admission::Accepted
         );
         assert_eq!(
@@ -2677,8 +2882,8 @@ mod tests {
                 .unwrap(),
             vec!["collision"]
         );
-        assert_eq!(replica.state, state);
-        assert_eq!(replica.log, log);
+        assert_eq!(replica.replica.state(), &state);
+        assert_eq!(replica.replica.log(), &log);
     }
 
     #[test]
@@ -2802,7 +3007,8 @@ mod tests {
             OrSetDelta::Add {
                 element: "second".to_owned(),
                 token: 9,
-            }
+            },
+            core
         );
     }
 
@@ -3074,6 +3280,105 @@ mod tests {
             assert_eq!(replica.version_for(1), 2);
             assert_eq!(replica.version_for(2), 0);
         }
+        let record = |author, sequence, delta| Record {
+            id: RecordId {
+                replica: author,
+                sequence,
+            },
+            delta,
+        };
+        let add = record(
+            0,
+            1,
+            OrSetDelta::Add {
+                element: "water".into(),
+                token: 2,
+            },
+        );
+        let other = record(
+            1,
+            1,
+            OrSetDelta::Add {
+                element: "radio".into(),
+                token: 3,
+            },
+        );
+        let remove = record(1, 2, OrSetDelta::Remove { tokens: vec![2] });
+        let early = record(1, 3, OrSetDelta::Remove { tokens: vec![100] });
+        let late = record(
+            0,
+            2,
+            OrSetDelta::Add {
+                element: "late".into(),
+                token: 100,
+            },
+        );
+        let collision = record(
+            0,
+            1,
+            OrSetDelta::Add {
+                element: "collision".into(),
+                token: 2,
+            },
+        );
+        let frame = |records: &[Record<OrSetDelta<String, u64>>]| {
+            let mut bytes = Vec::new();
+            EventLog::encode_records(None, records, &mut bytes).unwrap();
+            bytes
+        };
+        let mut actual = SafeMeshStringOrSetReplica::new(9);
+        let mut oracle = LegacyStringOrSet::new(9, None);
+        for records in [
+            vec![add.clone(), other.clone()],
+            vec![remove.clone(), early],
+            vec![late],
+            vec![add.clone(), add.clone()],
+            vec![collision],
+        ] {
+            let bytes = frame(&records);
+            assert_eq!(
+                actual.try_merge_log_bytes(&bytes).unwrap(),
+                oracle.merge(&bytes, None).unwrap()
+            );
+            oracle.assert_same(&actual);
+        }
+        assert_eq!(actual.elements(), vec!["radio"]);
+        assert_eq!(actual.tombstones(), vec![2, 100]);
+
+        let mut allocated = SafeMeshStringOrSetReplica::try_create_allocated(2, 0).unwrap();
+        let mut oracle = LegacyStringOrSet::new(0, Some(2));
+        let invalid = record(
+            1,
+            2,
+            OrSetDelta::Add {
+                element: "not owned".into(),
+                token: 4,
+            },
+        );
+        let local = record(
+            0,
+            1,
+            OrSetDelta::Add {
+                element: "local".into(),
+                token: 2,
+            },
+        );
+        let zero = record(1, 0, OrSetDelta::Remove { tokens: vec![3] });
+        for records in [
+            vec![other.clone(), invalid],
+            vec![other.clone(), local],
+            vec![other, zero],
+        ] {
+            let bytes = frame(&records);
+            let expected = oracle.merge(&bytes, None).unwrap_err();
+            let error = allocated.try_merge_log_bytes(&bytes).unwrap_err();
+            assert_eq!(
+                (error.code, error.message),
+                (expected.code, expected.message)
+            );
+            oracle.assert_same(&allocated);
+            assert!(allocated.elements().is_empty());
+        }
     }
 
     #[test]
@@ -3087,14 +3392,14 @@ mod tests {
             reader.elements(),
             reader.tombstones(),
             reader.version_for(1),
-            reader.log.records().len(),
+            reader.replica.log().records().len(),
         );
         let second = reader.try_merge_record_bytes(&bytes).unwrap();
         let after = (
             reader.elements(),
             reader.tombstones(),
             reader.version_for(1),
-            reader.log.records().len(),
+            reader.replica.log().records().len(),
         );
         println!("C2 first merge={first} second merge={second}");
         println!(
@@ -3126,9 +3431,9 @@ mod tests {
             .unwrap();
         println!("C2 same id, different payload: {verdict}");
         assert_eq!(verdict, "collision");
-        let mut incoming = EventLog::for_crdt(&reader.state);
+        let mut incoming = EventLog::for_crdt(reader.replica.state());
         assert_eq!(
-            incoming.insert_record(&reader.state, forged),
+            incoming.insert_record(reader.replica.state(), forged),
             safemesh_crdt::Admission::Accepted
         );
         assert_eq!(
@@ -3139,7 +3444,7 @@ mod tests {
         );
         assert_eq!(reader.elements(), before.0);
         assert_eq!(reader.tombstones(), before.1);
-        assert_eq!(reader.log.records().len(), 1);
+        assert_eq!(reader.replica.log().records().len(), 1);
     }
 
     #[test]
@@ -3166,7 +3471,7 @@ mod tests {
             "failed to decode record: unexpected wire tag"
         );
         assert!(reader.elements().is_empty());
-        assert_eq!(reader.log.records().len(), 0);
+        assert_eq!(reader.replica.log().records().len(), 0);
 
         // Every single-byte change on the bare record path either errors or
         // decodes as a visibly different record. None panics, none is absorbed
@@ -3181,7 +3486,7 @@ mod tests {
                 Err(error) => {
                     errored += 1;
                     assert!(reader.elements().is_empty());
-                    assert_eq!(reader.log.records().len(), 0);
+                    assert_eq!(reader.replica.log().records().len(), 0);
                     println!("C3 record byte {position}: {}", error.message);
                 }
                 Ok(verdict) => {
@@ -3232,6 +3537,29 @@ mod tests {
         let mut reader = SafeMeshStringOrSetReplica::new(2);
         reader.try_merge_log_bytes(&log).unwrap();
         assert_eq!(reader.elements(), vec!["vaccine".to_string()]);
+        let mut trailing = log.clone();
+        trailing.push(0);
+        let mut checksum = log.clone();
+        *checksum.last_mut().unwrap() ^= 1;
+        let wrong = EventLog::<GCounterDelta>::for_crdt(&GCounter::new(2))
+            .to_wire_bytes()
+            .unwrap();
+        for bytes in [
+            &log[..log.len() - 1],
+            trailing.as_slice(),
+            checksum.as_slice(),
+            wrong.as_slice(),
+        ] {
+            let mut oracle = LegacyStringOrSet::new(2, None);
+            let mut actual = SafeMeshStringOrSetReplica::new(2);
+            let expected = oracle.merge(bytes, None).unwrap_err();
+            let error = actual.try_merge_log_bytes(bytes).unwrap_err();
+            assert_eq!(
+                (error.code, error.message),
+                (expected.code, expected.message)
+            );
+            oracle.assert_same(&actual);
+        }
     }
 
     #[test]
@@ -3264,7 +3592,7 @@ mod tests {
         );
         let batch = legacy.try_merge_log_bytes(&log_bytes).unwrap_err();
         assert_eq!((batch.code, batch.message.as_str()), (1, expected.as_str()));
-        assert!(legacy.log.records().is_empty());
+        assert!(legacy.replica.log().records().is_empty());
         assert!(legacy.elements().is_empty());
 
         let mut allocated = SafeMeshStringOrSetReplica::try_create_allocated(2, 0).unwrap();
@@ -3275,7 +3603,7 @@ mod tests {
         );
         let batch = allocated.try_merge_log_bytes(&log_bytes).unwrap_err();
         assert_eq!((batch.code, batch.message.as_str()), (1, expected.as_str()));
-        assert!(allocated.log.records().is_empty());
+        assert!(allocated.replica.log().records().is_empty());
         assert!(allocated.elements().is_empty());
         drop(allocated);
 
@@ -3330,7 +3658,7 @@ mod tests {
             );
             let batch = replica.try_merge_log_bytes(&log_bytes).unwrap_err();
             assert_eq!((batch.code, batch.message.as_str()), (1, expected.as_str()));
-            assert!(replica.log.records().is_empty());
+            assert!(replica.replica.log().records().is_empty());
             assert!(replica.elements().is_empty());
         }
         let mut identity = b"SMOI\x01".to_vec();
