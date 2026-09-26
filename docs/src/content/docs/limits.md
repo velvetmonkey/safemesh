@@ -202,5 +202,6 @@ Record-kernel proofs cover modeled atomic transitions and replay. They do not pr
 ## You need established distribution or maintainer support
 
 The source-building examples do not establish registry availability. The root install matrix labels maintainer support **UNKNOWN** for all four surfaces. A generated WASM package running in Node does not establish a browser/OS matrix; a Linux Python wheel smoke test does not establish every interpreter/platform combination. [Evidence: install and status matrix](https://github.com/velvetmonkey/safemesh/blob/main/README.md#status).
+The [wire compatibility and upgrades](/safemesh/persist-and-restart/#wire-compatibility-and-upgrades) section lists the toolchain and platform jobs current `main` runs, and names the upgrade behaviours that are not yet promised.
 
 If these limits fit your requirements, [try the local Rust example](/safemesh/getting-started/) and then [choose your integration](/safemesh/using-safemesh/).
