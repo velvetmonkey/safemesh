@@ -83,6 +83,8 @@ assert admissions == ["duplicate"]
 print(left.value(), right.value())
 ```
 
+The collision alarm is raised in memory by `EventLog`, `Replica` and the Python and WASM replica bindings, but `LocalReplica` and `DurableReplica` return `Admission::Collision` without recording an alarm or producing a report, and the C FFI has no collision-report surface.
+
 `merge_record_bytes` returns one `"accepted"`, `"duplicate"`, or `"collision"`
 verdict for its record, and `merge_log_bytes` returns one per input record, in
 order. Neither raises for a duplicate or a collision, and neither changes state

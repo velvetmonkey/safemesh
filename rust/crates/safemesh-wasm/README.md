@@ -52,6 +52,8 @@ cd rust/crates/safemesh-wasm
 
 ## Single-record merge compatibility (main, unreleased)
 
+The collision alarm is raised in memory by `EventLog`, `Replica` and the Python and WASM replica bindings, but `LocalReplica` and `DurableReplica` return `Admission::Collision` without recording an alarm or producing a report, and the C FFI has no collision-report surface.
+
 Every `mergeRecordBytes` method returns the core's admission verdict for its record: `"accepted"`, `"duplicate"`, or `"collision"`, the names `mergeLogBytes` returns per record. It no longer throws for a collision. Previously the G-Counter, PN-Counter, Enable-wins Flag, LWW Map and LWW Register replicas returned `undefined` for both accepted and duplicate records and threw `SafeMeshError` code 1 `record ID collision` for a collision, while `SafeMeshStringOrSetReplica` returned `"accepted"` or `"duplicate"` and threw the same error. Code that relied on that throw must check for `"collision"` instead. Decode and ownership errors still throw, with unchanged codes and messages.
 
 ## Quickstart
