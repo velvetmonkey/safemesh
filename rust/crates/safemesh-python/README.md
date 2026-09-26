@@ -195,7 +195,7 @@ the stored history and never creates a fresh writer when a check fails. It does
 not detect a stale snapshot that is consistent with itself, and it does no disk
 I/O.
 
-At most one allocated handle per author may be live in one Python process.
+The allocated registry permits one live handle per author within each Python process.
 A second `create_allocated` or `import_identity` for a live author raises
 `author already has a live allocated writer`. The claim is released when the
 handle is deallocated. WASM enforces the same rule per WASM instance. Neither

@@ -255,6 +255,7 @@ identity bytes refuse; never fall back to `createAllocated` on an import error.
 Save `exportIdentity()` after local edits and accepted peer records. Identity
 storage wraps the unchanged log bytes and is not a transport packet.
 
+The allocated registry permits one live handle per author within each WASM instance.
 The caller must run one live writer per author across WASM instances, tabs and
 processes. The allocated factory and import refuse an author already held within
 one WASM instance; `free()` releases it. There is no shared browser lock,
