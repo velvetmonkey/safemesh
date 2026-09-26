@@ -135,13 +135,59 @@ impl<C: Crdt> Drop for LocalReplica<C> {
     }
 }
 
+// Persist each newly created entry, deepest first. Existing roots need no sync.
+fn create_durable_root(root: &Path) -> io::Result<()> {
+    create_durable_root_with(root, |parent| File::open(parent)?.sync_all())
+}
+
+fn create_durable_root_with(
+    root: &Path,
+    mut sync_parent: impl FnMut(&Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let root = std::path::absolute(root)?;
+    let mut missing = Vec::new();
+    let mut ancestor = root.as_path();
+    loop {
+        match fs::metadata(ancestor) {
+            Ok(metadata) if metadata.is_dir() => break,
+            Ok(_) => return Err(io::Error::from(io::ErrorKind::NotADirectory)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                missing.push(ancestor.to_path_buf());
+                ancestor = ancestor
+                    .parent()
+                    .ok_or_else(|| io::Error::other("no ancestor"))?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    let mut created = Vec::new();
+    for directory in missing.iter().rev() {
+        match fs::create_dir(directory) {
+            Ok(()) => created.push(directory),
+            // A concurrent creator may have installed this directory after the walk.
+            Err(error)
+                if error.kind() == io::ErrorKind::AlreadyExists
+                    && fs::metadata(directory)?.is_dir() => {}
+            Err(error) => return Err(error),
+        }
+    }
+    for directory in created.into_iter().rev() {
+        sync_parent(
+            directory
+                .parent()
+                .ok_or_else(|| io::Error::other("no parent"))?,
+        )?;
+    }
+    Ok(())
+}
+
 impl<C: Crdt> LocalReplica<C>
 where
     C::Delta: OwnedDelta + Clone + PartialEq,
 {
     fn fresh(root: &Path, config: WriterConfig, state: C) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
-        fs::create_dir_all(root)?;
+        create_durable_root(root)?;
         let mut fence = OpenOptions::new()
             .read(true)
             .write(true)
@@ -538,7 +584,7 @@ where
     C::Delta: OwnedDelta + Clone + PartialEq + WireEncode + WireSchema,
 {
     fn fresh(root: &Path, config: WriterConfig, state: C) -> Result<Self, LocalError> {
-        fs::create_dir_all(root)?;
+        create_durable_root(root)?;
         let root = root.canonicalize()?;
         // Never overwrite a transaction whose fence is missing.
         match fs::metadata(transaction_path(&root, config)) {
@@ -1135,6 +1181,32 @@ mod durable_tests {
         ));
         fs::create_dir_all(&root).unwrap();
         root
+    }
+    #[test]
+    fn fresh_root_syncs_exact_created_parents() {
+        let existing = root();
+        let nested = existing.join("ancestor/store");
+        let mut synced = Vec::new();
+        create_durable_root_with(&nested, |parent| {
+            synced.push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(synced, vec![existing.join("ancestor"), existing.clone()]);
+        synced.clear();
+        create_durable_root_with(&nested, |parent| {
+            synced.push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        assert!(synced.is_empty());
+        let failed = existing.join("failed/store");
+        let error = create_durable_root_with(&failed, |_| {
+            Err(io::Error::other("injected parent sync failure"))
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "injected parent sync failure");
+        assert!(failed.is_dir());
     }
     fn config() -> WriterConfig {
         WriterConfig {
