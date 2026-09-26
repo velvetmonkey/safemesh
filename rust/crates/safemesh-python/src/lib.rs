@@ -76,10 +76,7 @@ fn event_log_decode_error(error: safemesh_crdt::WireError) -> PyErr {
         safemesh_crdt::WireError::OwnershipViolation => {
             "counter coordinate out of range or not owned by record author".to_owned()
         }
-        cause @ (safemesh_crdt::WireError::ZeroSequenceAdd { .. }
-        | safemesh_crdt::WireError::ZeroSequenceRemove { .. }) => {
-            format!("failed to decode event log: {cause}")
-        }
+        cause @ safemesh_crdt::WireError::ZeroSequenceRemove { .. } => cause.to_string(),
         cause => format!("failed to decode event log: {cause}"),
     })
 }
@@ -102,9 +99,14 @@ fn python_zero_sequence_remove_mapping_keeps_core_cause() {
         cause,
         safemesh_crdt::WireError::ZeroSequenceRemove { replica: 1 }
     );
-    let text = event_log_decode_error(cause).to_string();
-    assert!(text.contains(&cause.to_string()), "{text}");
-    assert!(text.contains("Recovery: "), "{text}");
+    for error in [
+        event_log_decode_error(cause),
+        record_verdict(safemesh_crdt::Admission::Invalid(cause)).unwrap_err(),
+    ] {
+        let text = error.to_string();
+        assert_eq!(text, format!("ValueError: {cause}"));
+        assert!(text.contains("Recovery: "), "{text}");
+    }
 }
 
 fn admission_name(admission: safemesh_crdt::Admission) -> String {
@@ -121,6 +123,9 @@ fn admission_name(admission: safemesh_crdt::Admission) -> String {
 // duplicate or collision is a verdict, not an error. An invalid record raises.
 fn record_verdict(admission: safemesh_crdt::Admission) -> PyResult<String> {
     match admission {
+        safemesh_crdt::Admission::Invalid(
+            cause @ safemesh_crdt::WireError::ZeroSequenceRemove { .. },
+        ) => Err(pyo3::exceptions::PyValueError::new_err(cause.to_string())),
         safemesh_crdt::Admission::Invalid(_) => {
             Err(pyo3::exceptions::PyValueError::new_err("invalid record"))
         }
