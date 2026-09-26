@@ -230,9 +230,9 @@ fn admission_name(admission: safemesh_crdt::Admission) -> String {
 // duplicate or collision is a verdict, not an error. An invalid record throws.
 fn record_verdict(admission: safemesh_crdt::Admission) -> Result<String, BindingError> {
     match admission {
-        safemesh_crdt::Admission::Invalid(error @ WireError::ZeroSequenceAdd { .. }) => {
-            Err(binding_error(1, error.to_string()))
-        }
+        safemesh_crdt::Admission::Invalid(
+            error @ (WireError::ZeroSequenceAdd { .. } | WireError::ZeroSequenceRemove { .. }),
+        ) => Err(binding_error(1, error.to_string())),
         safemesh_crdt::Admission::Invalid(_) => Err(binding_error(1, "invalid record")),
         admission => Ok(admission_name(admission)),
     }
@@ -1221,7 +1221,8 @@ fn event_log_decode_error(error: safemesh_crdt::WireError) -> BindingError {
             safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch".to_string(),
             safemesh_crdt::WireError::MissingShape => "event log missing shape".to_string(),
             // Same text as the single-record path: it names the record and a recovery step.
-            error @ safemesh_crdt::WireError::ZeroSequenceAdd { .. } => error.to_string(),
+            error @ (safemesh_crdt::WireError::ZeroSequenceAdd { .. }
+            | safemesh_crdt::WireError::ZeroSequenceRemove { .. }) => error.to_string(),
             other => format!("failed to decode event log: {other}"),
         },
     )
@@ -3197,6 +3198,48 @@ mod tests {
                 .unwrap()
                 .sequence(),
             0
+        );
+    }
+
+    #[test]
+    fn wasm_string_orset_refuses_sequence_zero_remove_with_core_text() {
+        let expected = WireError::ZeroSequenceRemove { replica: 1 }.to_string();
+        let remove: Record<OrSetDelta<String, u64>> = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 0,
+            },
+            delta: OrSetDelta::Remove { tokens: vec![0] },
+        };
+        let record_bytes = remove.to_wire_bytes().unwrap();
+        let mut log_bytes = Vec::new();
+        EventLog::encode_records(None, &[remove], &mut log_bytes).unwrap();
+        for mut replica in [
+            SafeMeshStringOrSetReplica::new(0),
+            SafeMeshStringOrSetReplica::try_create_allocated(2, 0).unwrap(),
+        ] {
+            let single = replica.try_merge_record_bytes(&record_bytes).unwrap_err();
+            assert_eq!(
+                (single.code, single.message.as_str()),
+                (1, expected.as_str())
+            );
+            let batch = replica.try_merge_log_bytes(&log_bytes).unwrap_err();
+            assert_eq!((batch.code, batch.message.as_str()), (1, expected.as_str()));
+            assert!(replica.log.records().is_empty());
+            assert!(replica.elements().is_empty());
+        }
+        let mut identity = b"SMOI\x01".to_vec();
+        for word in [2u64, 0, 1] {
+            identity.extend_from_slice(&word.to_le_bytes());
+        }
+        identity.extend_from_slice(&log_bytes);
+        let stored = match SafeMeshStringOrSetReplica::try_import_identity(&identity) {
+            Err(error) => error,
+            Ok(_) => panic!("identity with a sequence-0 remove was imported"),
+        };
+        assert_eq!(
+            (stored.code, stored.message.as_str()),
+            (1, expected.as_str())
         );
     }
 

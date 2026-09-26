@@ -109,15 +109,14 @@ impl<T: Ord + Clone, K: Ord + Clone> Mergeable for OrSet<T, K> {
 impl<T: Ord + Clone, K: Ord + Clone> Crdt for OrSet<T, K> {
     type Delta = OrSetDelta<T, K>;
 
-    /// Refuses an add at sequence 0 with [`WireError::ZeroSequenceAdd`]. An add
-    /// mints its token at its record ID, and the Lean ownership rule only
-    /// allocates at positive sequences (`lean/SafeMesh/RecordKernel.lean`:
-    /// `allocateToken` requires `0 < sequence`, and `payloadOwned` for an add
-    /// requires that allocation). This check needs no writer count, so the raw
-    /// carrier applies it too. The rest of the ownership rule (author bound and
-    /// token value) needs a writer count and stays with the checked writers.
+    /// Refuses sequence-0 adds and removes with [`WireError::ZeroSequenceAdd`]
+    /// and [`WireError::ZeroSequenceRemove`]. `RecordKernel.permitted` requires
+    /// a positive sequence for every payload. Adds also mint a token at their
+    /// record ID; `allocateToken` requires a positive sequence. These checks
+    /// need no writer count, so the raw carrier applies them too. The author
+    /// bound and add token value stay with the checked writers.
     ///
-    /// Every other record is accepted. An add always joins the add set, even
+    /// Every positive-sequence record is accepted. An add joins the add set, even
     /// when its token is already tombstoned (that is the observed-remove rule,
     /// and a fresh set applies it). A remove tombstones every token it names
     /// whether or not this replica observed them (`RecordKernel.payloadOwned
@@ -128,6 +127,9 @@ impl<T: Ord + Clone, K: Ord + Clone> Crdt for OrSet<T, K> {
     fn validate_record(&self, id: RecordId, delta: &Self::Delta) -> Result<(), WireError> {
         match delta {
             OrSetDelta::Add { .. } if id.sequence == 0 => Err(WireError::ZeroSequenceAdd {
+                replica: id.replica,
+            }),
+            OrSetDelta::Remove { .. } if id.sequence == 0 => Err(WireError::ZeroSequenceRemove {
                 replica: id.replica,
             }),
             _ => Ok(()),

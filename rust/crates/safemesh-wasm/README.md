@@ -244,7 +244,8 @@ use `appendAllocatedAdd(element)` for allocated adds, including after
 `exportIdentity()` and `importIdentity(bytes)`. Python and C numeric paths retain
 caller-owned tokens.
 
-Legacy and allocated instances both refuse an add record at sequence 0, as the
-core `OrSet` does. `mergeRecordBytes`, `mergeLogBytes` and `importIdentity`
-throw `SafeMeshError` code 1 with the core `WireError::ZeroSequenceAdd` text,
+Legacy and allocated instances both refuse add and remove records at sequence 0,
+as the core `OrSet` does. `mergeRecordBytes`, `mergeLogBytes` and `importIdentity`
+throw `SafeMeshError` code 1 with the core `WireError::ZeroSequenceAdd` or
+`WireError::ZeroSequenceRemove` text,
 which names the record's author and a recovery step. State and log are unchanged.

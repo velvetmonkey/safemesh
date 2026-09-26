@@ -46,6 +46,11 @@ pub enum WireError {
         /// Author of the refused record. Its sequence is 0.
         replica: u64,
     },
+    /// An OR-Set remove record at sequence 0, forbidden by RecordKernel.permitted.
+    ZeroSequenceRemove {
+        /// Author of the refused record. Its sequence is 0.
+        replica: u64,
+    },
     UnexpectedEof,
     InvalidTag,
     TrailingBytes,
@@ -94,6 +99,12 @@ impl core::fmt::Display for WireError {
                 "OR-Set add record (replica {replica}, sequence 0) refused: add sequences start at 1. \
                  Recovery: re-add the element from replica {replica} at a positive sequence, \
                  and remove this record from any stored log before loading it again"
+            ),
+            Self::ZeroSequenceRemove { replica } => write!(
+                f,
+                "OR-Set remove record (replica {replica}, sequence 0) refused: remove sequences start at 1. \
+                 Recovery: remove this record from any stored log, issue the remove again from replica {replica} \
+                 at a positive sequence, and write the log again"
             ),
             Self::UnexpectedEof => f.write_str("unexpected end of wire input"),
             Self::InvalidTag => f.write_str("unexpected wire tag"),

@@ -251,6 +251,13 @@ where
         local: bool,
         commit: impl FnOnce(&EventLog<C::Delta>, u64) -> Result<(), LocalError>,
     ) -> Result<Admission, LocalError> {
+        // The ownership guard below also rejects sequence zero. Preserve the
+        // OR-Set remove's specific recovery cause before that broader refusal.
+        if let Err(error @ WireError::ZeroSequenceRemove { .. }) =
+            self.state.validate_record(record.id, &record.delta)
+        {
+            return Err(LocalError::History(error));
+        }
         if refuses(
             self.context(ticket, local),
             record.id,
@@ -788,6 +795,7 @@ impl DurableReplica<OrSet<String, u64>> {
 mod durable_tests {
     use super::*;
     use alloc::string::ToString;
+    use alloc::vec;
     use std::{
         process::Command,
         sync::atomic::{AtomicU64, Ordering},
@@ -1020,6 +1028,51 @@ mod durable_tests {
             writers: 2,
             writer: 0,
         }
+    }
+    #[test]
+    fn durable_orset_zero_sequence_remove_refused_on_receive_and_restart() {
+        let root = root();
+        let mut replica = DurableReplica::utf8_set(&root, config()).unwrap();
+        let remove = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 0,
+            },
+            delta: OrSetDelta::Remove { tokens: vec![2] },
+        };
+        let before = fs::read(transaction_path(&root, config())).unwrap();
+        assert!(matches!(
+            replica.receive(replica.ticket(), remove.clone()),
+            Err(LocalError::History(WireError::ZeroSequenceRemove {
+                replica: 1
+            }))
+        ));
+        assert!(replica.log().records().is_empty());
+        assert!(replica.state().tombstones().is_empty());
+        assert_eq!(fs::read(transaction_path(&root, config())).unwrap(), before);
+        drop(replica);
+
+        let mut bytes = Vec::new();
+        EventLog::encode_records(None, &[remove], &mut bytes).unwrap();
+        let inert = EventLog::<OrSetDelta<String, u64>>::from_wire_bytes(&bytes).unwrap();
+        DurableReplica::<OrSet<String, u64>>::commit(
+            &transaction_path(&root, config()),
+            config(),
+            &inert,
+            0,
+        )
+        .unwrap();
+        let stored = fs::read(transaction_path(&root, config())).unwrap();
+        let error = match DurableReplica::restart_utf8_set(&root, config()) {
+            Err(error) => error,
+            Ok(_) => panic!("restarted from sequence-0 remove"),
+        };
+        assert!(matches!(
+            error,
+            LocalError::History(WireError::ZeroSequenceRemove { replica: 1 })
+        ));
+        assert!(error.to_string().contains("Recovery: "));
+        assert_eq!(fs::read(transaction_path(&root, config())).unwrap(), stored);
     }
     #[test]
     fn restart_counter_from_store_replays_without_writer_count() {

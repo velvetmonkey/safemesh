@@ -1438,10 +1438,7 @@ fn raw_orset_refuses_sequence_zero_add_on_every_path() {
         Admission::Invalid(refusal)
     );
 
-    // Positive controls: the ruling covers adds only. A sequence-0 remove and
-    // a sequence-1 add are still admitted.
-    let remove = zero_orset_record("water".to_string(), false);
-    assert_eq!(state.validate_record(remove.id, &remove.delta), Ok(()));
+    // A sequence-1 add remains admitted.
     let one = Record {
         id: RecordId {
             replica: 1,
@@ -1453,7 +1450,6 @@ fn raw_orset_refuses_sequence_zero_add_on_every_path() {
         },
     };
     assert_eq!(log.insert_record(&state, one), Admission::Accepted);
-    assert_eq!(log.insert_record(&state, remove), Admission::Accepted);
 
     // The single-record wire decode is inert; the refusal happens at admission,
     // so the record still reaches the hook with its identity intact.
@@ -1462,6 +1458,103 @@ fn raw_orset_refuses_sequence_zero_add_on_every_path() {
     assert_eq!(
         EventLog::new().insert_record(&OrSet::<String, u64>::new(), decoded),
         Admission::Invalid(refusal)
+    );
+}
+
+#[test]
+fn raw_orset_refuses_sequence_zero_remove_on_every_path() {
+    use safemesh_crdt::{OrSet, OrSetDelta, WireError};
+    let refusal = WireError::ZeroSequenceRemove { replica: 1 };
+    let remove = zero_orset_record("water".to_string(), false);
+    let mut state = OrSet::<String, u64>::new();
+    let mut log = EventLog::for_crdt(&state);
+    assert_eq!(
+        state.validate_record(remove.id, &remove.delta),
+        Err(refusal)
+    );
+    assert_eq!(
+        log.admit_with(&mut state, remove.clone(), |_, _| panic!(
+            "zero remove applied"
+        )),
+        Admission::Invalid(refusal)
+    );
+    assert_eq!(
+        log.insert_record(&state, remove.clone()),
+        Admission::Invalid(refusal)
+    );
+    assert_eq!(
+        log.merge_records(&state, [remove.clone()]),
+        vec![Admission::Invalid(refusal)]
+    );
+    assert!(log.records().is_empty());
+    assert!(state.tombstones().is_empty());
+    let numeric = zero_orset_record(7u64, false);
+    assert_eq!(
+        OrSet::<u64, u64>::new().validate_record(numeric.id, &numeric.delta),
+        Err(refusal)
+    );
+    assert_eq!(
+        EventLog::new().insert_record(&OrSet::<u64, u64>::new(), numeric),
+        Admission::Invalid(refusal)
+    );
+    let decoded =
+        Record::<OrSetDelta<String, u64>>::from_wire_bytes(&remove.to_wire_bytes().unwrap())
+            .unwrap();
+    assert_eq!(
+        EventLog::new().insert_record(&state, decoded),
+        Admission::Invalid(refusal)
+    );
+    let one = Record {
+        id: RecordId {
+            replica: 1,
+            sequence: 1,
+        },
+        delta: OrSetDelta::Remove { tokens: vec![0] },
+    };
+    assert_eq!(log.insert_record(&state, one), Admission::Accepted);
+}
+
+#[test]
+fn stored_log_with_sequence_zero_remove_fails_loudly() {
+    use safemesh_crdt::{DecodeError, DecodeLimits, OrSet, OrSetDelta, WireError};
+    let remove = zero_orset_record("water".to_string(), false);
+    let mut bytes = Vec::new();
+    EventLog::encode_records(None, &[remove], &mut bytes).unwrap();
+    let carrier = OrSet::<String, u64>::new();
+    let refusal = WireError::ZeroSequenceRemove { replica: 1 };
+    assert_eq!(
+        EventLog::<OrSetDelta<String, u64>>::from_wire_bytes_for(&bytes, &carrier),
+        Err(refusal)
+    );
+    assert_eq!(
+        EventLog::<OrSetDelta<String, u64>>::records_from_wire_bytes_for(&bytes, &carrier),
+        Err(refusal)
+    );
+    assert_eq!(
+        EventLog::<OrSetDelta<String, u64>>::from_wire_bytes_for_with_limits(
+            &bytes,
+            &carrier,
+            DecodeLimits::default()
+        ),
+        Err(DecodeError::Wire(refusal))
+    );
+    assert_eq!(
+        EventLog::<OrSetDelta<String, u64>>::records_from_wire_bytes_for_with_limits(
+            &bytes,
+            &carrier,
+            DecodeLimits::default()
+        ),
+        Err(DecodeError::Wire(refusal))
+    );
+    let text = refusal.to_string();
+    assert!(text.contains("replica 1, sequence 0"), "{text}");
+    assert!(text.contains("Recovery: "), "{text}");
+    assert_eq!(
+        EventLog::<OrSetDelta<String, u64>>::from_wire_bytes(&bytes)
+            .unwrap()
+            .records()
+            .len(),
+        1
     );
 }
 

@@ -76,8 +76,22 @@ fn event_log_decode_error(error: safemesh_crdt::WireError) -> PyErr {
         safemesh_crdt::WireError::OwnershipViolation => {
             "counter coordinate out of range or not owned by record author".to_owned()
         }
+        cause @ (safemesh_crdt::WireError::ZeroSequenceAdd { .. }
+        | safemesh_crdt::WireError::ZeroSequenceRemove { .. }) => {
+            format!("failed to decode event log: {cause}")
+        }
         cause => format!("failed to decode event log: {cause}"),
     })
+}
+
+#[cfg(test)]
+#[test]
+fn python_zero_sequence_remove_mapping_keeps_core_cause() {
+    pyo3::prepare_freethreaded_python();
+    let cause = safemesh_crdt::WireError::ZeroSequenceRemove { replica: 1 };
+    let text = event_log_decode_error(cause).to_string();
+    assert!(text.contains(&cause.to_string()), "{text}");
+    assert!(text.contains("Recovery: "), "{text}");
 }
 
 fn admission_name(admission: safemesh_crdt::Admission) -> String {
