@@ -489,11 +489,11 @@ DecodeLimits { max_records: Some(n) })`. The budget counts top-level record
 occurrences, including duplicates, and returns `DecodeError::RecordLimitExceeded`
 before decoding occurrence n+1; no partial log is returned. `DecodeLimits::default()`
 is unbounded and preserves existing output and wire errors (wrapped in
-`DecodeError::Wire`). Existing loaders retain their signatures and behavior.
+`DecodeError::Wire`). Existing Rust loaders retain their signatures and behavior.
 This inert decoder checks the saved schema but does not validate a destination
 CRDT. The limit does not cap bytes, nested records, or payload collection entries;
-CRC verification still scans the whole frame. Python/WASM loaders do not expose
-this Rust-only option yet.
+CRC verification still scans the whole frame.
+Python `merge_log_bytes` and WASM `mergeLogBytes` expose an optional record budget.
 
 `0x03` files written before the shape header return
 `WireError::LegacyEventLogFrame { found: LegacyFrame::Tag03Unshaped }`, not
