@@ -1119,6 +1119,32 @@ mod durable_tests {
         assert_eq!(fs::read(&transaction).unwrap(), store_before);
         assert_eq!(replica.log().to_wire_bytes().unwrap(), log_before);
         assert!(replica.state().elements().is_empty());
+        drop(replica);
+
+        let add = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 0,
+            },
+            delta: OrSetDelta::Add {
+                element: "water".into(),
+                token: 1,
+            },
+        };
+        let mut bytes = Vec::new();
+        EventLog::encode_records(None, &[add], &mut bytes).unwrap();
+        let inert = EventLog::<OrSetDelta<String, u64>>::from_wire_bytes(&bytes).unwrap();
+        DurableReplica::<OrSet<String, u64>>::commit(&transaction, config(), &inert, 0).unwrap();
+        let stored = fs::read(&transaction).unwrap();
+        let error = match DurableReplica::restart_utf8_set(&root, config()) {
+            Err(error) => error,
+            Ok(_) => panic!("restarted from sequence-0 add"),
+        };
+        assert!(matches!(
+            error,
+            LocalError::History(WireError::ZeroSequenceAdd { replica: 1 })
+        ));
+        assert_eq!(fs::read(&transaction).unwrap(), stored);
         std::println!(
             "store={} log-bytes={}",
             transaction.display(),
