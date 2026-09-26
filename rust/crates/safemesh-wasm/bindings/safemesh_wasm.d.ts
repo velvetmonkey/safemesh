@@ -21,8 +21,9 @@ export class SafeMeshEnableWinsFlagReplica {
     logBytes(): Uint8Array;
     /**
      * Return one core admission verdict for every decoded input record.
+     * `maxRecords` is the third argument; the second limits collection elements.
      */
-    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): ("accepted" | "duplicate" | "collision")[];
+    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate" | "collision")[];
     /**
      * Return the core admission verdict for the decoded input record, as
      * `mergeLogBytes` does per record. Only `"accepted"` changes state.
@@ -57,8 +58,9 @@ export class SafeMeshGCounterReplica {
     logBytes(): Uint8Array;
     /**
      * Return one core admission verdict for every decoded input record.
+     * `maxRecords` is the third argument; the second limits collection elements.
      */
-    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): ("accepted" | "duplicate" | "collision")[];
+    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate" | "collision")[];
     /**
      * Return the core admission verdict for the decoded input record, as
      * `mergeLogBytes` does per record. Only `"accepted"` changes state.
@@ -113,8 +115,9 @@ export class SafeMeshLwwMapReplica {
     logBytes(): Uint8Array;
     /**
      * Return one core admission verdict for every decoded input record.
+     * `maxRecords` is the third argument; the second limits collection elements.
      */
-    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): ("accepted" | "duplicate" | "collision")[];
+    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate" | "collision")[];
     /**
      * Return the core admission verdict for the decoded input record, as
      * `mergeLogBytes` does per record. Only `"accepted"` changes state.
@@ -150,8 +153,9 @@ export class SafeMeshLwwRegisterReplica {
     logBytes(): Uint8Array;
     /**
      * Return one core admission verdict for every decoded input record.
+     * `maxRecords` is the third argument; the second limits collection elements.
      */
-    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): ("accepted" | "duplicate" | "collision")[];
+    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate" | "collision")[];
     /**
      * Return the core admission verdict for the decoded input record, as
      * `mergeLogBytes` does per record. Only `"accepted"` changes state.
@@ -194,8 +198,9 @@ export class SafeMeshPnCounterReplica {
     logBytes(): Uint8Array;
     /**
      * Return one core admission verdict for every decoded input record.
+     * `maxRecords` is the third argument; the second limits collection elements.
      */
-    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): ("accepted" | "duplicate" | "collision")[];
+    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate" | "collision")[];
     /**
      * Return the core admission verdict for the decoded input record, as
      * `mergeLogBytes` does per record. Only `"accepted"` changes state.
@@ -322,8 +327,9 @@ export class SafeMeshStringOrSetReplica {
     logBytes(): Uint8Array;
     /**
      * Return one core admission verdict for every decoded input record.
+     * `maxRecords` is the third argument; the second limits collection elements.
      */
-    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null): ("accepted" | "duplicate" | "collision")[];
+    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate" | "collision")[];
     /**
      * Decode one record and admit it through the core event log.
      *
