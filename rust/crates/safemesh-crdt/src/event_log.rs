@@ -285,6 +285,7 @@ impl<D> EventLog<D> {
 impl<D: Clone> EventLog<D> {
     /// Return admitted records outside the peer's positive contiguous prefixes
     /// and independently acknowledged sequence-zero records.
+    /// By design, a permanent gap offers all later records from that writer on every exchange; deliver the missing record.
     pub fn since(&self, version: &VersionVector) -> Vec<Record<D>> {
         self.records
             .iter()
