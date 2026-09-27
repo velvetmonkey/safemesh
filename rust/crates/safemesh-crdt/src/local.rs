@@ -2199,7 +2199,8 @@ mod durable_tests {
         let ancestor = root().join("execute-only");
         let writable = ancestor.join("writable");
         fs::create_dir_all(&writable).unwrap();
-        let store = writable.join("store");
+        let ancestor = ancestor.canonicalize().unwrap();
+        let store = ancestor.join("writable/store");
         fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o111)).unwrap();
         std::eprintln!("ANCESTOR-PROBE refusal {}", ancestor.display());
         let result = DurableReplica::counter(&store, config());
