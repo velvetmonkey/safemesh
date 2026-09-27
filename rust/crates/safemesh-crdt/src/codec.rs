@@ -58,6 +58,8 @@ pub enum WireError {
     LengthOverflow,
     RecordCollision,
     DuplicateEntry,
+    /// A state entry list is not in ascending encoder order.
+    NonCanonicalOrder,
     IntegrityMismatch,
     InvalidUtf8,
     /// A fixed-domain log constructed or saved without its arity.
@@ -113,8 +115,9 @@ impl core::fmt::Display for WireError {
             Self::LengthOverflow => f.write_str("wire length exceeds the representable range"),
             Self::RecordCollision => f.write_str("record identity has conflicting payloads"),
             Self::DuplicateEntry => {
-                f.write_str("wire OR-set contains a duplicate element and token")
+                f.write_str("wire state contains a duplicate entry")
             }
+            Self::NonCanonicalOrder => f.write_str("wire state entries are not in ascending order"),
             Self::IntegrityMismatch => f.write_str("wire frame integrity check failed"),
             Self::InvalidUtf8 => f.write_str("wire string contains invalid UTF-8"),
             Self::MissingShape => f.write_str("wire frame is missing required shape metadata"),

@@ -158,6 +158,9 @@ fn wire_decode_error(error: WireError, context: &str) -> JsValue {
             3,
             &format!("maxCollectionElements limit exceeded: {max_elements}"),
         ),
+        cause @ (WireError::DuplicateEntry | WireError::NonCanonicalOrder) => {
+            safe_mesh_error(1, &format!("{context}: {cause:?}: {cause}"))
+        }
         _ => safe_mesh_error(1, context),
     }
 }
