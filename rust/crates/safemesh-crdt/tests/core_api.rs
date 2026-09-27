@@ -590,12 +590,12 @@ fn orset_shared_token_preserves_both_values_commutatively() {
 }
 
 #[test]
-fn rga_position_read_preserves_every_live_entry() {
+fn rga_position_read_matches_lean_and_preserves_live_values() {
     let mut forward = Rga::new();
     forward.insert(10, 'a');
     forward.insert(10, 'b');
     assert_eq!(forward.live_entries(), vec![(10, 'a'), (10, 'b')]);
-    assert_eq!(forward.read_positions(), vec![10, 10]);
+    assert_eq!(forward.read_positions(), vec![10]);
     let mut reverse = Rga::new();
     reverse.insert(10, 'b');
     reverse.insert(10, 'a');
@@ -603,7 +603,7 @@ fn rga_position_read_preserves_every_live_entry() {
     forward.merge(&reverse);
     reverse.merge(&forward);
     assert_eq!(forward.read_positions(), reverse.read_positions());
-    assert_eq!(forward.read_positions().len(), forward.live_entries().len());
+    assert_eq!(forward.live_entries(), vec![(10, 'a'), (10, 'b')]);
     let mut adjacent = Rga::new();
     adjacent.insert(20, 'c');
     let mut other_order = adjacent.clone();
@@ -615,7 +615,7 @@ fn rga_position_read_preserves_every_live_entry() {
         forward.live_entries(),
         vec![(10, 'a'), (10, 'b'), (20, 'c')]
     );
-    assert_eq!(forward.read_positions(), vec![10, 10, 20]);
+    assert_eq!(forward.read_positions(), vec![10, 20]);
     forward.delete(10);
     assert_eq!(forward.live_entries(), vec![(20, 'c')]);
     assert_eq!(forward.read_positions(), vec![20]);

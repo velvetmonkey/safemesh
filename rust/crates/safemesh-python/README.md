@@ -272,8 +272,9 @@ returns an exact signed Python integer even outside the 64-bit range.
 
 `Rga` uses caller-supplied positions and values, both unsigned 64-bit integers.
 `placed()` returns all positioned values, `tombstones()` returns deleted
-positions, and `read_positions()` projects the sorted live entries. Distinct
-values at the same position remain distinct entries. Deleting a position hides
+positions, and `read_positions()` returns the sorted, duplicate-free live
+positions, matching Lean `read`. Distinct values at the same position remain
+available through `live_entries()`. Deleting a position hides
 all its values, including later arrivals. This wrapper does not allocate
 positions or implement text editing.
 

@@ -72,14 +72,17 @@ impl<P: Ord + Clone, V: Ord + Clone> Rga<P, V> {
             .collect()
     }
 
-    /// One position per live entry, in the same order as `live_entries`.
-    /// Repeated positions are retained: distinct live values at a shared
-    /// position must not disappear from the sequence projection.
+    /// Live positions sorted ascending, with no duplicates, matching Lean `read`.
+    /// Distinct values at a shared position remain available through `live_entries`.
     pub fn read_positions(&self) -> Vec<P> {
-        self.live_entries()
+        let mut positions: Vec<P> = self
+            .live_entries()
             .into_iter()
             .map(|(position, _)| position)
-            .collect()
+            .collect();
+        // live_entries is lexicographically sorted, so equal positions are adjacent.
+        positions.dedup();
+        positions
     }
 }
 
