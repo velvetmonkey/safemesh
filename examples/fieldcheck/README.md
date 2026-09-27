@@ -11,14 +11,24 @@ From the repository root:
 
 ```sh
 cargo build --locked --manifest-path examples/fieldcheck/Cargo.toml
-python3 examples/fieldcheck/fieldcheck.py /absolute/existing/parent/new-store
+mkdir -p "$HOME/fieldcheck-demo"
+python3 examples/fieldcheck/fieldcheck.py "$HOME/fieldcheck-demo/new-store"
 ```
 
 For two services, build once and run these in **separate terminals**:
 
+Terminal B (start the listener first):
+
 ```sh
-python3 examples/fieldcheck/fieldcheck.py /absolute/existing/parent/device-b --writer 1 --listen 127.0.0.1:7402
-python3 examples/fieldcheck/fieldcheck.py /absolute/existing/parent/device-a --writer 0 --connect 127.0.0.1:7402
+mkdir -p "$HOME/fieldcheck-demo"
+python3 examples/fieldcheck/fieldcheck.py "$HOME/fieldcheck-demo/device-b" --writer 1 --listen 127.0.0.1:7402
+```
+
+Terminal A:
+
+```sh
+mkdir -p "$HOME/fieldcheck-demo"
+python3 examples/fieldcheck/fieldcheck.py "$HOME/fieldcheck-demo/device-a" --writer 0 --connect 127.0.0.1:7402
 ```
 
 Each invocation starts its own OS process with exclusive ownership of its own
@@ -32,12 +42,35 @@ printed address to the other device's `--connect` flag.
 `--listen` and `--connect` are start-time flags, not prompt commands. To make
 opposing offline inspections and then reconnect, start each CLI without its
 network flag, using `--writer 1` for device-b and `--writer 0` for device-a.
-Enter `draft` and `save` on each. Then enter `quit` at both prompts and restart
-the same stores in separate terminals:
+Terminal B:
 
 ```sh
-python3 examples/fieldcheck/fieldcheck.py /absolute/existing/parent/device-b --writer 1 --listen 127.0.0.1:7402
-python3 examples/fieldcheck/fieldcheck.py /absolute/existing/parent/device-a --writer 0 --connect 127.0.0.1:7402
+mkdir -p "$HOME/fieldcheck-demo"
+python3 examples/fieldcheck/fieldcheck.py "$HOME/fieldcheck-demo/device-b" --writer 1
+```
+
+Terminal A:
+
+```sh
+mkdir -p "$HOME/fieldcheck-demo"
+python3 examples/fieldcheck/fieldcheck.py "$HOME/fieldcheck-demo/device-a" --writer 0
+```
+
+On each, use the `draft` syntax below with differing answers, then enter `save`.
+Then enter `quit` at both prompts and restart the same stores in separate terminals:
+
+Terminal B (start the listener first):
+
+```sh
+mkdir -p "$HOME/fieldcheck-demo"
+python3 examples/fieldcheck/fieldcheck.py "$HOME/fieldcheck-demo/device-b" --writer 1 --listen 127.0.0.1:7402
+```
+
+Terminal A:
+
+```sh
+mkdir -p "$HOME/fieldcheck-demo"
+python3 examples/fieldcheck/fieldcheck.py "$HOME/fieldcheck-demo/device-a" --writer 0 --connect 127.0.0.1:7402
 ```
 
 Enter `show` after exchange. The CLI names each item needing review and each
@@ -46,7 +79,11 @@ There is no simulated-offline switch: kill a service or actually close the socke
 Only numeric loopback addresses are supported in this slice. One listener and one
 connector form the fixed pair; there is no enrollment or relay.
 
+These commands create the parent `$HOME/fieldcheck-demo`, not the stores.
 The store directory must initially **not exist**. Its parent must exist.
+Repeat the commands to reopen the same stores; `mkdir -p` also works when the
+parent already exists. The Python CLI accepts relative store paths too and
+resolves them against the current directory before starting the service.
 Every existing store is reopened with checked replay, including empty or damaged
 directories; recovery failure preserves the store and disables inspection editing.
 Do not delete fence files, copy an active store, or reuse its identity.
@@ -93,7 +130,7 @@ sequence. Compare these with the pre-kill `show` output. `quit` is a graceful
 exit and is not evidence for this journey.
 
 For a lost reply, start with a fresh store and add
-`--reply-barrier /absolute/path/reply-pending` to the Python command.
+`--reply-barrier "$HOME/fieldcheck-demo/reply-pending"` to the Python command.
 This is an external journey control, not inspection data. After `save`, the
 service creates this marker **after successful add and before replying** and
 waits while the marker exists. When it appears, SIGKILL the printed service PID.
