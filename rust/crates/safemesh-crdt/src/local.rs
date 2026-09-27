@@ -19,8 +19,12 @@ use std::{
 pub enum LocalError {
     Refused,
     Exhausted,
+    /// A peer supplied an own-writer record above the committed high-water.
+    PeerWriterAhead,
     RecoveryRequired,
     Configuration,
+    /// The requested counter width exceeds the core constructor domain.
+    CounterWidth(crate::CoordinateError),
     InvalidRecord(WireError),
     History(WireError),
     InvalidHistory,
@@ -42,7 +46,9 @@ impl core::fmt::Display for LocalError {
             Self::Exhausted => {
                 f.write_str("local writer sequence, generation, or token allocation exhausted")
             }
+            Self::PeerWriterAhead => f.write_str("a peer returned a record for this writer above its durable high-water; local writes on this open replica are stopped; reopening clears this stop and an old-identity restore is detected only when a peer returns such a record; open a restored store with a new writer identity"),
             Self::RecoveryRequired => f.write_str("local store requires recovery"),
+            Self::CounterWidth(error) => error.fmt(f),
             Self::Configuration => f.write_str("invalid or mismatched local writer configuration"),
             Self::InvalidRecord(error) => error.fmt(f),
             Self::History(error) => write!(f, "local history wire validation failed: {error}"),
@@ -63,6 +69,7 @@ impl core::error::Error for LocalError {
         match self {
             Self::InvalidRecord(error) | Self::History(error) => Some(error),
             Self::Io(error) => Some(error),
+            Self::CounterWidth(error) => Some(error),
             _ => None,
         }
     }
@@ -87,6 +94,7 @@ pub struct LocalReplica<C: Crdt> {
     state: C,
     log: EventLog<C::Delta>,
     last_sequence: u64,
+    peer_writer_ahead: bool,
 }
 
 // A private tentative insertion. Only version metadata (bounded by configured
@@ -184,6 +192,7 @@ where
             log: EventLog::for_crdt(&state),
             state,
             last_sequence: 0,
+            peer_writer_ahead: false,
         })
     }
 
@@ -263,6 +272,9 @@ where
         local: bool,
         commit: impl FnOnce(&EventLog<C::Delta>, u64) -> Result<(), LocalError>,
     ) -> Result<Admission, LocalError> {
+        if local && self.peer_writer_ahead {
+            return Err(LocalError::PeerWriterAhead);
+        }
         // Preserve lease and ownership precedence, then surface the carrier cause
         // for a received OR-Set sequence-zero add or remove.
         if !local
@@ -286,14 +298,23 @@ where
         ) {
             return Err(LocalError::Refused);
         }
+        // Peer history cannot allocate IDs in this writer's space. A backup
+        // may have lost locally issued IDs, so stop this open writer as well.
+        if !local
+            && record.id.replica == self.config.writer
+            && record.id.sequence > self.last_sequence
+        {
+            self.peer_writer_ahead = true;
+            return Err(LocalError::PeerWriterAhead);
+        }
         let outcome = self.log.admission(&self.state, &record);
         if outcome != Admission::Accepted {
             return Ok(outcome);
         }
         let candidate = PendingInsertion::new(&mut self.log, record.id);
         let outcome = candidate.log.insert_record(&self.state, record.clone());
-        let sequence = if record.id.replica == self.config.writer {
-            self.last_sequence.max(record.id.sequence)
+        let sequence = if local {
+            record.id.sequence
         } else {
             self.last_sequence
         };
@@ -339,6 +360,9 @@ where
         ticket: WriteTicket,
         delta: C::Delta,
     ) -> Result<Record<C::Delta>, LocalError> {
+        if self.peer_writer_ahead {
+            return Err(LocalError::PeerWriterAhead);
+        }
         let sequence = next_sequence(self.last_sequence).ok_or(LocalError::Exhausted)?;
         let record = Record {
             id: RecordId {
@@ -358,7 +382,11 @@ impl LocalReplica<GCounter> {
     pub fn counter(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
         let n = usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?;
-        Self::fresh(root, config, GCounter::new(n))
+        Self::fresh(
+            root,
+            config,
+            GCounter::try_new(n).map_err(LocalError::CounterWidth)?,
+        )
     }
     pub fn bump(
         &mut self,
@@ -383,6 +411,9 @@ impl LocalReplica<OrSet<String, u64>> {
         ticket: WriteTicket,
         element: String,
     ) -> Result<Record<OrSetDelta<String, u64>>, LocalError> {
+        if self.peer_writer_ahead {
+            return Err(LocalError::PeerWriterAhead);
+        }
         let sequence = next_sequence(self.last_sequence).ok_or(LocalError::Exhausted)?;
         let token = allocate_token(self.config.writers, self.config.writer, sequence)
             .ok_or(LocalError::Exhausted)?;
@@ -620,6 +651,9 @@ where
         ticket: WriteTicket,
         delta: C::Delta,
     ) -> Result<Record<C::Delta>, LocalError> {
+        if self.inner.peer_writer_ahead {
+            return Err(LocalError::PeerWriterAhead);
+        }
         let sequence = next_sequence(self.inner.last_sequence).ok_or(LocalError::Exhausted)?;
         let record = Record {
             id: RecordId {
@@ -740,6 +774,7 @@ where
             log: EventLog::for_crdt(&state),
             state,
             last_sequence: 0,
+            peer_writer_ahead: false,
         };
         // Compose packet A's corpus-bound ownedStep with M1 admission/replay.
         // This candidate is private until every record and allocation check passes.
@@ -776,7 +811,12 @@ impl DurableReplica<GCounter> {
     ) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
         let n = usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?;
-        Self::restart_with_limits(root, config, GCounter::new(n), limits)
+        Self::restart_with_limits(
+            root,
+            config,
+            GCounter::try_new(n).map_err(LocalError::CounterWidth)?,
+            limits,
+        )
     }
     /// Reacquire the writer, read its committed writer count, then run checked replay.
     /// The root must already contain a durable counter store for this writer.
@@ -811,12 +851,22 @@ impl DurableReplica<GCounter> {
             return Err(LocalError::Configuration);
         }
         let n = usize::try_from(writers).map_err(|_| LocalError::Configuration)?;
-        Self::restart_locked(&root, fence, config, GCounter::new(n), limits)
+        Self::restart_locked(
+            &root,
+            fence,
+            config,
+            GCounter::try_new(n).map_err(LocalError::CounterWidth)?,
+            limits,
+        )
     }
     pub fn counter(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
         let n = usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?;
-        Self::fresh(root, config, GCounter::new(n))
+        Self::fresh(
+            root,
+            config,
+            GCounter::try_new(n).map_err(LocalError::CounterWidth)?,
+        )
     }
     pub fn bump(
         &mut self,
@@ -876,6 +926,9 @@ impl DurableReplica<OrSet<String, u64>> {
         ticket: WriteTicket,
         element: String,
     ) -> Result<Record<OrSetDelta<String, u64>>, LocalError> {
+        if self.inner.peer_writer_ahead {
+            return Err(LocalError::PeerWriterAhead);
+        }
         let sequence = next_sequence(self.inner.last_sequence).ok_or(LocalError::Exhausted)?;
         let token = allocate_token(
             self.inner.config.writers,
@@ -1142,6 +1195,249 @@ mod durable_tests {
             writer: 0,
         }
     }
+    fn h1_record(sequence: u64) -> Record<GCounterDelta> {
+        Record {
+            id: RecordId {
+                replica: 0,
+                sequence,
+            },
+            delta: GCounterDelta {
+                replica: 0,
+                tally: 99,
+            },
+        }
+    }
+    #[test]
+    fn h1_event_log_unprotected_control() {
+        let mut state = GCounter::new(2);
+        let mut log = EventLog::for_crdt(&state);
+        assert_eq!(
+            log.insert_record(&state, h1_record(u64::MAX)),
+            Admission::Accepted
+        );
+        assert!(matches!(
+            log.append(
+                &mut state,
+                0,
+                GCounterDelta {
+                    replica: 0,
+                    tally: 100
+                }
+            ),
+            Err(crate::AppendError::SequenceExhausted)
+        ));
+    }
+    #[test]
+    fn h1_local_peer_sequence_refused() {
+        let mut r = LocalReplica::counter(&root(), config()).unwrap();
+        let honest = r.bump(r.ticket(), 1).unwrap();
+        assert_eq!(r.receive(r.ticket(), honest).unwrap(), Admission::Duplicate);
+        assert_eq!(r.bump(r.ticket(), 2).unwrap().id.sequence, 2);
+        let state = r.state().clone();
+        let log = r.log().clone();
+        let allocation = r.allocation_bytes();
+        let received = r.receive(r.ticket(), h1_record(u64::MAX));
+        let next = r.bump(r.ticket(), 3);
+        std::println!("H1.local receive={received:?} next={next:?}");
+        assert!(matches!(received, Err(LocalError::PeerWriterAhead)));
+        assert_eq!(r.state(), &state);
+        assert_eq!(r.log(), &log);
+        assert_eq!(r.allocation_bytes(), allocation);
+        assert!(matches!(
+            r.bump(r.ticket(), 3),
+            Err(LocalError::PeerWriterAhead)
+        ));
+    }
+    #[test]
+    fn h1_durable_peer_sequence_refused_after_restart() {
+        let root = root();
+        let mut r = DurableReplica::counter(&root, config()).unwrap();
+        let honest = r.bump(r.ticket(), 1).unwrap();
+        let path = transaction_path(&root, config());
+        let bytes = fs::read(&path).unwrap();
+        assert!(matches!(
+            r.receive(r.ticket(), h1_record(u64::MAX)),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        assert!(matches!(
+            r.bump(r.ticket(), 2),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        drop(r);
+        let mut r = DurableReplica::restart_counter(&root, config()).unwrap();
+        // The stop is volatile: ordinary restart still continues at high-water + 1.
+        assert_eq!(r.bump(r.ticket(), 2).unwrap().id.sequence, 2);
+        assert_eq!(r.receive(r.ticket(), honest).unwrap(), Admission::Duplicate);
+        let before = fs::read(&path).unwrap();
+        // Sync re-detects the same forged record and stops this new session.
+        assert!(matches!(
+            r.receive(r.ticket(), h1_record(u64::MAX)),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        assert!(matches!(
+            r.bump(r.ticket(), 3),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+    #[test]
+    fn h1_second_order_boundaries_and_complete_log_receive() {
+        for sequence in [2, u64::MAX] {
+            let root = root();
+            let mut r = DurableReplica::counter(&root, config()).unwrap();
+            let honest = r.bump(r.ticket(), 1).unwrap();
+            assert_eq!(
+                r.receive(r.ticket(), honest.clone()).unwrap(),
+                Admission::Duplicate
+            );
+            let path = transaction_path(&root, config());
+            let bytes = fs::read(&path).unwrap();
+            let state = r.state().clone();
+            let log = r.log().clone();
+            let allocation = r.allocation_bytes();
+            for _ in 0..2 {
+                assert!(matches!(
+                    r.receive(r.ticket(), h1_record(sequence)),
+                    Err(LocalError::PeerWriterAhead)
+                ));
+                assert_eq!(r.state(), &state);
+                assert_eq!(r.log(), &log);
+                assert_eq!(r.allocation_bytes(), allocation);
+                assert_eq!(fs::read(&path).unwrap(), bytes);
+            }
+            let ticket = r.renew(r.ticket()).unwrap();
+            assert!(matches!(
+                r.append(
+                    ticket,
+                    GCounterDelta {
+                        replica: 0,
+                        tally: 3
+                    }
+                ),
+                Err(LocalError::PeerWriterAhead)
+            ));
+            assert_eq!(r.receive(ticket, honest).unwrap(), Admission::Duplicate);
+            let remote = Record {
+                id: RecordId {
+                    replica: 1,
+                    sequence: u64::MAX,
+                },
+                delta: GCounterDelta {
+                    replica: 1,
+                    tally: 7,
+                },
+            };
+            assert_eq!(
+                r.receive(ticket, remote.clone()).unwrap(),
+                Admission::Accepted
+            );
+            assert_eq!(r.receive(ticket, remote).unwrap(), Admission::Duplicate);
+            assert_eq!(r.allocation_bytes(), allocation);
+            assert!(matches!(
+                r.bump(ticket, 3),
+                Err(LocalError::PeerWriterAhead)
+            ));
+        }
+        let mut r = LocalReplica::counter(&root(), config()).unwrap();
+        let mut incoming = EventLog::for_crdt(&GCounter::new(2));
+        assert_eq!(
+            incoming.insert_record(&GCounter::new(2), h1_record(u64::MAX)),
+            Admission::Accepted
+        );
+        // Local/DurableReplica expose single-record receive, not a batch merge.
+        // A complete transport log must decode then route every record to receive.
+        let decoded = EventLog::<GCounterDelta>::from_wire_bytes_for(
+            &incoming.to_wire_bytes().unwrap(),
+            r.state(),
+        )
+        .unwrap();
+        for record in decoded.records() {
+            assert!(matches!(
+                r.receive(r.ticket(), record.clone()),
+                Err(LocalError::PeerWriterAhead)
+            ));
+        }
+        assert!(matches!(
+            r.bump(r.ticket(), 1),
+            Err(LocalError::PeerWriterAhead)
+        ));
+    }
+    #[test]
+    fn h1_orset_local_actions_remain_stopped() {
+        let mut r = DurableReplica::utf8_set(&root(), config()).unwrap();
+        let element = String::from("honest");
+        r.add(r.ticket(), element.clone()).unwrap();
+        let ahead = Record {
+            id: RecordId {
+                replica: 0,
+                sequence: 2,
+            },
+            delta: OrSetDelta::Add {
+                element: String::from("lost"),
+                token: 4,
+            },
+        };
+        assert!(matches!(
+            r.receive(r.ticket(), ahead),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        assert!(matches!(
+            r.add(r.ticket(), String::from("next")),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        assert!(matches!(
+            r.remove(r.ticket(), &element),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        let mut r = LocalReplica::utf8_set(&root(), config()).unwrap();
+        let ahead = Record {
+            id: RecordId {
+                replica: 0,
+                sequence: 1,
+            },
+            delta: OrSetDelta::Add {
+                element: element.clone(),
+                token: 2,
+            },
+        };
+        assert!(matches!(
+            r.receive(r.ticket(), ahead),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        assert!(matches!(
+            r.add(r.ticket(), element.clone()),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        assert!(matches!(
+            r.remove(r.ticket(), &element),
+            Err(LocalError::PeerWriterAhead)
+        ));
+    }
+    #[test]
+    fn m3_restore_peer_return_never_reissues_id() {
+        let root = root();
+        let mut r = DurableReplica::counter(&root, config()).unwrap();
+        r.bump(r.ticket(), 1).unwrap();
+        let path = transaction_path(&root, config());
+        let backup = fs::read(&path).unwrap();
+        let lost = r.bump(r.ticket(), 2).unwrap();
+        drop(r);
+        fs::write(&path, &backup).unwrap();
+        let mut r = DurableReplica::restart_counter(&root, config()).unwrap();
+        assert!(matches!(
+            r.receive(r.ticket(), lost.clone()),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        let before = fs::read(&path).unwrap();
+        assert!(
+            matches!(r.bump(r.ticket(), 3), Err(LocalError::PeerWriterAhead)),
+            "restored writer must stop before reissuing {:?}",
+            lost.id
+        );
+        assert_eq!(before, backup);
+        assert_eq!(fs::read(&path).unwrap(), backup);
+    }
     #[test]
     fn durable_orset_zero_sequence_remove_refused_on_receive_and_restart() {
         let root = root();
@@ -1371,6 +1667,111 @@ mod durable_tests {
         assert!(matches!(pncounter, LocalError::Refused));
         assert_eq!(pncounter.to_string(), expected);
     }
+    #[test]
+    fn counter_width_constructor_boundaries() {
+        for writers in [0, 4096, 4097] {
+            let config = WriterConfig { writers, writer: 0 };
+            let local = LocalReplica::counter(&root(), config);
+            let durable_root = root();
+            let durable = DurableReplica::counter(&durable_root, config);
+            if writers == 4097 {
+                assert!(matches!(
+                    local,
+                    Err(LocalError::CounterWidth(
+                        crate::CoordinateError::ReplicaLimitExceeded {
+                            requested: 4097,
+                            maximum: 4096
+                        }
+                    ))
+                ));
+                assert!(matches!(durable, Err(LocalError::CounterWidth(_))));
+                assert!(matches!(
+                    DurableReplica::restart_counter(&durable_root, config),
+                    Err(LocalError::CounterWidth(_))
+                ));
+            } else if writers == 0 {
+                assert!(matches!(local, Err(LocalError::Configuration)));
+                assert!(matches!(durable, Err(LocalError::Configuration)));
+            } else {
+                assert_eq!(local.unwrap().state().len(), 4096);
+                drop(durable.unwrap());
+                assert_eq!(
+                    DurableReplica::restart_counter(&durable_root, config)
+                        .unwrap()
+                        .state()
+                        .len(),
+                    4096
+                );
+                assert_eq!(
+                    DurableReplica::restart_counter_from_store(&durable_root, 0)
+                        .unwrap()
+                        .state()
+                        .len(),
+                    4096
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn counter_width_restart_is_named_and_preserves_store() {
+        for writers in [4097, usize::MAX as u64] {
+            let root = root();
+            let config = WriterConfig { writers, writer: 0 };
+            // Match the pre-cap fresh log shape through the product encoder.
+            let log = EventLog::<GCounterDelta>::with_replica_count(writers as usize);
+            let mut transaction = [
+                writers.to_le_bytes(),
+                0u64.to_le_bytes(),
+                0u64.to_le_bytes(),
+            ]
+            .concat();
+            transaction.extend(log.to_wire_bytes().unwrap());
+            let fence = [
+                writers.to_le_bytes(),
+                0u64.to_le_bytes(),
+                1u64.to_le_bytes(),
+            ]
+            .concat();
+            fs::write(transaction_path(&root, config), &transaction).unwrap();
+            let fence_path = root.join("writer-0.fence");
+            fs::write(&fence_path, &fence).unwrap();
+            for _ in 0..2 {
+                let error = DurableReplica::restart_counter_from_store(&root, 0)
+                    .err()
+                    .unwrap();
+                assert!(
+                    matches!(error, LocalError::CounterWidth(crate::CoordinateError::ReplicaLimitExceeded { requested, maximum: 4096 }) if requested == writers as usize)
+                );
+                let message = error.to_string();
+                assert!(
+                    message.contains(&writers.to_string()) && message.contains("4096"),
+                    "{message}"
+                );
+                assert_eq!(
+                    fs::read(transaction_path(&root, config)).unwrap(),
+                    transaction
+                );
+                assert_eq!(fs::read(&fence_path).unwrap(), fence);
+            }
+            assert!(matches!(
+                DurableReplica::restart_counter(
+                    &root,
+                    WriterConfig {
+                        writers: 2,
+                        writer: 0
+                    }
+                ),
+                Err(LocalError::Configuration)
+            ));
+            assert_eq!(
+                fs::read(transaction_path(&root, config)).unwrap(),
+                transaction
+            );
+            assert_eq!(fs::read(&fence_path).unwrap(), fence);
+        }
+    }
+
     #[test]
     fn restart_counter_from_store_replays_without_writer_count() {
         let root = root();
@@ -1825,7 +2226,7 @@ mod durable_tests {
         assert_eq!(r.last_sequence, 128);
         assert_eq!(r.state().0, 128);
         assert_eq!(
-            r.admit_committed(r.ticket(), record(129, 129), false, |log, sequence| {
+            r.admit_committed(r.ticket(), record(129, 129), true, |log, sequence| {
                 assert_eq!(log.records().len(), 129);
                 assert_eq!(sequence, 129);
                 Ok(())
@@ -1836,7 +2237,7 @@ mod durable_tests {
         assert_eq!(clones.get(), 1, "accepted writes must not clone history");
         let before = r.log.version().clone();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = r.admit_committed(r.ticket(), record(130, 130), false, |_, _| {
+            let _ = r.admit_committed(r.ticket(), record(130, 130), true, |_, _| {
                 panic!("commit unwind")
             });
         }));

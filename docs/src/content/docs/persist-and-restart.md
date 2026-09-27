@@ -3,6 +3,8 @@ title: Persist and restart — main (unreleased)
 description: Add SafeMesh to a Rust or TypeScript program, save an edit, restart and sync a second replica.
 ---
 
+Restoring a store file from a backup requires opening it with a new writer identity before it writes, because reopening under the old identity clears the in-memory write stop and the restore is not detected until a peer returns an own-ID record above the durable high-water.
+
 **v0 scope:** G-Counter and OR-Set are the **v0 focus** types, within the [language-path limits](/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
 
 
