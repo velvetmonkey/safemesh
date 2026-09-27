@@ -1560,16 +1560,30 @@ fn orset_utf8_state_rejects_duplicate_pairs_without_changing_receiver() {
     let mut receiver = OrSet::<String, u64>::new();
     receiver.add("preserved".into(), 41);
     let before = receiver.clone();
-    for entries in [
-        vec![("repeat", 7), ("repeat", 7)],
-        vec![("repeat", 7), ("other", 9), ("repeat", 7)],
-        vec![("🦀", u64::MAX), ("🦀", u64::MAX)],
+    for (entries, expected) in [
+        (
+            vec![("repeat", 7), ("repeat", 7)],
+            WireError::DuplicateEntry,
+        ),
+        // This list descends before its non-adjacent repetition is reached.
+        (
+            vec![("repeat", 7), ("other", 9), ("repeat", 7)],
+            WireError::NonCanonicalOrder,
+        ),
+        (
+            vec![("other", 9), ("repeat", 7), ("repeat", 7)],
+            WireError::DuplicateEntry,
+        ),
+        (
+            vec![("🦀", u64::MAX), ("🦀", u64::MAX)],
+            WireError::DuplicateEntry,
+        ),
     ] {
         let decoded = OrSet::<String, u64>::from_wire_bytes(&frame(&entries));
         if let Ok(state) = &decoded {
             receiver.merge(state);
         }
-        assert_eq!(decoded, Err(WireError::DuplicateEntry), "{entries:?}");
+        assert_eq!(decoded, Err(expected), "{entries:?}");
         assert_eq!(receiver, before);
     }
 
@@ -1600,5 +1614,199 @@ proptest::proptest! {
         let mut b = OrSet::new();
         b.add(right.clone(), 7);
         proptest::prop_assert_eq!(a.to_wire_bytes().unwrap() == b.to_wire_bytes().unwrap(), left == right);
+    }
+}
+
+// Mutate one list in the encoder's output without changing framing or other lists.
+fn canonical_lists<T: WireEncode>(state: T, widths: &[usize]) -> (Vec<u8>, Vec<(usize, usize)>) {
+    let bytes = state.to_wire_bytes().unwrap();
+    let mut offset = 1;
+    let mut lists = Vec::new();
+    for &width in widths {
+        let count = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+        assert!(count >= 3);
+        offset += 4;
+        lists.push((offset, width));
+        offset += count * width;
+    }
+    assert_eq!(offset, bytes.len());
+    (bytes, lists)
+}
+macro_rules! canonical_cases {
+    ($order:ident,$duplicate:ident,$control:ident,$ty:ty,$state:expr,$widths:expr,$dup:expr) => {
+        #[test]
+        fn $order() {
+            let (bytes, lists) = canonical_lists($state, $widths);
+            for (offset, width) in lists {
+                let mut input = bytes.clone();
+                for i in 0..width {
+                    input.swap(offset + i, offset + width + i);
+                }
+                input[offset - 4..offset].copy_from_slice(&2_u32.to_le_bytes());
+                input.drain(offset + 2 * width..offset + 3 * width);
+                let error = <$ty>::from_wire_bytes(&input).unwrap_err();
+                assert_eq!(
+                    format!("{error:?}"),
+                    "NonCanonicalOrder",
+                    "descending list at {offset}"
+                );
+            }
+        }
+        #[test]
+        fn $duplicate() {
+            let (bytes, lists) = canonical_lists($state, $widths);
+            for (offset, width) in lists {
+                let mut input = bytes.clone();
+                input.copy_within(offset..offset + width, offset + width);
+                input[offset - 4..offset].copy_from_slice(&2_u32.to_le_bytes());
+                input.drain(offset + 2 * width..offset + 3 * width);
+                let error = <$ty>::from_wire_bytes(&input).unwrap_err();
+                assert_eq!(format!("{error:?}"), $dup, "duplicate list at {offset}");
+            }
+        }
+        #[test]
+        fn $control() {
+            roundtrip::<$ty>($state);
+        }
+    };
+}
+fn canonical_gset_state() -> GSet<u64> {
+    let mut s = GSet::new();
+    for i in [3, 1, 2] {
+        s.insert(i);
+    }
+    s
+}
+canonical_cases!(
+    canonical_gset_order,
+    canonical_gset_duplicate,
+    canonical_gset_control,
+    GSet<u64>,
+    canonical_gset_state(),
+    &[8],
+    "DuplicateEntry"
+);
+fn canonical_orset_state() -> OrSet<u64, u64> {
+    let mut s = OrSet::new();
+    for i in [3, 1, 2] {
+        s.add(i, i);
+    }
+    s.apply_remove([6, 4, 5]);
+    s
+}
+canonical_cases!(canonical_orset_order,canonical_orset_duplicate,canonical_orset_control,OrSet<u64,u64>,canonical_orset_state(),&[16,8],"DuplicateEntry");
+fn canonical_string_state() -> OrSet<String, u64> {
+    let mut s = OrSet::new();
+    for i in [3, 1, 2] {
+        s.add(i.to_string(), i);
+    }
+    s.apply_remove([6, 4, 5]);
+    s
+}
+canonical_cases!(canonical_string_order,canonical_string_duplicate,canonical_string_control,OrSet<String,u64>,canonical_string_state(),&[13,8],"DuplicateEntry");
+fn canonical_rga_state() -> Rga<u64, u64> {
+    let mut s = Rga::new();
+    for i in [3, 1, 2] {
+        s.insert(i, i);
+    }
+    for i in [6, 4, 5] {
+        s.delete(i);
+    }
+    s
+}
+canonical_cases!(canonical_rga_order,canonical_rga_duplicate,canonical_rga_control,Rga<u64,u64>,canonical_rga_state(),&[16,8],"DuplicateEntry");
+fn canonical_flag_state() -> EnableWinsFlag<u64> {
+    let mut s = EnableWinsFlag::new();
+    for i in [3, 1, 2] {
+        s.enable(i);
+    }
+    s.disable([6, 4, 5]);
+    s
+}
+canonical_cases!(
+    canonical_flag_order,
+    canonical_flag_duplicate,
+    canonical_flag_control,
+    EnableWinsFlag<u64>,
+    canonical_flag_state(),
+    &[8, 8],
+    "DuplicateEntry"
+);
+fn canonical_map_state() -> LwwMap<u64, u64> {
+    let mut s = LwwMap::new();
+    for i in [3, 1, 2] {
+        s.set(i, 1, 1, i);
+    }
+    for i in [6, 4, 5] {
+        s.remove(i, 1, 1);
+    }
+    s
+}
+canonical_cases!(canonical_map_order,canonical_map_duplicate,canonical_map_control,LwwMap<u64,u64>,canonical_map_state(),&[32,24],"DuplicateEntry");
+fn canonical_version_state() -> safemesh_crdt::VersionVector {
+    safemesh_crdt::VersionVector::from_peer_prefixes(
+        &[(3, 1), (1, 2), (2, 3)].into_iter().collect(),
+        &[6, 4, 5].into_iter().collect(),
+    )
+    .unwrap()
+}
+canonical_cases!(
+    canonical_version_order,
+    canonical_version_duplicate,
+    canonical_version_control,
+    safemesh_crdt::VersionVector,
+    canonical_version_state(),
+    &[16, 8],
+    "NonCanonicalVersionVector"
+);
+
+#[test]
+fn canonical_register_control() {
+    roundtrip(LwwRegister::<u64>::new());
+    let mut state = LwwRegister::new();
+    for i in [3, 1, 2] {
+        state.set(i, i, i);
+    }
+    roundtrip(state.clone());
+    let mut bytes = state.to_wire_bytes().unwrap();
+    bytes.extend_from_within(2..);
+    assert_eq!(
+        LwwRegister::<u64>::from_wire_bytes(&bytes),
+        Err(WireError::TrailingBytes)
+    );
+}
+
+#[test]
+fn canonical_pair_order_uses_both_fields_and_keeps_tombstoned_entries() {
+    let mut rga = Rga::new();
+    for value in [9, 3, 7] {
+        rga.insert(1, value);
+    }
+    rga.delete(1);
+    roundtrip(rga.clone());
+    let mut bytes = rga.to_wire_bytes().unwrap();
+    let (offset, width) = (5, 16);
+    for i in 0..width {
+        bytes.swap(offset + i, offset + width + i);
+    }
+    assert_eq!(
+        Rga::<u64, u64>::from_wire_bytes(&bytes),
+        Err(WireError::NonCanonicalOrder)
+    );
+}
+
+#[test]
+fn canonical_map_keys_cannot_repeat_with_different_payloads() {
+    let mut state = canonical_map_state();
+    state.set(3, 10, 20, 30);
+    state.remove(6, 10, 20);
+    let (bytes, lists) = canonical_lists(state, &[32, 24]);
+    for (offset, width) in lists {
+        let mut input = bytes.clone();
+        input.copy_within(offset..offset + 8, offset + width);
+        assert_eq!(
+            LwwMap::<u64, u64>::from_wire_bytes(&input),
+            Err(WireError::DuplicateEntry)
+        );
     }
 }
