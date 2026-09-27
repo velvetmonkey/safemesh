@@ -210,6 +210,7 @@ impl VersionVector {
     }
 
     /// Advance this prefix only when `id` is the next contiguous sequence.
+    /// A missing sequence keeps later records outside the prefix until it arrives.
     ///
     /// Use `EventLog` to ingest out-of-order records; the log remembers gaps
     /// and advances this vector once the prefix is complete.
@@ -221,6 +222,7 @@ impl VersionVector {
         }
     }
 
+    /// Return true for an acknowledged zero or a sequence in the writer's contiguous prefix.
     pub fn includes(&self, id: RecordId) -> bool {
         if id.sequence == 0 {
             self.zero_replicas.contains(&id.replica)

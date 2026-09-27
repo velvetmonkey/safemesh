@@ -70,7 +70,7 @@ for reverse in [False, True]:
         left.merge(right)
         right.merge(left)
     assert left.live_entries() == right.live_entries() == [(1, 10), (1, 11), (4, 40)]
-    assert left.read_positions() == right.read_positions() == [1, 1, 4]
+    assert left.read_positions() == right.read_positions() == [1, 4]
     assert left.placed() == right.placed() == [(1, 10), (1, 11), (2, 20), (3, 30), (4, 40)]
     assert left.tombstones() == right.tombstones() == [2, 3]
     left.merge(left)

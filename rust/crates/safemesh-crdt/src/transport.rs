@@ -231,6 +231,8 @@ where
 /// acknowledgement. Callers must inspect the verdicts, especially Invalid and
 /// Collision. This helper requires access to the receiving replica; network
 /// adapters must return equivalent admission feedback from the remote endpoint.
+/// A Collision also raises the receiver's collision alarm; send its
+/// [`Replica::collision_report_bytes`] back so the offerer raises it too.
 #[must_use = "inspect sync admissions for Invalid and Collision refusals"]
 pub fn anti_entropy<C, T>(
     transport: &mut T,
