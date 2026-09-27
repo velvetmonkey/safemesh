@@ -779,7 +779,7 @@ fn walks_as_tag02_frame(cursor: &WireCursor<'_>) -> bool {
 
 // After the 0x03 tag: check the length pair, then the CRC over both length
 // fields and the body, and return the body without decoding any of it.
-fn read_checked_body<'a>(cursor: &mut WireCursor<'a>) -> Result<&'a [u8], WireError> {
+pub(super) fn read_checked_body<'a>(cursor: &mut WireCursor<'a>) -> Result<&'a [u8], WireError> {
     let start = cursor.offset;
     let len = cursor.read_u32()?;
     if cursor.read_u32()? != !len {

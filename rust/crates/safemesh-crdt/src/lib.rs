@@ -76,6 +76,9 @@ pub use event_log::{Admission, AppendError, EventLog};
 mod replica;
 pub use replica::{Replica, ReplicaError};
 
+mod collision;
+pub use collision::{CollisionReport, CollisionVerdict, RecordCollision};
+
 mod transport;
 pub use transport::{
     anti_entropy, queue_anti_entropy, InMemoryTransport, TransportAdapter, TransportEnvelope,
