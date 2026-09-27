@@ -250,14 +250,16 @@ fn checked_index(value: JsValue, name: &str) -> Result<usize, JsValue> {
     Ok(number as usize)
 }
 
-// Vec<u64> cannot address more than isize::MAX bytes on wasm32. Reject
-// impossible capacities before allocation can trap and poison the instance.
+// All exported counter constructors share the core's bounded domain.
 fn checked_replica_count(value: JsValue) -> Result<usize, JsValue> {
     let replicas = checked_index(value, "replicas")?;
-    if replicas > i32::MAX as usize / std::mem::size_of::<u64>() {
+    if replicas > GCounter::MAX_REPLICAS {
         return Err(safe_mesh_error(
             2,
-            "replicas exceeds wasm32 counter capacity",
+            &format!(
+                "replicas {replicas} exceeds maximum {}",
+                GCounter::MAX_REPLICAS
+            ),
         ));
     }
     Ok(replicas)

@@ -155,6 +155,43 @@ raises(ValueError, lambda: peer.merge_record_bytes(add),
 assert peer.elements() == ['radio', 'water']
 del restored, peer
 
+# Public lifecycle: claims depend only on author, and last-reference drop on
+# another thread releases the process-wide claim for both creation and import.
+import threading
+import queue
+
+owner = sm.StringOrSetReplica.create_allocated(7010, 7000)
+identity = owner.export_identity()
+for writers in [7010, 7011]:
+    raises(ValueError, lambda: sm.StringOrSetReplica.create_allocated(writers, 7000),
+           'author already has a live allocated writer')
+raises(ValueError, lambda: sm.StringOrSetReplica.import_identity(identity),
+       'author already has a live allocated writer')
+other = sm.StringOrSetReplica.create_allocated(7010, 7001)
+assert other.append_allocated_add('peer')
+
+handoff = queue.Queue()
+handoff.put(owner)
+del owner
+
+def drop_on_worker():
+    last_reference = handoff.get()
+    del last_reference
+
+worker = threading.Thread(target=drop_on_worker)
+worker.start()
+worker.join()
+assert handoff.empty()
+replacement = sm.StringOrSetReplica.create_allocated(7010, 7000)
+raises(ValueError, lambda: sm.StringOrSetReplica.import_identity(identity),
+       'author already has a live allocated writer')
+del replacement
+restored = sm.StringOrSetReplica.import_identity(identity)
+raises(ValueError, lambda: sm.StringOrSetReplica.create_allocated(7010, 7000),
+       'author already has a live allocated writer')
+assert restored.append_allocated_add('restored')
+del restored, other
+
 # REPLICA_DIFFERENTIAL
 # Frozen from untouched product main 6cfcee7; never regenerate from the migration.
 import json
