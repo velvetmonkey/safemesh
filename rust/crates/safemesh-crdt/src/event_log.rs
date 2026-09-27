@@ -42,7 +42,8 @@ impl core::error::Error for AppendError {
 }
 
 /// Append-only, deduplicating event log for CRDT deltas.
-/// Equality compares log data, excluding the in-memory first-admission binding flag.
+/// Equality compares log data, excluding the in-memory first-admission binding
+/// flag and the in-memory collision register.
 #[derive(Clone, Debug)]
 pub struct EventLog<D> {
     pub(super) replica_count: Option<usize>,
@@ -50,10 +51,14 @@ pub struct EventLog<D> {
     pub(super) records: Vec<Record<D>>,
     pub(super) seen: BTreeMap<RecordId, usize>,
     pub(super) version: VersionVector,
+    // Held IDs a peer holds with a different payload, with the first such
+    // payload seen. At most one entry per admitted record; never encoded.
+    pub(super) collisions: BTreeMap<RecordId, D>,
 }
 
 // Binding an empty unbounded log during decode must not change payload equality:
 // logs can themselves be nested in records and compared for deduplication.
+// The collision register is an alarm about peers, not log data.
 impl<D: PartialEq> PartialEq for EventLog<D> {
     fn eq(&self, other: &Self) -> bool {
         self.replica_count == other.replica_count
@@ -75,6 +80,7 @@ impl<D> EventLog<D> {
             records: Vec::new(),
             seen: BTreeMap::new(),
             version: VersionVector::new(),
+            collisions: BTreeMap::new(),
         }
     }
 
@@ -169,6 +175,8 @@ impl<D> EventLog<D> {
     /// Only Accepted invokes `apply`, with the same carrier used for validation.
     /// An invalid fresh record leaves the log, version, and carrier unchanged.
     /// Duplicate/Collision retain their identity verdicts, but also run validation.
+    /// A Collision also raises the collision alarm for the ID
+    /// ([`Self::collisions`]); log, version and carrier stay unchanged.
     /// The callback must be infallible and use the same delta interpretation as
     /// replay. This is an in-memory transition, not a crash-durability guarantee.
     #[must_use]
@@ -180,6 +188,7 @@ impl<D> EventLog<D> {
     {
         let outcome = self.admission(state, &record);
         if outcome != Admission::Accepted {
+            self.raise_on_collision(outcome, record);
             return outcome;
         }
         self.bind_shape(state);
@@ -256,6 +265,7 @@ impl<D> EventLog<D> {
     }
 
     /// Admit without applying; `state` must be the carrier used for later replay.
+    /// A Collision raises the collision alarm, as in [`Self::admit_with`].
     pub fn insert_record<C: Crdt<Delta = D>>(&mut self, state: &C, record: Record<D>) -> Admission
     where
         D: PartialEq,
@@ -264,8 +274,17 @@ impl<D> EventLog<D> {
         if outcome == Admission::Accepted {
             self.bind_shape(state);
             self.commit_record(record);
+        } else {
+            self.raise_on_collision(outcome, record);
         }
         outcome
+    }
+
+    // Keep the first differing payload offered for a held ID as the witness.
+    fn raise_on_collision(&mut self, outcome: Admission, record: Record<D>) {
+        if outcome == Admission::Collision {
+            self.collisions.entry(record.id).or_insert(record.delta);
+        }
     }
 
     fn advance_contiguous_version(&mut self, replica: u64) {
@@ -285,6 +304,7 @@ impl<D> EventLog<D> {
 impl<D: Clone> EventLog<D> {
     /// Return admitted records outside the peer's positive contiguous prefixes
     /// and independently acknowledged sequence-zero records.
+    /// By design, a permanent gap offers all later records from that writer on every exchange; deliver the missing record.
     pub fn since(&self, version: &VersionVector) -> Vec<Record<D>> {
         self.records
             .iter()
