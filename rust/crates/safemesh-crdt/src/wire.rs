@@ -68,9 +68,11 @@ impl VersionVector {
         for _ in 0..author_count {
             let replica = cursor.read_u64()?;
             let prefix = cursor.read_u64()?;
-            if prefix == 0 || entries.insert(replica, prefix).is_some() {
+            if prefix == 0 || entries.contains_key(&replica) {
                 return Err(WireError::NonCanonicalVersionVector);
             }
+            check_state_entry(entries.last_key_value().map(|(key, _)| key), &replica)?;
+            entries.insert(replica, prefix);
         }
         let zero_count = cursor.read_len()?;
         if let Some(max_zero_replicas) = limits.max_zero_replicas {
@@ -80,9 +82,12 @@ impl VersionVector {
         }
         let mut zeros = BTreeSet::new();
         for _ in 0..zero_count {
-            if !zeros.insert(cursor.read_u64()?) {
+            let replica = cursor.read_u64()?;
+            if zeros.contains(&replica) {
                 return Err(WireError::NonCanonicalVersionVector);
             }
+            check_state_entry(zeros.last(), &replica)?;
+            zeros.insert(replica);
         }
         Self::from_peer_prefixes_with_limits(&entries, &zeros, limits).map_err(
             |error| match error {
@@ -185,6 +190,18 @@ impl WireDecode for GSet<u64> {
     }
 }
 
+// Validate state entries before insertion can erase non-canonical input.
+fn check_state_entry<T: Ord>(previous: Option<&T>, entry: &T) -> Result<(), WireError> {
+    if let Some(previous) = previous {
+        match previous.cmp(entry) {
+            core::cmp::Ordering::Equal => return Err(WireError::DuplicateEntry),
+            core::cmp::Ordering::Greater => return Err(WireError::NonCanonicalOrder),
+            core::cmp::Ordering::Less => {}
+        }
+    }
+    Ok(())
+}
+
 fn check_collection_count(count: usize, limits: CollectionLimits) -> Result<(), WireError> {
     if let Some(max_elements) = limits.max_elements {
         if count > max_elements {
@@ -218,7 +235,9 @@ impl GSet<u64> {
         check_collection_count(count, limits)?;
         let mut set = GSet::new();
         for _ in 0..count {
-            set.insert(cursor.read_u64()?);
+            let element = cursor.read_u64()?;
+            check_state_entry(set.elements.last(), &element)?;
+            set.insert(element);
         }
         Ok(set)
     }
@@ -362,13 +381,17 @@ impl WireDecode for OrSet<u64, u64> {
         for _ in 0..count {
             let element = cursor.read_u64()?;
             let token = cursor.read_u64()?;
-            set.add(element, token);
+            let entry = (element, token);
+            check_state_entry(set.adds.last(), &entry)?;
+            set.add(entry.0, entry.1);
         }
         let mut tombstones = Vec::new();
         let count = cursor.read_len()?;
         check_collection_count(count, limits)?;
         for _ in 0..count {
-            tombstones.push(cursor.read_u64()?);
+            let token = cursor.read_u64()?;
+            check_state_entry(tombstones.last(), &token)?;
+            tombstones.push(token);
         }
         set.apply_remove(tombstones);
         Ok(set)
@@ -410,7 +433,9 @@ impl WireDecode for OrSet<String, u64> {
                 .map_err(|_| WireError::InvalidUtf8)?;
             let element = String::from(element);
             let token = cursor.read_u64()?;
-            if !set.adds.insert((element, token)) {
+            let entry = (element, token);
+            check_state_entry(set.adds.last(), &entry)?;
+            if !set.adds.insert(entry) {
                 return Err(WireError::DuplicateEntry);
             }
         }
@@ -418,7 +443,9 @@ impl WireDecode for OrSet<String, u64> {
         let count = cursor.read_len()?;
         check_collection_count(count, limits)?;
         for _ in 0..count {
-            tombstones.push(cursor.read_u64()?);
+            let token = cursor.read_u64()?;
+            check_state_entry(tombstones.last(), &token)?;
+            tombstones.push(token);
         }
         set.apply_remove(tombstones);
         Ok(set)
@@ -511,12 +538,15 @@ impl Rga<u64, u64> {
         for _ in 0..placed_count {
             let position = cursor.read_u64()?;
             let value = cursor.read_u64()?;
+            check_state_entry(rga.placed.last(), &(position, value))?;
             rga.insert(position, value);
         }
         let tombstone_count = cursor.read_len()?;
         check_collection_count(tombstone_count, limits)?;
         for _ in 0..tombstone_count {
-            rga.delete(cursor.read_u64()?);
+            let position = cursor.read_u64()?;
+            check_state_entry(rga.tombstones.last(), &position)?;
+            rga.delete(position);
         }
         Ok(rga)
     }
@@ -747,12 +777,16 @@ impl WireDecode for EnableWinsFlag<u64> {
         check_collection_count(enable_len, limits)?;
         let mut flag = EnableWinsFlag::new();
         for _ in 0..enable_len {
-            flag.enable(cursor.read_u64()?);
+            let token = cursor.read_u64()?;
+            check_state_entry(flag.enables.last(), &token)?;
+            flag.enable(token);
         }
         let tombstone_len = cursor.read_len()?;
         check_collection_count(tombstone_len, limits)?;
         for _ in 0..tombstone_len {
-            flag.disable([cursor.read_u64()?]);
+            let token = cursor.read_u64()?;
+            check_state_entry(flag.tombstones.last(), &token)?;
+            flag.disable([token]);
         }
         Ok(flag)
     }
@@ -842,8 +876,10 @@ impl WireDecode for LwwMap<u64, u64> {
         check_collection_count(entry_len, limits)?;
         let mut map = LwwMap::new();
         for _ in 0..entry_len {
+            let key = cursor.read_u64()?;
+            check_state_entry(map.entries.last_key_value().map(|(key, _)| key), &key)?;
             map.set(
-                cursor.read_u64()?,
+                key,
                 cursor.read_u64()?,
                 cursor.read_u64()?,
                 cursor.read_u64()?,
@@ -852,7 +888,9 @@ impl WireDecode for LwwMap<u64, u64> {
         let removal_len = cursor.read_len()?;
         check_collection_count(removal_len, limits)?;
         for _ in 0..removal_len {
-            map.remove(cursor.read_u64()?, cursor.read_u64()?, cursor.read_u64()?);
+            let key = cursor.read_u64()?;
+            check_state_entry(map.removals.last_key_value().map(|(key, _)| key), &key)?;
+            map.remove(key, cursor.read_u64()?, cursor.read_u64()?);
         }
         Ok(map)
     }

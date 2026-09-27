@@ -26,3 +26,5 @@ Rustdoc provides a separate item search for Rust items.
 Rustdoc also provides navigation and source links. The “SafeMesh reference guide” link returns here.
 External Rust documentation references are displayed as text with their original URL in a tooltip, so browsing and checking this reference does not require a third-party documentation host.
 Rustdoc’s “Stable since Rust version” tooltips refer to standard-library API versions; they do not establish SafeMesh support.
+
+State wire entry lists must be strictly ascending and duplicate-free in encoder order (map keys, set elements or full pairs, including tombstones), with violations refused as `NonCanonicalOrder` or `DuplicateEntry` (`NonCanonicalVersionVector` for version-vector duplicates); delta lists retain their original order and duplicates.
