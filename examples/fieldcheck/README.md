@@ -42,6 +42,8 @@ printed address to the other device's `--connect` flag.
 `--listen` and `--connect` are start-time flags, not prompt commands. To make
 opposing offline inspections and then reconnect, start each CLI without its
 network flag, using `--writer 1` for device-b and `--writer 0` for device-a.
+If the paired CLIs are still running, enter `quit` at both prompts first.
+
 Terminal B:
 
 ```sh
