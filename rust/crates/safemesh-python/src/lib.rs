@@ -89,7 +89,8 @@ fn record_decode_error(error: safemesh_crdt::WireError) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(format!("failed to decode record: {error}"))
 }
 
-fn event_log_decode_error(error: safemesh_crdt::WireError) -> PyErr {
+// Counter ownership covers coordinates; other carriers name the record writer.
+fn event_log_decode_error(error: safemesh_crdt::WireError, counter_log: bool) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(match error {
         safemesh_crdt::WireError::RecordCollision => "record ID collision".to_owned(),
         safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
@@ -97,9 +98,12 @@ fn event_log_decode_error(error: safemesh_crdt::WireError) -> PyErr {
         }
         safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch".to_owned(),
         safemesh_crdt::WireError::MissingShape => "event log missing shape".to_owned(),
-        safemesh_crdt::WireError::OwnershipViolation => {
-            "counter coordinate out of range or not owned by record author".to_owned()
+        safemesh_crdt::WireError::OwnershipViolation => if counter_log {
+            "counter coordinate out of range or not owned by record author"
+        } else {
+            "writer replica does not match record author"
         }
+        .to_owned(),
         cause @ (safemesh_crdt::WireError::ZeroSequenceAdd { .. }
         | safemesh_crdt::WireError::ZeroSequenceRemove { .. }) => cause.to_string(),
         cause => format!("failed to decode event log: {cause}"),
@@ -125,7 +129,7 @@ fn python_zero_sequence_remove_mapping_keeps_core_cause() {
         safemesh_crdt::WireError::ZeroSequenceRemove { replica: 1 }
     );
     for error in [
-        event_log_decode_error(cause),
+        event_log_decode_error(cause, false),
         record_verdict(safemesh_crdt::Admission::Invalid(cause)).unwrap_err(),
     ] {
         let text = error.to_string();
@@ -253,9 +257,9 @@ fn replica_report_error(error: ReplicaError) -> DecodeError {
     }
 }
 
-fn bounded_event_log_decode_error(error: DecodeError) -> PyErr {
+fn bounded_event_log_decode_error(error: DecodeError, counter_log: bool) -> PyErr {
     match error {
-        DecodeError::Wire(error) => event_log_decode_error(error),
+        DecodeError::Wire(error) => event_log_decode_error(error, counter_log),
         DecodeError::RecordLimitExceeded { max_records } => {
             pyo3::exceptions::PyValueError::new_err(format!(
                 "failed to decode event log: RecordLimitExceeded: {max_records}"
@@ -741,7 +745,7 @@ mod py_g_counter_replica_python {
             let log = self
                 .replica
                 .decode_log_bytes(bytes, limits)
-                .map_err(|error| bounded_event_log_decode_error(replica_log_error(error)))?;
+                .map_err(|error| bounded_event_log_decode_error(replica_log_error(error), true))?;
             if log.iter().any(|r| {
                 safemesh_crdt::ownership::check_counter_record(
                     self.replica.state().len(),
@@ -930,7 +934,7 @@ mod py_enable_wins_flag_replica_python {
                     &self.state,
                     limits,
                 )
-                .map_err(bounded_event_log_decode_error)?;
+                .map_err(|error| bounded_event_log_decode_error(error, false))?;
             Ok(log
                 .iter()
                 .cloned()
@@ -1114,7 +1118,7 @@ mod py_lww_map_replica_python {
                 &self.state,
                 limits,
             )
-            .map_err(bounded_event_log_decode_error)?;
+            .map_err(|error| bounded_event_log_decode_error(error, false))?;
             Ok(log
                 .iter()
                 .cloned()
@@ -1278,7 +1282,7 @@ mod py_lww_register_replica_python {
                 &self.state,
                 limits,
             )
-            .map_err(bounded_event_log_decode_error)?;
+            .map_err(|error| bounded_event_log_decode_error(error, false))?;
             Ok(log
                 .iter()
                 .cloned()
@@ -2336,7 +2340,7 @@ assert r.value() == 7
             let cause = safemesh_crdt::WireError::ZeroSequenceAdd { replica: 1 };
             for error in [
                 record_verdict(safemesh_crdt::Admission::Invalid(cause)).unwrap_err(),
-                event_log_decode_error(cause),
+                event_log_decode_error(cause, false),
             ] {
                 assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
                 assert_eq!(error.to_string(), format!("ValueError: {cause}"));
@@ -3048,6 +3052,7 @@ for make, append, read in [
             fn apply_delta(&mut self, _: D) {}
         }
         with_python(|py| {
+            let mut ownership_failures = Vec::new();
             macro_rules! check {
                 ($replica:expr, $delta:expr) => {{
                     let record = Record {
@@ -3069,15 +3074,24 @@ for make, append, read in [
                         incoming.insert_record(&unchecked, record),
                         safemesh_crdt::Admission::Accepted
                     );
-                    assert!(replica
+                    let error = replica
                         .merge_log_bytes(&incoming.to_wire_bytes().unwrap(), None)
-                        .is_err());
+                        .unwrap_err();
+                    if error.to_string()
+                        != "ValueError: writer replica does not match record author"
+                    {
+                        ownership_failures.push(format!(
+                            "{}: {}",
+                            std::any::type_name_of_val(&replica),
+                            error
+                        ));
+                    }
                     assert_eq!(replica.state, state);
                     assert_eq!(replica.log, log);
                     assert_eq!(replica.log.since(log.version()).len(), 0);
                 }};
             }
-            for foreign in [1, 99, u32::MAX as u64 + 1, u64::MAX] {
+            for foreign in [9, 1, 99, u32::MAX as u64 + 1, u64::MAX] {
                 check!(
                     PyLwwRegisterReplica::new(0),
                     LwwRegisterDelta {
@@ -3104,6 +3118,15 @@ for make, append, read in [
                     }
                 );
             }
+            println!(
+                "LWW_OWNERSHIP_TEXT_CASES=15 FAILURES={}",
+                ownership_failures.len()
+            );
+            assert_eq!(
+                ownership_failures,
+                Vec::<String>::new(),
+                "15 LWW ownership text cases"
+            );
             let mut writer = PyLwwRegisterReplica::new(0);
             writer.append_set(py, 1, 0, 7).unwrap();
             assert_eq!(writer.value_or(0), 7);

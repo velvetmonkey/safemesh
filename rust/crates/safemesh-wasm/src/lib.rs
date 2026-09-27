@@ -158,6 +158,9 @@ fn wire_decode_error(error: WireError, context: &str) -> JsValue {
             3,
             &format!("maxCollectionElements limit exceeded: {max_elements}"),
         ),
+        cause @ (WireError::DuplicateEntry | WireError::NonCanonicalOrder) => {
+            safe_mesh_error(1, &format!("{context}: {cause:?}: {cause}"))
+        }
         _ => safe_mesh_error(1, context),
     }
 }
@@ -180,11 +183,16 @@ fn decode_limits(value: Option<u32>, max_records: Option<u32>) -> DecodeLimits {
     }
 }
 
-fn event_log_decode_js_error(error: DecodeError) -> JsValue {
+// Counter ownership covers coordinates; other carriers name the record writer.
+fn event_log_decode_js_error(error: DecodeError, counter_log: bool) -> JsValue {
     match error {
         DecodeError::Wire(WireError::OwnershipViolation) => safe_mesh_error(
             2,
-            "counter coordinate out of range or not owned by record author",
+            if counter_log {
+                "counter coordinate out of range or not owned by record author"
+            } else {
+                "writer replica does not match record author"
+            },
         ),
         DecodeError::Wire(WireError::CollectionElementLimitExceeded { max_elements }) => {
             safe_mesh_error(
@@ -379,9 +387,9 @@ where
     Ok(bytes)
 }
 
-fn since_js_error(error: ReplicaError) -> JsValue {
+fn since_js_error(error: ReplicaError, counter_log: bool) -> JsValue {
     match error {
-        ReplicaError::LogDecode(error) => event_log_decode_js_error(error),
+        ReplicaError::LogDecode(error) => event_log_decode_js_error(error, counter_log),
         _ => safe_mesh_error(1, "failed to encode event log"),
     }
 }
@@ -389,7 +397,7 @@ fn since_js_error(error: ReplicaError) -> JsValue {
 /// Record listing and since batches for a replica class with an event log.
 /// `$parts` names the replica's core state and log.
 macro_rules! record_exchange_methods {
-    ($class:ty, |$this:ident| $parts:expr) => {
+    ($class:ty, $counter_log:expr, |$this:ident| $parts:expr) => {
         #[wasm_bindgen]
         impl $class {
             /// Every record ID in log order, as `[author, sequence, ...]` pairs.
@@ -430,27 +438,36 @@ macro_rules! record_exchange_methods {
                     &peer,
                     decode_limits(max_collection_elements, maxRecords),
                 )
-                .map_err(since_js_error)
+                .map_err(|error| since_js_error(error, $counter_log))
             }
         }
     };
 }
 
-record_exchange_methods!(SafeMeshGCounterReplica, |this| (
+record_exchange_methods!(SafeMeshGCounterReplica, true, |this| (
     this.replica.state(),
     this.replica.log()
 ));
-record_exchange_methods!(SafeMeshEnableWinsFlagReplica, |this| (
+record_exchange_methods!(SafeMeshEnableWinsFlagReplica, false, |this| (
     &this.state,
     &this.log
 ));
-record_exchange_methods!(SafeMeshLwwMapReplica, |this| (&this.state, &this.log));
-record_exchange_methods!(SafeMeshLwwRegisterReplica, |this| (&this.state, &this.log));
-record_exchange_methods!(SafeMeshStringOrSetReplica, |this| (
+record_exchange_methods!(SafeMeshLwwMapReplica, false, |this| (
+    &this.state,
+    &this.log
+));
+record_exchange_methods!(SafeMeshLwwRegisterReplica, false, |this| (
+    &this.state,
+    &this.log
+));
+record_exchange_methods!(SafeMeshStringOrSetReplica, false, |this| (
     this.replica.state(),
     this.replica.log()
 ));
-record_exchange_methods!(SafeMeshPnCounterReplica, |this| (&this.state, &this.log));
+record_exchange_methods!(SafeMeshPnCounterReplica, true, |this| (
+    &this.state,
+    &this.log
+));
 
 /// One record ID this replica holds that a peer holds with a different
 /// payload: the collision alarm. `local()` and `remote()` are record wire
@@ -1023,7 +1040,7 @@ impl SafeMeshGCounterReplica {
             .replica
             .decode_log_bytes(bytes, decode_limits(max_collection_elements, maxRecords))
             .map_err(|e| match e {
-                ReplicaError::LogDecode(e) => event_log_decode_js_error(e),
+                ReplicaError::LogDecode(e) => event_log_decode_js_error(e, true),
                 _ => unreachable!(),
             })?;
         if log.iter().any(|r| {
@@ -1177,7 +1194,7 @@ impl SafeMeshEnableWinsFlagReplica {
             &self.state,
             decode_limits(max_collection_elements, maxRecords),
         )
-        .map_err(event_log_decode_js_error)?;
+        .map_err(|error| event_log_decode_js_error(error, false))?;
         Ok(log
             .iter()
             .cloned()
@@ -1318,7 +1335,7 @@ impl SafeMeshLwwMapReplica {
             &self.state,
             decode_limits(max_collection_elements, maxRecords),
         )
-        .map_err(event_log_decode_js_error)?;
+        .map_err(|error| event_log_decode_js_error(error, false))?;
         Ok(log
             .iter()
             .cloned()
@@ -1457,7 +1474,7 @@ impl SafeMeshLwwRegisterReplica {
             &self.state,
             decode_limits(max_collection_elements, maxRecords),
         )
-        .map_err(event_log_decode_js_error)?;
+        .map_err(|error| event_log_decode_js_error(error, false))?;
         Ok(log
             .iter()
             .cloned()
@@ -4502,7 +4519,7 @@ impl SafeMeshPnCounterReplica {
             &self.state,
             decode_limits(max_collection_elements, maxRecords),
         )
-        .map_err(event_log_decode_js_error)?;
+        .map_err(|error| event_log_decode_js_error(error, true))?;
         if log.iter().any(|r| {
             safemesh_crdt::ownership::check_counter_record(
                 self.state.p_state().len(),
