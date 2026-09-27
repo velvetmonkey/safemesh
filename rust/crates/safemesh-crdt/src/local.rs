@@ -29,6 +29,11 @@ pub enum LocalError {
     History(WireError),
     InvalidHistory,
     Io(io::Error),
+    /// First creation could not open or sync an ancestor; no fence is written.
+    AncestorSync {
+        path: PathBuf,
+        source: io::Error,
+    },
     /// A `_with_limits` restart found a committed history that declares more
     /// records than [`DecodeLimits::max_records`](crate::DecodeLimits). Checked
     /// from the frame header before any record is read; the store is unchanged.
@@ -55,6 +60,7 @@ impl core::fmt::Display for LocalError {
             Self::InvalidHistory => {
                 f.write_str("local history failed replay or sequence validation")
             }
+            Self::AncestorSync { path, source } => write!(f, "AncestorSync: cannot sync store ancestor {}: {source}", path.display()),
             Self::Io(error) => write!(f, "local store I/O failed: {error}"),
             Self::RecordLimitExceeded { max_records } => write!(
                 f,
@@ -68,7 +74,7 @@ impl core::error::Error for LocalError {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::InvalidRecord(error) | Self::History(error) => Some(error),
-            Self::Io(error) => Some(error),
+            Self::Io(error) | Self::AncestorSync { source: error, .. } => Some(error),
             Self::CounterWidth(error) => Some(error),
             _ => None,
         }
@@ -146,7 +152,7 @@ impl<C: Crdt> Drop for LocalReplica<C> {
 // Without a fence, existing directories may be leftovers from interrupted mkdir.
 // No persistent provenance identifies a safe stopping ancestor, so sync the
 // resolved and traversed parent chains through / before creating the fence.
-fn prepare_durable_root(root: &Path, config: WriterConfig) -> io::Result<()> {
+fn prepare_durable_root(root: &Path, config: WriterConfig) -> Result<(), LocalError> {
     if root
         .join(format!("writer-{}.fence", config.writer))
         .try_exists()?
@@ -155,14 +161,14 @@ fn prepare_durable_root(root: &Path, config: WriterConfig) -> io::Result<()> {
     }
     create_durable_root(root)
 }
-fn create_durable_root(root: &Path) -> io::Result<()> {
+fn create_durable_root(root: &Path) -> Result<(), LocalError> {
     create_durable_root_with(root, |parent| File::open(parent)?.sync_all())
 }
 
 fn create_durable_root_with(
     root: &Path,
     sync_parent: impl FnMut(&Path) -> io::Result<()>,
-) -> io::Result<()> {
+) -> Result<(), LocalError> {
     create_durable_root_using(root, |directory| fs::create_dir(directory), sync_parent)
 }
 
@@ -170,21 +176,21 @@ fn create_durable_root_using(
     root: &Path,
     mut create: impl FnMut(&Path) -> io::Result<()>,
     mut sync_parent: impl FnMut(&Path) -> io::Result<()>,
-) -> io::Result<()> {
+) -> Result<(), LocalError> {
     let root = std::path::absolute(root)?;
     let mut missing = Vec::new();
     let mut ancestor = root.as_path();
     loop {
         match fs::metadata(ancestor) {
             Ok(metadata) if metadata.is_dir() => break,
-            Ok(_) => return Err(io::Error::from(io::ErrorKind::NotADirectory)),
+            Ok(_) => return Err(io::Error::from(io::ErrorKind::NotADirectory).into()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 missing.push(ancestor.to_path_buf());
                 ancestor = ancestor
                     .parent()
                     .ok_or_else(|| io::Error::other("no ancestor"))?;
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(error.into()),
         }
     }
     for directory in missing.iter().rev() {
@@ -194,7 +200,7 @@ fn create_durable_root_using(
             Err(error)
                 if error.kind() == io::ErrorKind::AlreadyExists
                     && fs::metadata(directory)?.is_dir() => {}
-            Err(error) => return Err(error),
+            Err(error) => return Err(error.into()),
         }
     }
     let resolved = root.canonicalize()?;
@@ -206,14 +212,22 @@ fn create_durable_root_using(
     // Keep entries needed to traverse symlinks or cancelled `..` components
     // durable too, even if an interrupted earlier call created them.
     for parent in root.ancestors().skip(1) {
-        let parent = parent.canonicalize()?;
+        let parent = parent
+            .canonicalize()
+            .map_err(|source| LocalError::AncestorSync {
+                path: parent.to_path_buf(),
+                source,
+            })?;
         if !parents.contains(&parent) {
             parents.push(parent);
         }
     }
     parents.sort_by_key(|parent| core::cmp::Reverse(parent.components().count()));
     for parent in parents {
-        sync_parent(&parent)?;
+        sync_parent(&parent).map_err(|source| LocalError::AncestorSync {
+            path: parent,
+            source,
+        })?;
     }
     Ok(())
 }
@@ -1294,7 +1308,9 @@ mod durable_tests {
             Err(io::Error::other("injected parent sync failure"))
         })
         .unwrap_err();
-        assert_eq!(error.to_string(), "injected parent sync failure");
+        assert!(
+            matches!(error, LocalError::AncestorSync { path, source } if path == failed.parent().unwrap() && source.to_string() == "injected parent sync failure")
+        );
         assert!(failed.is_dir());
     }
     #[test]
@@ -2166,6 +2182,43 @@ mod durable_tests {
             DurableReplica::counter(&live_root, config()),
             Err(LocalError::RecoveryRequired)
         ));
+    }
+    #[test]
+    fn fresh_ancestor_sync_refusal_and_retry() {
+        use std::os::unix::fs::PermissionsExt;
+        if std::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .unwrap()
+            .stdout
+            == b"0\n"
+        {
+            std::eprintln!("SKIP: root bypasses execute-only ancestor permissions");
+            return;
+        }
+        let ancestor = root().join("execute-only");
+        let writable = ancestor.join("writable");
+        fs::create_dir_all(&writable).unwrap();
+        let store = writable.join("store");
+        fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o111)).unwrap();
+        std::eprintln!("ANCESTOR-PROBE refusal {}", ancestor.display());
+        let result = DurableReplica::counter(&store, config());
+        fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o755)).unwrap();
+        let error = result
+            .err()
+            .expect("execute-only ancestor must refuse creation");
+        assert!(error.to_string().contains(&ancestor.display().to_string()));
+        assert!(error.to_string().contains("Permission denied"));
+        assert!(matches!(error, LocalError::AncestorSync { path, source }
+            if path == ancestor && source.kind() == io::ErrorKind::PermissionDenied));
+        assert!(store.is_dir());
+        assert!(!store.join("writer-0.fence").exists());
+        std::eprintln!("ANCESTOR-PROBE retry {}", store.display());
+        let replica = DurableReplica::counter(&store, config()).unwrap();
+        assert!(store.join("writer-0.fence").exists());
+        drop(replica);
+        std::eprintln!("ANCESTOR-PROBE reopen {}", store.display());
+        drop(DurableReplica::restart_counter(&store, config()).unwrap());
     }
     #[test]
     fn fresh_durable_read_only_parent() {
