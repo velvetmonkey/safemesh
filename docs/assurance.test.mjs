@@ -8,7 +8,10 @@ import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { test, after } from 'node:test';
 import { parse, serialize } from 'parse5';
+import { unified } from 'unified';
+import remarkParse from 'remark-parse';
 import { pages as livePages } from './assurance.mjs';
+const crcClaim = 'The EventLog CRC detects accidental damage; it is not a MAC and does not stop a deliberate forger.';
 const matrix = {
   platforms: ['POSIX', 'Windows'],
   names: ['unchanged', 'references', 'image', 'gfm', 'html', 'whitespace'],
@@ -16,6 +19,7 @@ const matrix = {
 const standalone = [
   'unrelated pages pass through, misplaced source markers fail loudly',
   'nested source resources resolve against their canonical directory',
+  'EventLog CRC non-claim appears once in CLAIMS.md, README Status, and hosted claims page',
 ];
 const separatorName = (route, separator) => `D01 ${route} separator ${JSON.stringify(separator)}`;
 const matrixName = (platform, name) => `${platform} ${name}`;
@@ -101,6 +105,7 @@ const docs = join(root, 'docs');
 for (const name of ['assurance.mjs', 'check-assurance.mjs', 'astro.config.mjs']) {
   fs.copyFileSync(join(live, 'docs', name), join(docs, name));
 }
+for (const name of ['CLAIMS.md', 'README.md']) fs.copyFileSync(join(live, name), join(root, name));
 fs.symlinkSync(join(live, 'docs/node_modules'), join(docs, 'node_modules'), 'junction');
 fs.mkdirSync(out);
 console.log(`Regression artifacts: ${scratch}`);
@@ -153,6 +158,45 @@ caseTest(standalone[1], () => {
   assert.ok(found.some(([type, url]) => type === 'image' && url === `https://raw.githubusercontent.com/velvetmonkey/safemesh/${revision()}/assets/safemesh-logo.png`));
   assert.ok(found.some(([, url]) => url === '#keep'));
   assert.ok(found.some(([, url]) => url === 'https://example.com/a'));
+});
+caseTest(standalone[2], () => {
+  function countInSection(tree, heading) {
+    let inside = false;
+    let count = 0, total = 0;
+    for (const node of tree.children) {
+      if (node.type === 'heading' && node.depth === 2) {
+        inside = node.children.map(child => child.value ?? '').join('') === heading;
+      } else {
+        // Count rendered prose only; code blocks and HTML comments do not qualify.
+        const prose = [];
+        function visit(child) {
+          if (child.type === 'text') prose.push(child.value);
+          for (const nested of child.children ?? []) visit(nested);
+        }
+        if (node.type !== 'code' && node.type !== 'html') visit(node);
+        const matches = prose.join('').split(crcClaim).length - 1;
+        total += matches;
+        if (inside) count += matches;
+      }
+    }
+    return {count, total};
+  }
+  const claims = sourceTree('CLAIMS.md', revision());
+  const readme = unified().use(remarkParse).parse(fs.readFileSync(join(root, 'README.md'), 'utf8'));
+  const hosted = {type:'root', children:[{type:'html', value:'<!-- assurance-source: CLAIMS.md -->'}]};
+  assurance()(hosted, {path:join(docs, 'src/content/docs/claims.md')});
+  const surfaces = [
+    ['CLAIMS.md', claims, 'Not covered in v0'],
+    ['README.md Status', readme, 'Status'],
+    ['hosted claims page', hosted, 'Not covered in v0'],
+  ];
+  const failures = surfaces.flatMap(([name, tree, heading]) => {
+    const {count, total} = countInSection(tree, heading);
+    const source = name === 'CLAIMS.md' ? 'CLAIMS.md' : name === 'README.md Status' ? 'README.md' : null;
+    const raw = source && fs.readFileSync(join(root, source), 'utf8').split(crcClaim).length - 1;
+    return count === 1 && total === 1 && (raw === null || raw === 1) ? [] : [`${name}: found ${count} in ${heading}, ${total} in prose overall, ${raw ?? 'generated'} in source; expected one in each`];
+  });
+  assert.deepEqual(failures, [], failures.join('\n'));
 });
 const cases={
  references:'\n\n[Reference link probe][audit-reference]\n\n[audit-reference]: rust/crates/safemesh-crdt/src/lib.rs\n',
