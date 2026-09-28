@@ -13,6 +13,216 @@ use safemesh_crdt::{
     WireEncode, WireError,
 };
 
+#[cfg(all(feature = "local-writer", target_os = "linux"))]
+mod local_alarm {
+    use super::*;
+    use safemesh_crdt::local::{DurableReplica, LocalError, LocalReplica};
+    use safemesh_crdt::ownership::WriterConfig;
+    use safemesh_crdt::{OrSet, OrSetDelta};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn root() -> PathBuf {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        std::env::temp_dir().join(format!(
+            "smforkalarmgaps-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    fn config() -> WriterConfig {
+        WriterConfig {
+            writers: 2,
+            writer: 0,
+        }
+    }
+
+    fn peer(tally: u64) -> Record<GCounterDelta> {
+        Record {
+            id: ID,
+            delta: bump(tally),
+        }
+    }
+
+    #[test]
+    fn local_counter_fork_raises_alarm_and_round_trips_report() {
+        let mut local = LocalReplica::counter(&root(), config()).unwrap();
+        let ticket = local.ticket();
+        assert_eq!(local.receive(ticket, peer(5)).unwrap(), Admission::Accepted);
+        let before = local.log().to_wire_bytes().unwrap();
+        let version = local.log().version().clone();
+        let state = local.state().clone();
+        let allocation = local.allocation_bytes();
+        assert_eq!(
+            local.receive(ticket, peer(42)).unwrap(),
+            Admission::Collision
+        );
+        assert_eq!(
+            local.log().collisions(),
+            vec![RecordCollision {
+                id: ID,
+                local: bump(5),
+                remote: bump(42)
+            }]
+        );
+        assert_eq!(local.log().to_wire_bytes().unwrap(), before);
+        assert_eq!(local.log().version(), &version);
+        assert_eq!(local.state(), &state);
+        assert_eq!(local.allocation_bytes(), allocation);
+        let report = local.log().collision_report_bytes().unwrap().unwrap();
+        let mut other = Replica::new(GCounter::new(2));
+        assert_eq!(other.admit(peer(5)), Admission::Accepted);
+        assert_eq!(
+            other
+                .merge_collision_report_bytes(&report, DecodeLimits::default())
+                .unwrap(),
+            vec![(ID, CollisionVerdict::Recorded)]
+        );
+        assert_eq!(other.collisions()[0].remote, bump(42));
+    }
+
+    #[test]
+    fn durable_counter_fork_raises_alarm_without_changing_store_and_restart_drops_it() {
+        let root = root();
+        let mut durable = DurableReplica::counter(&root, config()).unwrap();
+        let ticket = durable.ticket();
+        assert_eq!(
+            durable.receive(ticket, peer(5)).unwrap(),
+            Admission::Accepted
+        );
+        let before = std::fs::read(root.join("writer-0.transaction")).unwrap();
+        let state = durable.state().clone();
+        let version = durable.log().version().clone();
+        let allocation = durable.allocation_bytes();
+        assert_eq!(
+            durable.receive(ticket, peer(42)).unwrap(),
+            Admission::Collision
+        );
+        assert_eq!(
+            durable.log().collisions(),
+            vec![RecordCollision {
+                id: ID,
+                local: bump(5),
+                remote: bump(42)
+            }]
+        );
+        assert!(durable.log().collision_report_bytes().unwrap().is_some());
+        assert_eq!(
+            std::fs::read(root.join("writer-0.transaction")).unwrap(),
+            before
+        );
+        assert_eq!(durable.state(), &state);
+        assert_eq!(durable.log().version(), &version);
+        assert_eq!(durable.allocation_bytes(), allocation);
+        assert_eq!(
+            durable
+                .receive(
+                    ticket,
+                    Record {
+                        id: RecordId {
+                            replica: 1,
+                            sequence: 2
+                        },
+                        delta: bump(43)
+                    }
+                )
+                .unwrap(),
+            Admission::Accepted
+        );
+        durable.bump(ticket, 7).unwrap();
+        let final_state = durable.state().clone();
+        drop(durable);
+        let restored = DurableReplica::restart_counter(&root, config()).unwrap();
+        assert!(restored.log().collisions().is_empty());
+        assert_eq!(restored.state(), &final_state);
+        assert_eq!(restored.state().state(), &[7, 43]);
+    }
+
+    #[test]
+    fn local_utf8_orset_fork_raises_alarm() {
+        let mut local = LocalReplica::<OrSet<String, u64>>::utf8_set(&root(), config()).unwrap();
+        let first = Record {
+            id: ID,
+            delta: OrSetDelta::Add {
+                element: "first".into(),
+                token: 3,
+            },
+        };
+        let fork = Record {
+            id: ID,
+            delta: OrSetDelta::Add {
+                element: "fork".into(),
+                token: 3,
+            },
+        };
+        let ticket = local.ticket();
+        assert_eq!(
+            local.receive(ticket, first.clone()).unwrap(),
+            Admission::Accepted
+        );
+        assert_eq!(
+            local.receive(ticket, fork.clone()).unwrap(),
+            Admission::Collision
+        );
+        assert_eq!(
+            local.log().collisions(),
+            vec![RecordCollision {
+                id: ID,
+                local: first.delta,
+                remote: fork.delta
+            }]
+        );
+        assert!(local.log().collision_report_bytes().unwrap().is_some());
+    }
+
+    #[test]
+    fn local_equal_payload_stays_duplicate_without_alarm() {
+        let mut local = LocalReplica::counter(&root(), config()).unwrap();
+        let ticket = local.ticket();
+        assert_eq!(local.receive(ticket, peer(5)).unwrap(), Admission::Accepted);
+        assert_eq!(
+            local.receive(ticket, peer(5)).unwrap(),
+            Admission::Duplicate
+        );
+        assert!(local.log().collisions().is_empty());
+        assert_eq!(local.log().collision_report_bytes().unwrap(), None);
+    }
+
+    #[test]
+    fn local_first_witness_and_ownership_refusal() {
+        let mut local = LocalReplica::counter(&root(), config()).unwrap();
+        let ticket = local.ticket();
+        assert_eq!(local.receive(ticket, peer(5)).unwrap(), Admission::Accepted);
+        assert!(matches!(
+            local.receive(
+                ticket,
+                Record {
+                    id: RecordId {
+                        replica: 2,
+                        sequence: 1
+                    },
+                    delta: GCounterDelta {
+                        replica: 2,
+                        tally: 9
+                    }
+                }
+            ),
+            Err(LocalError::Refused)
+        ));
+        assert!(local.log().collisions().is_empty());
+        assert_eq!(
+            local.receive(ticket, peer(42)).unwrap(),
+            Admission::Collision
+        );
+        assert_eq!(
+            local.receive(ticket, peer(99)).unwrap(),
+            Admission::Collision
+        );
+        assert_eq!(local.log().collisions()[0].remote, bump(42));
+    }
+}
+
 const ID: RecordId = RecordId {
     replica: 1,
     sequence: 1,

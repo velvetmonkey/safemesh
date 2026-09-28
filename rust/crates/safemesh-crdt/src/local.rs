@@ -422,6 +422,7 @@ where
         }
         let outcome = self.log.admission(&self.state, &record);
         if outcome != Admission::Accepted {
+            self.log.raise_on_collision(outcome, record);
             return Ok(outcome);
         }
         let candidate = PendingInsertion::new(&mut self.log, record.id);
