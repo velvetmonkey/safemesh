@@ -136,6 +136,18 @@ fn python_zero_sequence_remove_mapping_keeps_core_cause() {
         assert_eq!(text, format!("ValueError: {cause}"));
         assert!(text.contains("Recovery: "), "{text}");
     }
+    assert_eq!(
+        record_verdict_text(safemesh_crdt::Admission::Invalid(
+            safemesh_crdt::WireError::OwnershipViolation
+        )),
+        Err("writer replica does not match record author".to_owned())
+    );
+    assert_eq!(
+        record_verdict_text(safemesh_crdt::Admission::Invalid(
+            safemesh_crdt::WireError::InvalidTag
+        )),
+        Err("invalid record".to_owned())
+    );
 }
 
 /// One record ID this replica holds that a peer holds with a different payload:
@@ -280,20 +292,22 @@ fn admission_name(admission: safemesh_crdt::Admission) -> String {
 
 // A single record reports the verdict `merge_log_bytes` reports for it: a
 // duplicate or collision is a verdict, not an error. An invalid record raises.
-fn record_verdict(admission: safemesh_crdt::Admission) -> PyResult<String> {
+fn record_verdict_text(admission: safemesh_crdt::Admission) -> Result<String, String> {
     match admission {
         safemesh_crdt::Admission::Invalid(
             cause @ (safemesh_crdt::WireError::ZeroSequenceAdd { .. }
             | safemesh_crdt::WireError::ZeroSequenceRemove { .. }),
-        ) => Err(pyo3::exceptions::PyValueError::new_err(cause.to_string())),
-        safemesh_crdt::Admission::Invalid(safemesh_crdt::WireError::OwnershipViolation) => Err(
-            pyo3::exceptions::PyValueError::new_err("writer replica does not match record author"),
-        ),
-        safemesh_crdt::Admission::Invalid(_) => {
-            Err(pyo3::exceptions::PyValueError::new_err("invalid record"))
+        ) => Err(cause.to_string()),
+        safemesh_crdt::Admission::Invalid(safemesh_crdt::WireError::OwnershipViolation) => {
+            Err("writer replica does not match record author".to_owned())
         }
+        safemesh_crdt::Admission::Invalid(_) => Err("invalid record".to_owned()),
         admission => Ok(admission_name(admission)),
     }
+}
+
+fn record_verdict(admission: safemesh_crdt::Admission) -> PyResult<String> {
+    record_verdict_text(admission).map_err(py_value_error)
 }
 
 fn append_error(error: safemesh_crdt::AppendError) -> PyErr {
@@ -1545,11 +1559,11 @@ impl PyStringOrSetRecord {
 /// operations in snake_case where WASM uses camelCase. The WASM lifecycle methods
 /// `free()` and `[Symbol.dispose]()` have no Python counterpart. Verdict strings
 /// match for the shared operations. Record-decode and allocated-writer refusal texts
-/// match WASM; Python raises `ValueError`. Invalid record admission differs:
-/// for example, a sequence-0 OR-Set remove raises `ValueError("invalid record")`
-/// in Python, while WASM names the reason (`ZeroSequenceRemove`). For a log
-/// containing that record, Python prefixes the core reason with
-/// `failed to decode event log: `; WASM returns the core reason alone.
+/// match WASM; Python raises `ValueError`. A sequence-0 OR-Set add or remove
+/// raises `ValueError` with the core `ZeroSequenceAdd` or `ZeroSequenceRemove`
+/// reason on the single-record path. For a log containing that record,
+/// Python prefixes the core reason with `failed to decode event log: `;
+/// WASM returns the core reason alone.
 #[pyclass(name = "StringOrSetReplica")]
 pub struct PyStringOrSetReplica {
     replica_id: u64,
@@ -1789,10 +1803,7 @@ impl PyStringOrSetReplica {
     ) -> Result<String, String> {
         let record = Self::decode_record(bytes, max_collection_elements)?;
         self.check_incoming(&record)?;
-        match self.replica.admit(record) {
-            safemesh_crdt::Admission::Invalid(_) => Err("invalid record".to_owned()),
-            admission => Ok(admission_name(admission)),
-        }
+        record_verdict_text(self.replica.admit(record))
     }
 
     fn try_merge_log_bytes(
