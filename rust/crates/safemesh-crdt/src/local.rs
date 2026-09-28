@@ -1339,6 +1339,32 @@ mod durable_tests {
         assert!(failed.is_dir());
     }
     #[test]
+    fn fresh_root_syncs_lexical_symlink_parent() {
+        let base = root();
+        fs::create_dir(base.join("a")).unwrap();
+        fs::create_dir_all(base.join("b/real")).unwrap();
+        std::os::unix::fs::symlink(base.join("b/real"), base.join("a/link")).unwrap();
+        let store = base.join("a/link/store");
+        let mut synced = Vec::new();
+        create_durable_root_with(&store, |parent| {
+            synced.push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+
+        // Canonical chain: b/real, b, base, and every ancestor of base.
+        // Lexical chain adds a: it holds the link, but is not in the canonical chain.
+        let mut expected = vec![
+            base.join("b/real"),
+            base.join("b"),
+            base.join("a"),
+            base.clone(),
+        ];
+        expected.extend(base.ancestors().skip(1).map(Path::to_path_buf));
+        assert_eq!(synced, expected);
+        fs::remove_dir_all(base).unwrap();
+    }
+    #[test]
     fn fresh_root_syncs_leftover_parent_chain() {
         let existing = root();
         let leftover = existing.join("interrupted/store");
