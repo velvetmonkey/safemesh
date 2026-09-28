@@ -145,6 +145,25 @@ admitted: fabricated acknowledgements can hide missing records. Retry repair aft
 lost messages; eventual delivery remains an application assumption. `since` retains
 all history and is not compaction.
 
+A version vector tracks a contiguous prefix for each writer: if one sequence
+number never arrives, `since()` keeps offering every later record from that writer
+on every exchange. This is the designed behaviour; deliver the missing record
+to advance the prefix.
+
+For an in-process transport loop, `anti_entropy(transport, from, to,
+local_log, &mut remote_replica)` queues repair, admits available deliveries,
+and returns `(sending_peer, record_id, admission)` for every delivered record.
+Inspect every verdict: `Invalid(reason)` names the refused record and reason on
+every retry; `Collision` is a separate verdict. Refusal does not acknowledge a
+record. There is no refusal cache to clear: after correcting the receiver's
+configuration, the next ordinary sync retries it. The lower-level `queue_anti_entropy`
+only queues records and cannot observe remote admission. Rust callers migrating
+from the former send-only `anti_entropy` must either use the receiving helper or
+explicitly choose `queue_anti_entropy` and handle admission themselves. Network, Python and WASM
+loops must inspect the receiving merge verdict or exception on every sync and
+associate it with the sending peer and record ID; a successful send is not an
+admission acknowledgement.
+
 Every WASM replica class with `logBytes` exposes the same selection:
 `recordIds()` lists record IDs as `[author, sequence, ...]` pairs without
 decoding payloads, `versionVector()` returns `[author, versionFor(author), ...]`,

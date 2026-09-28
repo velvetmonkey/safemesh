@@ -630,3 +630,7 @@ that writing can resume without reusing the checked record IDs or set tokens,
 and that the reconciled state survives a second reopen.
 It does not exercise a machine power cut or interruption partway through a commit,
 so it does not establish recovery from those failures.
+
+Restoring a store file from a backup requires opening it with a new writer identity before it writes, because reopening under the old identity clears the in-memory write stop and the restore is not detected until a peer returns an own-ID record above the durable high-water.
+
+The pure `EventLog` allocator uses the greatest recorded sequence plus one and does not protect a writer from peer-supplied own-ID records.

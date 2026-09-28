@@ -58,6 +58,8 @@ pub enum WireError {
     LengthOverflow,
     RecordCollision,
     DuplicateEntry,
+    /// A state entry list is not in ascending encoder order.
+    NonCanonicalOrder,
     IntegrityMismatch,
     InvalidUtf8,
     /// A fixed-domain log constructed or saved without its arity.
@@ -113,8 +115,9 @@ impl core::fmt::Display for WireError {
             Self::LengthOverflow => f.write_str("wire length exceeds the representable range"),
             Self::RecordCollision => f.write_str("record identity has conflicting payloads"),
             Self::DuplicateEntry => {
-                f.write_str("wire OR-set contains a duplicate element and token")
+                f.write_str("wire state contains a duplicate entry")
             }
+            Self::NonCanonicalOrder => f.write_str("wire state entries are not in ascending order"),
             Self::IntegrityMismatch => f.write_str("wire frame integrity check failed"),
             Self::InvalidUtf8 => f.write_str("wire string contains invalid UTF-8"),
             Self::MissingShape => f.write_str("wire frame is missing required shape metadata"),
@@ -779,7 +782,7 @@ fn walks_as_tag02_frame(cursor: &WireCursor<'_>) -> bool {
 
 // After the 0x03 tag: check the length pair, then the CRC over both length
 // fields and the body, and return the body without decoding any of it.
-fn read_checked_body<'a>(cursor: &mut WireCursor<'a>) -> Result<&'a [u8], WireError> {
+pub(super) fn read_checked_body<'a>(cursor: &mut WireCursor<'a>) -> Result<&'a [u8], WireError> {
     let start = cursor.offset;
     let len = cursor.read_u32()?;
     if cursor.read_u32()? != !len {

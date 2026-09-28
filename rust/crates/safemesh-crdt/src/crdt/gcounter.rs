@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{ownership, Crdt, MergeError, Mergeable, RecordId, WireError};
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 
 /// Delta for a grow-only counter: one replica coordinate and its asserted tally.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -12,9 +12,11 @@ pub struct GCounterDelta {
     pub tally: u64,
 }
 
-/// Rejection of a counter delta with an invalid replica coordinate.
+/// Rejection of an invalid counter domain or replica coordinate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoordinateError {
+    /// The requested constructor domain exceeds [`GCounter::MAX_REPLICAS`].
+    ReplicaLimitExceeded { requested: usize, maximum: usize },
     /// The index is outside `0..replica_count`; the counter is unchanged.
     ReplicaOutOfRange {
         replica: usize,
@@ -25,6 +27,9 @@ pub enum CoordinateError {
 impl core::fmt::Display for CoordinateError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::ReplicaLimitExceeded { requested, maximum } => {
+                write!(f, "replica count {requested} exceeds maximum {maximum}")
+            }
             Self::ReplicaOutOfRange {
                 replica,
                 replica_count,
@@ -51,9 +56,37 @@ pub struct GCounter {
 }
 
 impl GCounter {
+    /// Maximum constructor domain: 4,096 replicas, matching the default wire
+    /// version-vector author limit. Storage is at most 32 KiB per G-counter
+    /// (64 KiB per PN-counter), below the WASM and Python numeric limits.
+    pub const MAX_REPLICAS: usize = 4_096;
+
     /// Fresh counter for `n` replicas — the lattice bottom `⊥` (all zeros).
+    ///
+    /// # Panics
+    /// Panics above [`Self::MAX_REPLICAS`] or on allocator refusal. Use
+    /// [`Self::try_new`] to receive a named error instead.
     pub fn new(n: usize) -> Self {
-        GCounter { counts: vec![0; n] }
+        Self::try_new(n).expect("counter width cannot be allocated")
+    }
+
+    /// Fresh counter with a domain bounded by [`Self::MAX_REPLICAS`].
+    ///
+    /// The 4,096-replica maximum matches the default wire author limit and
+    /// bounds storage to 32 KiB. Larger counts return `ReplicaLimitExceeded`
+    /// before allocation. Admitted counts use the allocator's zeroed path,
+    /// like `vec![0; n]`, without an explicit page-touching initialization loop.
+    /// As on main, admitted allocations use `vec![0; n]`; an out-of-memory
+    /// allocator can abort. The cap bounds this request to 32 KiB.
+    pub fn try_new(n: usize) -> Result<Self, CoordinateError> {
+        if n > Self::MAX_REPLICAS {
+            return Err(CoordinateError::ReplicaLimitExceeded {
+                requested: n,
+                maximum: Self::MAX_REPLICAS,
+            });
+        }
+        let counts = alloc::vec![0; n];
+        Ok(GCounter { counts })
     }
 
     /// Number of replica coordinates.
@@ -165,5 +198,52 @@ impl Crdt for GCounter {
 
     fn apply_delta(&mut self, delta: Self::Delta) {
         self.apply_bump(delta.replica, delta.tally);
+    }
+}
+
+#[cfg(test)]
+mod construction_tests {
+    use super::*;
+    use crate::WireEncode;
+
+    #[test]
+    fn unallocatable_counter_width_returns_error() {
+        for width in [
+            GCounter::MAX_REPLICAS + 1,
+            usize::MAX,
+            usize::try_from(1u64 << 40).unwrap_or(usize::MAX),
+        ] {
+            let expected = CoordinateError::ReplicaLimitExceeded {
+                requested: width,
+                maximum: GCounter::MAX_REPLICAS,
+            };
+            assert_eq!(GCounter::try_new(width), Err(expected));
+            assert_eq!(crate::PnCounter::try_new(width), Err(expected));
+        }
+        let max = GCounter::try_new(GCounter::MAX_REPLICAS).unwrap();
+        assert_eq!(max.len(), GCounter::MAX_REPLICAS);
+        assert!(max.counts.iter().all(|&x| x == 0));
+        let pn = crate::PnCounter::try_new(GCounter::MAX_REPLICAS).unwrap();
+        assert!(pn.p_state().iter().chain(pn.n_state()).all(|&x| x == 0));
+        assert!(crate::PnCounter::try_new(usize::MAX).is_err());
+        let largest = isize::MAX as usize / core::mem::size_of::<u64>();
+        assert!(GCounter::try_new(largest + 1).is_err());
+        for n in [0, 1, 2] {
+            assert_eq!(GCounter::try_new(n).unwrap(), GCounter::new(n));
+            assert_eq!(
+                crate::PnCounter::try_new(n).unwrap(),
+                crate::PnCounter::new(n)
+            );
+        }
+        let mut counter = GCounter::try_new(2).unwrap();
+        counter.try_apply_bump(0, 7).unwrap();
+        assert_eq!(counter.value(), 7);
+        assert!(!GCounterDelta {
+            replica: 0,
+            tally: 7
+        }
+        .to_wire_bytes()
+        .unwrap()
+        .is_empty());
     }
 }

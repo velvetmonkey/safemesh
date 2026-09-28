@@ -29,6 +29,30 @@ for(const tally of [-1n,1n<<64n]) check(`tally ${tally} refuses without changing
 });
 const u32=n=>{const b=Buffer.alloc(4);b.writeUInt32LE(n>>>0);return b;};
 const crc32=bytes=>{let crc=0xffffffff;for(const byte of bytes){crc^=byte;for(let i=0;i<8;i++)crc=(crc>>>1)^(0xedb88320 & -(crc&1));}return (~crc)>>>0;};
+check('allocated writers allow one live handle per author and release on free',()=>{
+  let first=OrSetReplica.createAllocated(7010n,7000n);
+  let peer, restored, replacement;
+  const refused=error=>error.name==='SafeMeshError' && error.code===1 &&
+    error.message==='author already has a live allocated writer';
+  try {
+    const saved=first.exportIdentity();
+    assert.throws(()=>OrSetReplica.createAllocated(7010n,7000n),refused);
+    // The claim is keyed by author, even with a different valid writer count.
+    assert.throws(()=>OrSetReplica.createAllocated(7011n,7000n),refused);
+    assert.throws(()=>OrSetReplica.importIdentity(saved),refused);
+    peer=OrSetReplica.createAllocated(7010n,7001n);
+    assert.ok(peer.appendAllocatedAdd('peer').length>0);
+    first.free(); first=null;
+    replacement=OrSetReplica.createAllocated(7010n,7000n);
+    assert.throws(()=>OrSetReplica.importIdentity(saved),refused);
+    replacement.free(); replacement=null;
+    restored=OrSetReplica.importIdentity(saved);
+    assert.throws(()=>OrSetReplica.createAllocated(7010n,7000n),refused);
+    assert.ok(restored.appendAllocatedAdd('restored').length>0);
+  } finally {
+    first?.free(); peer?.free(); replacement?.free(); restored?.free();
+  }
+});
 check('importIdentity record budget refuses before claim and permits append on retry',()=>{
   const writer=OrSetReplica.createAllocated(2n,0n);
   let saved;

@@ -1,6 +1,27 @@
 /* tslint:disable */
 /* eslint-disable */
 
+export interface SafeMeshStore {
+    open(mode: "fresh" | "restart", writer: bigint): unknown;
+    readCommitted(lease: unknown): { bytes: Uint8Array; revision: bigint; anchor: bigint };
+    commit(lease: unknown, expectedRevision: bigint, nextBytes: Uint8Array): bigint;
+    close(lease: unknown): void;
+}
+export interface SafeMeshManagedCounterOptions {
+    mode: "fresh" | "restart";
+    writer: bigint;
+    writers?: number;
+}
+export type SafeMeshCounterEnvelopeVersion = 1;
+export type SafeMeshStoreErrorCode = "MISSING" | "CORRUPT" | "STALE" | "EXISTS" |
+"LOCKED" | "COMMIT" | "DISABLED" | "REENTRY" | "CLOSED" | "COLLISION";
+export interface SafeMeshStoreError extends Error {
+    name: "SafeMeshStoreError";
+    code: SafeMeshStoreErrorCode;
+}
+
+
+
 export class SafeMeshEnableWinsFlag {
     free(): void;
     [Symbol.dispose](): void;
@@ -17,8 +38,28 @@ export class SafeMeshEnableWinsFlagReplica {
     [Symbol.dispose](): void;
     appendDisableObserved(): Uint8Array;
     appendEnable(token: bigint): Uint8Array;
+    /**
+     * The collision report to send back to the peer whose batch was
+     * just merged, or `undefined` when no alarm is raised here.
+     */
+    collisionReportBytes(): Uint8Array | undefined;
+    /**
+     * The collision alarm: every held record ID a peer holds with a
+     * different payload, raised when a peer's record collided here or
+     * a peer's report named one. In memory only; never merged into state.
+     */
+    collisions(): SafeMeshRecordCollision[];
     enabledTokens(): BigUint64Array;
     logBytes(): Uint8Array;
+    /**
+     * Merge a peer's collision report and return one verdict per
+     * entry: `"recorded"` (alarm raised here now), `"known"` (already
+     * raised), `"unheld"` (ID not held here) or `"agrees"` (the entry
+     * names only the payload held here). Only `"recorded"` changes
+     * anything, and only the alarm. A malformed report throws and
+     * changes nothing. The budgets are `mergeLogBytes`'s.
+     */
+    mergeCollisionReportBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("recorded" | "known" | "unheld" | "agrees")[];
     /**
      * Return one core admission verdict for every decoded input record.
      * `maxRecords` is the third argument; the second limits collection elements.
@@ -73,7 +114,27 @@ export class SafeMeshGCounterReplica {
     free(): void;
     [Symbol.dispose](): void;
     appendBump(counter_replica: number, tally: bigint): Uint8Array;
+    /**
+     * The collision report to send back to the peer whose batch was
+     * just merged, or `undefined` when no alarm is raised here.
+     */
+    collisionReportBytes(): Uint8Array | undefined;
+    /**
+     * The collision alarm: every held record ID a peer holds with a
+     * different payload, raised when a peer's record collided here or
+     * a peer's report named one. In memory only; never merged into state.
+     */
+    collisions(): SafeMeshRecordCollision[];
     logBytes(): Uint8Array;
+    /**
+     * Merge a peer's collision report and return one verdict per
+     * entry: `"recorded"` (alarm raised here now), `"known"` (already
+     * raised), `"unheld"` (ID not held here) or `"agrees"` (the entry
+     * names only the payload held here). Only `"recorded"` changes
+     * anything, and only the alarm. A malformed report throws and
+     * changes nothing. The budgets are `mergeLogBytes`'s.
+     */
+    mergeCollisionReportBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("recorded" | "known" | "unheld" | "agrees")[];
     /**
      * Return one core admission verdict for every decoded input record.
      * `maxRecords` is the third argument; the second limits collection elements.
@@ -146,9 +207,29 @@ export class SafeMeshLwwMapReplica {
     [Symbol.dispose](): void;
     appendRemove(key: bigint, timestamp: bigint, writer_replica: bigint): Uint8Array;
     appendSet(key: bigint, timestamp: bigint, writer_replica: bigint, value: bigint): Uint8Array;
+    /**
+     * The collision report to send back to the peer whose batch was
+     * just merged, or `undefined` when no alarm is raised here.
+     */
+    collisionReportBytes(): Uint8Array | undefined;
+    /**
+     * The collision alarm: every held record ID a peer holds with a
+     * different payload, raised when a peer's record collided here or
+     * a peer's report named one. In memory only; never merged into state.
+     */
+    collisions(): SafeMeshRecordCollision[];
     entryKeys(): BigUint64Array;
     hasKey(key: bigint): boolean;
     logBytes(): Uint8Array;
+    /**
+     * Merge a peer's collision report and return one verdict per
+     * entry: `"recorded"` (alarm raised here now), `"known"` (already
+     * raised), `"unheld"` (ID not held here) or `"agrees"` (the entry
+     * names only the payload held here). Only `"recorded"` changes
+     * anything, and only the alarm. A malformed report throws and
+     * changes nothing. The budgets are `mergeLogBytes`'s.
+     */
+    mergeCollisionReportBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("recorded" | "known" | "unheld" | "agrees")[];
     /**
      * Return one core admission verdict for every decoded input record.
      * `maxRecords` is the third argument; the second limits collection elements.
@@ -203,8 +284,28 @@ export class SafeMeshLwwRegisterReplica {
     free(): void;
     [Symbol.dispose](): void;
     appendSet(timestamp: bigint, writer_replica: bigint, value: bigint): Uint8Array;
+    /**
+     * The collision report to send back to the peer whose batch was
+     * just merged, or `undefined` when no alarm is raised here.
+     */
+    collisionReportBytes(): Uint8Array | undefined;
+    /**
+     * The collision alarm: every held record ID a peer holds with a
+     * different payload, raised when a peer's record collided here or
+     * a peer's report named one. In memory only; never merged into state.
+     */
+    collisions(): SafeMeshRecordCollision[];
     hasValue(): boolean;
     logBytes(): Uint8Array;
+    /**
+     * Merge a peer's collision report and return one verdict per
+     * entry: `"recorded"` (alarm raised here now), `"known"` (already
+     * raised), `"unheld"` (ID not held here) or `"agrees"` (the entry
+     * names only the payload held here). Only `"recorded"` changes
+     * anything, and only the alarm. A malformed report throws and
+     * changes nothing. The budgets are `mergeLogBytes`'s.
+     */
+    mergeCollisionReportBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("recorded" | "known" | "unheld" | "agrees")[];
     /**
      * Return one core admission verdict for every decoded input record.
      * `maxRecords` is the third argument; the second limits collection elements.
@@ -241,6 +342,30 @@ export class SafeMeshLwwRegisterReplica {
 }
 
 /**
+ * Owns a synchronous Store lease. Call close explicitly before free.
+ * Instance methods implemented in Rust borrow through try_borrow: callback reentry
+ * is rejected as REENTRY before touching state, including read/close during commit.
+ * The wasm-bindgen-generated free() is not guarded by try_borrow. Calling free()
+ * during commit throws a wasm-bindgen ownership error and invalidates the JS handle;
+ * subsequent instance methods on that handle throw a null-pointer error. Do not
+ * call free() from a Store callback; close the handle before freeing it.
+ */
+export class SafeMeshManagedGCounter {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    appendBump(tally: bigint): Uint8Array;
+    close(): void;
+    mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate")[];
+    mergeRecordBytes(bytes: Uint8Array): "accepted" | "duplicate";
+    static open(store: SafeMeshStore, options: SafeMeshManagedCounterOptions): SafeMeshManagedGCounter;
+    peerLogBytes(): Uint8Array;
+    state(): BigUint64Array;
+    value(): bigint;
+    versionFor(writer: bigint): bigint;
+}
+
+/**
  * Observed-remove set of u64 elements and u64 tokens; tokens are global to the set.
  */
 export class SafeMeshOrSet {
@@ -267,7 +392,27 @@ export class SafeMeshPnCounterReplica {
     [Symbol.dispose](): void;
     appendDec(counter_replica: number, tally: bigint): Uint8Array;
     appendInc(counter_replica: number, tally: bigint): Uint8Array;
+    /**
+     * The collision report to send back to the peer whose batch was
+     * just merged, or `undefined` when no alarm is raised here.
+     */
+    collisionReportBytes(): Uint8Array | undefined;
+    /**
+     * The collision alarm: every held record ID a peer holds with a
+     * different payload, raised when a peer's record collided here or
+     * a peer's report named one. In memory only; never merged into state.
+     */
+    collisions(): SafeMeshRecordCollision[];
     logBytes(): Uint8Array;
+    /**
+     * Merge a peer's collision report and return one verdict per
+     * entry: `"recorded"` (alarm raised here now), `"known"` (already
+     * raised), `"unheld"` (ID not held here) or `"agrees"` (the entry
+     * names only the payload held here). Only `"recorded"` changes
+     * anything, and only the alarm. A malformed report throws and
+     * changes nothing. The budgets are `mergeLogBytes`'s.
+     */
+    mergeCollisionReportBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("recorded" | "known" | "unheld" | "agrees")[];
     /**
      * Return one core admission verdict for every decoded input record.
      * `maxRecords` is the third argument; the second limits collection elements.
@@ -310,6 +455,21 @@ export class SafeMeshPnCounterReplica {
      * nonzero prefix, sorted by author: a peer's `sinceLogBytes` input.
      */
     versionVector(): BigUint64Array;
+}
+
+/**
+ * One record ID this replica holds that a peer holds with a different
+ * payload: the collision alarm. `local()` and `remote()` are record wire
+ * bytes under the ID, for this replica's payload and the peer's.
+ */
+export class SafeMeshRecordCollision {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    author(): bigint;
+    local(): Uint8Array;
+    remote(): Uint8Array;
+    sequence(): bigint;
 }
 
 /**
@@ -388,6 +548,17 @@ export class SafeMeshStringOrSetReplica {
      */
     appendRemoveObserved(element: string): Uint8Array;
     /**
+     * The collision report to send back to the peer whose batch was
+     * just merged, or `undefined` when no alarm is raised here.
+     */
+    collisionReportBytes(): Uint8Array | undefined;
+    /**
+     * The collision alarm: every held record ID a peer holds with a
+     * different payload, raised when a peer's record collided here or
+     * a peer's report named one. In memory only; never merged into state.
+     */
+    collisions(): SafeMeshRecordCollision[];
+    /**
      * Create an allocated writer. At most one allocated handle per author may
      * live in this WASM instance; free() releases it. The caller provides any
      * cross-instance/process exclusion and must not restore stale snapshots.
@@ -415,6 +586,15 @@ export class SafeMeshStringOrSetReplica {
      */
     static inspectRecordBytes(bytes: Uint8Array, max_collection_elements?: number | null): SafeMeshStringOrSetRecord;
     logBytes(): Uint8Array;
+    /**
+     * Merge a peer's collision report and return one verdict per
+     * entry: `"recorded"` (alarm raised here now), `"known"` (already
+     * raised), `"unheld"` (ID not held here) or `"agrees"` (the entry
+     * names only the payload held here). Only `"recorded"` changes
+     * anything, and only the alarm. A malformed report throws and
+     * changes nothing. The budgets are `mergeLogBytes`'s.
+     */
+    mergeCollisionReportBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("recorded" | "known" | "unheld" | "agrees")[];
     /**
      * Return one core admission verdict for every decoded input record.
      * `maxRecords` is the third argument; the second limits collection elements.

@@ -9,6 +9,7 @@ use safemesh_crdt::{
     OrSet, OrSetDelta, PnCounter, PnCounterDelta, Record, Replica, ReplicaError, Rga,
     VersionVector, VersionVectorLimits, WireDecode, WireEncode, WireError, WireSchema,
 };
+use safemesh_crdt::{CollisionVerdict, RecordId};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
@@ -49,8 +50,8 @@ export function installCollectionBudgetGuard(sample) {
             return original.call(this, bytes, budget);
         };
     }
-    // A since batch takes the budgets its receiver's mergeLogBytes takes.
-    for (const name of ['mergeLogBytes', 'sinceLogBytes']) {
+    // A since batch and a collision report take the budgets mergeLogBytes takes.
+    for (const name of ['mergeLogBytes', 'sinceLogBytes', 'mergeCollisionReportBytes']) {
         if (typeof prototype[name] !== 'function') continue;
         const original = prototype[name];
         prototype[name] = function(input, collectionBudget, recordBudget) {
@@ -157,6 +158,9 @@ fn wire_decode_error(error: WireError, context: &str) -> JsValue {
             3,
             &format!("maxCollectionElements limit exceeded: {max_elements}"),
         ),
+        cause @ (WireError::DuplicateEntry | WireError::NonCanonicalOrder) => {
+            safe_mesh_error(1, &format!("{context}: {cause:?}: {cause}"))
+        }
         _ => safe_mesh_error(1, context),
     }
 }
@@ -179,11 +183,16 @@ fn decode_limits(value: Option<u32>, max_records: Option<u32>) -> DecodeLimits {
     }
 }
 
-fn event_log_decode_js_error(error: DecodeError) -> JsValue {
+// Counter ownership covers coordinates; other carriers name the record writer.
+fn event_log_decode_js_error(error: DecodeError, counter_log: bool) -> JsValue {
     match error {
         DecodeError::Wire(WireError::OwnershipViolation) => safe_mesh_error(
             2,
-            "counter coordinate out of range or not owned by record author",
+            if counter_log {
+                "counter coordinate out of range or not owned by record author"
+            } else {
+                "writer replica does not match record author"
+            },
         ),
         DecodeError::Wire(WireError::CollectionElementLimitExceeded { max_elements }) => {
             safe_mesh_error(
@@ -249,14 +258,16 @@ fn checked_index(value: JsValue, name: &str) -> Result<usize, JsValue> {
     Ok(number as usize)
 }
 
-// Vec<u64> cannot address more than isize::MAX bytes on wasm32. Reject
-// impossible capacities before allocation can trap and poison the instance.
+// All exported counter constructors share the core's bounded domain.
 fn checked_replica_count(value: JsValue) -> Result<usize, JsValue> {
     let replicas = checked_index(value, "replicas")?;
-    if replicas > i32::MAX as usize / std::mem::size_of::<u64>() {
+    if replicas > GCounter::MAX_REPLICAS {
         return Err(safe_mesh_error(
             2,
-            "replicas exceeds wasm32 counter capacity",
+            &format!(
+                "replicas {replicas} exceeds maximum {}",
+                GCounter::MAX_REPLICAS
+            ),
         ));
     }
     Ok(replicas)
@@ -279,8 +290,23 @@ fn record_verdict(admission: safemesh_crdt::Admission) -> Result<String, Binding
         safemesh_crdt::Admission::Invalid(
             error @ (WireError::ZeroSequenceAdd { .. } | WireError::ZeroSequenceRemove { .. }),
         ) => Err(binding_error(1, error.to_string())),
+        safemesh_crdt::Admission::Invalid(WireError::OwnershipViolation) => Err(binding_error(
+            1,
+            "writer replica does not match record author",
+        )),
         safemesh_crdt::Admission::Invalid(_) => Err(binding_error(1, "invalid record")),
         admission => Ok(admission_name(admission)),
+    }
+}
+
+fn append_error(error: safemesh_crdt::AppendError) -> BindingError {
+    match error {
+        safemesh_crdt::AppendError::SequenceExhausted => {
+            binding_error(1, "event log sequence exhausted")
+        }
+        safemesh_crdt::AppendError::InvalidRecord(cause) => {
+            record_verdict(safemesh_crdt::Admission::Invalid(cause)).unwrap_err()
+        }
     }
 }
 
@@ -361,9 +387,9 @@ where
     Ok(bytes)
 }
 
-fn since_js_error(error: ReplicaError) -> JsValue {
+fn since_js_error(error: ReplicaError, counter_log: bool) -> JsValue {
     match error {
-        ReplicaError::LogDecode(error) => event_log_decode_js_error(error),
+        ReplicaError::LogDecode(error) => event_log_decode_js_error(error, counter_log),
         _ => safe_mesh_error(1, "failed to encode event log"),
     }
 }
@@ -371,7 +397,7 @@ fn since_js_error(error: ReplicaError) -> JsValue {
 /// Record listing and since batches for a replica class with an event log.
 /// `$parts` names the replica's core state and log.
 macro_rules! record_exchange_methods {
-    ($class:ty, |$this:ident| $parts:expr) => {
+    ($class:ty, $counter_log:expr, |$this:ident| $parts:expr) => {
         #[wasm_bindgen]
         impl $class {
             /// Every record ID in log order, as `[author, sequence, ...]` pairs.
@@ -412,27 +438,218 @@ macro_rules! record_exchange_methods {
                     &peer,
                     decode_limits(max_collection_elements, maxRecords),
                 )
-                .map_err(since_js_error)
+                .map_err(|error| since_js_error(error, $counter_log))
             }
         }
     };
 }
 
-record_exchange_methods!(SafeMeshGCounterReplica, |this| (
+record_exchange_methods!(SafeMeshGCounterReplica, true, |this| (
     this.replica.state(),
     this.replica.log()
 ));
-record_exchange_methods!(SafeMeshEnableWinsFlagReplica, |this| (
+record_exchange_methods!(SafeMeshEnableWinsFlagReplica, false, |this| (
     &this.state,
     &this.log
 ));
-record_exchange_methods!(SafeMeshLwwMapReplica, |this| (&this.state, &this.log));
-record_exchange_methods!(SafeMeshLwwRegisterReplica, |this| (&this.state, &this.log));
-record_exchange_methods!(SafeMeshStringOrSetReplica, |this| (
+record_exchange_methods!(SafeMeshLwwMapReplica, false, |this| (
+    &this.state,
+    &this.log
+));
+record_exchange_methods!(SafeMeshLwwRegisterReplica, false, |this| (
+    &this.state,
+    &this.log
+));
+record_exchange_methods!(SafeMeshStringOrSetReplica, false, |this| (
     this.replica.state(),
     this.replica.log()
 ));
-record_exchange_methods!(SafeMeshPnCounterReplica, |this| (&this.state, &this.log));
+record_exchange_methods!(SafeMeshPnCounterReplica, true, |this| (
+    &this.state,
+    &this.log
+));
+
+/// One record ID this replica holds that a peer holds with a different
+/// payload: the collision alarm. `local()` and `remote()` are record wire
+/// bytes under the ID, for this replica's payload and the peer's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[wasm_bindgen]
+pub struct SafeMeshRecordCollision {
+    author: u64,
+    sequence: u64,
+    local: Vec<u8>,
+    remote: Vec<u8>,
+}
+
+#[wasm_bindgen]
+impl SafeMeshRecordCollision {
+    pub fn author(&self) -> u64 {
+        self.author
+    }
+
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    pub fn local(&self) -> Vec<u8> {
+        self.local.clone()
+    }
+
+    pub fn remote(&self) -> Vec<u8> {
+        self.remote.clone()
+    }
+}
+
+fn record_collisions<D: Clone + WireEncode>(
+    log: &EventLog<D>,
+) -> Result<Vec<SafeMeshRecordCollision>, JsValue> {
+    log.collisions()
+        .into_iter()
+        .map(|collision| {
+            let record = |delta| {
+                Record {
+                    id: collision.id,
+                    delta,
+                }
+                .to_wire_bytes()
+                .map_err(|_| safe_mesh_error(1, "failed to encode record"))
+            };
+            Ok(SafeMeshRecordCollision {
+                author: collision.id.replica,
+                sequence: collision.id.sequence,
+                local: record(collision.local)?,
+                remote: record(collision.remote)?,
+            })
+        })
+        .collect()
+}
+
+fn collision_verdicts(
+    verdicts: Result<Vec<(RecordId, CollisionVerdict)>, DecodeError>,
+) -> Result<Vec<String>, JsValue> {
+    let verdicts = verdicts.map_err(|error| match error {
+        DecodeError::Wire(WireError::CollectionElementLimitExceeded { max_elements }) => {
+            safe_mesh_error(
+                3,
+                &format!("maxCollectionElements limit exceeded: {max_elements}"),
+            )
+        }
+        DecodeError::Wire(cause) => {
+            safe_mesh_error(1, &format!("failed to decode collision report: {cause}"))
+        }
+        DecodeError::RecordLimitExceeded { max_records } => safe_mesh_error(
+            1,
+            &format!("failed to decode collision report: RecordLimitExceeded: {max_records}"),
+        ),
+    })?;
+    Ok(verdicts
+        .into_iter()
+        .map(|(_, verdict)| {
+            match verdict {
+                CollisionVerdict::Recorded => "recorded",
+                CollisionVerdict::Known => "known",
+                CollisionVerdict::Unheld => "unheld",
+                CollisionVerdict::Agrees => "agrees",
+                _ => "unknown",
+            }
+            .to_owned()
+        })
+        .collect())
+}
+
+/// The record-ID collision alarm for a replica class with an event log.
+/// `$log` reads the log; `$merge` merges report bytes under limits.
+macro_rules! collision_alarm_methods {
+    ($class:ty, |$this:ident| $log:expr, |$that:ident, $bytes:ident, $limits:ident| $merge:expr) => {
+        #[wasm_bindgen]
+        impl $class {
+            /// The collision alarm: every held record ID a peer holds with a
+            /// different payload, raised when a peer's record collided here or
+            /// a peer's report named one. In memory only; never merged into state.
+            pub fn collisions(&self) -> Result<Vec<SafeMeshRecordCollision>, JsValue> {
+                let $this = self;
+                record_collisions($log)
+            }
+
+            /// The collision report to send back to the peer whose batch was
+            /// just merged, or `undefined` when no alarm is raised here.
+            #[wasm_bindgen(js_name = collisionReportBytes)]
+            pub fn collision_report_bytes(&self) -> Result<Option<Vec<u8>>, JsValue> {
+                let $this = self;
+                let log = $log;
+                log.collision_report_bytes()
+                    .map_err(|_| safe_mesh_error(1, "failed to encode collision report"))
+            }
+
+            /// Merge a peer's collision report and return one verdict per
+            /// entry: `"recorded"` (alarm raised here now), `"known"` (already
+            /// raised), `"unheld"` (ID not held here) or `"agrees"` (the entry
+            /// names only the payload held here). Only `"recorded"` changes
+            /// anything, and only the alarm. A malformed report throws and
+            /// changes nothing. The budgets are `mergeLogBytes`'s.
+            #[wasm_bindgen(
+                js_name = mergeCollisionReportBytes,
+                unchecked_return_type = "(\"recorded\" | \"known\" | \"unheld\" | \"agrees\")[]"
+            )]
+            #[allow(non_snake_case)]
+            pub fn merge_collision_report_bytes(
+                &mut self,
+                bytes: &[u8],
+                max_collection_elements: Option<u32>,
+                maxRecords: Option<u32>,
+            ) -> Result<Vec<String>, JsValue> {
+                let $that = self;
+                let $bytes = bytes;
+                let $limits = decode_limits(max_collection_elements, maxRecords);
+                collision_verdicts($merge)
+            }
+        }
+    };
+}
+
+fn replica_report_error(error: ReplicaError) -> DecodeError {
+    match error {
+        ReplicaError::ReportDecode(error) => error,
+        _ => unreachable!("report decode returned a different error stage"),
+    }
+}
+
+collision_alarm_methods!(
+    SafeMeshGCounterReplica,
+    |this| this.replica.log(),
+    |this, bytes, limits| this
+        .replica
+        .merge_collision_report_bytes(bytes, limits)
+        .map_err(replica_report_error)
+);
+collision_alarm_methods!(
+    SafeMeshEnableWinsFlagReplica,
+    |this| &this.log,
+    |this, bytes, limits| this.log.merge_collision_report_bytes(bytes, limits)
+);
+collision_alarm_methods!(
+    SafeMeshLwwMapReplica,
+    |this| &this.log,
+    |this, bytes, limits| this.log.merge_collision_report_bytes(bytes, limits)
+);
+collision_alarm_methods!(
+    SafeMeshLwwRegisterReplica,
+    |this| &this.log,
+    |this, bytes, limits| this.log.merge_collision_report_bytes(bytes, limits)
+);
+collision_alarm_methods!(
+    SafeMeshStringOrSetReplica,
+    |this| this.replica.log(),
+    |this, bytes, limits| this
+        .replica
+        .merge_collision_report_bytes(bytes, limits)
+        .map_err(replica_report_error)
+);
+collision_alarm_methods!(
+    SafeMeshPnCounterReplica,
+    |this| &this.log,
+    |this, bytes, limits| this.log.merge_collision_report_bytes(bytes, limits)
+);
 
 #[wasm_bindgen]
 pub struct SafeMeshGCounter {
@@ -823,7 +1040,7 @@ impl SafeMeshGCounterReplica {
             .replica
             .decode_log_bytes(bytes, decode_limits(max_collection_elements, maxRecords))
             .map_err(|e| match e {
-                ReplicaError::LogDecode(e) => event_log_decode_js_error(e),
+                ReplicaError::LogDecode(e) => event_log_decode_js_error(e, true),
                 _ => unreachable!(),
             })?;
         if log.iter().any(|r| {
@@ -928,7 +1145,7 @@ impl SafeMeshEnableWinsFlagReplica {
                     state.apply_delta(delta.clone());
                 },
             )
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+            .map_err(|error| JsValue::from(append_error(error)))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
@@ -977,7 +1194,7 @@ impl SafeMeshEnableWinsFlagReplica {
             &self.state,
             decode_limits(max_collection_elements, maxRecords),
         )
-        .map_err(event_log_decode_js_error)?;
+        .map_err(|error| event_log_decode_js_error(error, false))?;
         Ok(log
             .iter()
             .cloned()
@@ -1118,7 +1335,7 @@ impl SafeMeshLwwMapReplica {
             &self.state,
             decode_limits(max_collection_elements, maxRecords),
         )
-        .map_err(event_log_decode_js_error)?;
+        .map_err(|error| event_log_decode_js_error(error, false))?;
         Ok(log
             .iter()
             .cloned()
@@ -1257,7 +1474,7 @@ impl SafeMeshLwwRegisterReplica {
             &self.state,
             decode_limits(max_collection_elements, maxRecords),
         )
-        .map_err(event_log_decode_js_error)?;
+        .map_err(|error| event_log_decode_js_error(error, false))?;
         Ok(log
             .iter()
             .cloned()
@@ -2176,7 +2393,7 @@ impl SafeMeshEnableWinsFlagReplica {
                     state.apply_delta(delta.clone());
                 },
             )
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+            .map_err(|error| JsValue::from(append_error(error)))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
@@ -2218,7 +2435,7 @@ impl SafeMeshLwwMapReplica {
                     state.apply_delta(delta.clone());
                 },
             )
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+            .map_err(|error| JsValue::from(append_error(error)))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
@@ -2245,7 +2462,7 @@ impl SafeMeshLwwMapReplica {
                     state.apply_delta(delta.clone());
                 },
             )
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+            .map_err(|error| JsValue::from(append_error(error)))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
@@ -2293,7 +2510,7 @@ impl SafeMeshLwwRegisterReplica {
                     state.apply_delta(delta.clone());
                 },
             )
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+            .map_err(|error| JsValue::from(append_error(error)))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
@@ -3054,6 +3271,138 @@ mod tests {
     }
 
     #[test]
+    fn wasm_every_log_replica_raises_the_collision_alarm_on_both_sides() {
+        macro_rules! check {
+            ($make:expr, $first:expr, $second:expr) => {{
+                let id = RecordId {
+                    replica: 1,
+                    sequence: 1,
+                };
+                let first = Record { id, delta: $first };
+                let second = Record { id, delta: $second };
+                let (mut left, mut right) = ($make, $make);
+                left.merge_record_bytes(&first.to_wire_bytes().unwrap(), None)
+                    .unwrap();
+                right
+                    .merge_record_bytes(&second.to_wire_bytes().unwrap(), None)
+                    .unwrap();
+                let before = (left.log_bytes().unwrap(), right.log_bytes().unwrap());
+                assert_eq!(left.collision_report_bytes().unwrap(), None);
+                assert_eq!(
+                    right
+                        .merge_log_bytes(&left.log_bytes().unwrap(), None, None)
+                        .unwrap(),
+                    vec!["collision"]
+                );
+                let report = right.collision_report_bytes().unwrap().unwrap();
+                assert_eq!(
+                    left.merge_collision_report_bytes(&report, None, None)
+                        .unwrap(),
+                    vec!["recorded"]
+                );
+                for (replica, local, remote) in
+                    [(&left, &first, &second), (&right, &second, &first)]
+                {
+                    assert_eq!(
+                        replica.collisions().unwrap(),
+                        vec![SafeMeshRecordCollision {
+                            author: 1,
+                            sequence: 1,
+                            local: local.to_wire_bytes().unwrap(),
+                            remote: remote.to_wire_bytes().unwrap(),
+                        }]
+                    );
+                }
+                assert_eq!(
+                    (left.log_bytes().unwrap(), right.log_bytes().unwrap()),
+                    before
+                );
+
+                // Control: the equal payload is a duplicate and raises nothing.
+                let (mut same, mut twin) = ($make, $make);
+                for replica in [&mut same, &mut twin] {
+                    replica
+                        .merge_record_bytes(&first.to_wire_bytes().unwrap(), None)
+                        .unwrap();
+                }
+                assert_eq!(
+                    same.merge_log_bytes(&twin.log_bytes().unwrap(), None, None)
+                        .unwrap(),
+                    vec!["duplicate"]
+                );
+                assert_eq!(same.collision_report_bytes().unwrap(), None);
+                assert_eq!(same.collisions().unwrap(), vec![]);
+            }};
+        }
+        check!(
+            SafeMeshGCounterReplica::new(2, 2),
+            GCounterDelta {
+                replica: 1,
+                tally: 5
+            },
+            GCounterDelta {
+                replica: 1,
+                tally: 9
+            }
+        );
+        check!(
+            SafeMeshPnCounterReplica::new(2, 2),
+            PnCounterDelta::Inc {
+                replica: 1,
+                tally: 5
+            },
+            PnCounterDelta::Inc {
+                replica: 1,
+                tally: 9
+            }
+        );
+        check!(
+            SafeMeshEnableWinsFlagReplica::new(2),
+            EnableWinsFlagDelta::Enable { token: 5 },
+            EnableWinsFlagDelta::Enable { token: 9 }
+        );
+        check!(
+            SafeMeshLwwRegisterReplica::new(2),
+            LwwRegisterDelta {
+                timestamp: 1,
+                replica: 1,
+                value: 5
+            },
+            LwwRegisterDelta {
+                timestamp: 1,
+                replica: 1,
+                value: 9
+            }
+        );
+        check!(
+            SafeMeshLwwMapReplica::new(2),
+            LwwMapDelta::Set {
+                key: 1,
+                timestamp: 1,
+                replica: 1,
+                value: 5
+            },
+            LwwMapDelta::Set {
+                key: 1,
+                timestamp: 1,
+                replica: 1,
+                value: 9
+            }
+        );
+        check!(
+            SafeMeshStringOrSetReplica::new(2),
+            OrSetDelta::Add {
+                element: "x".to_owned(),
+                token: 5,
+            },
+            OrSetDelta::Add {
+                element: "x".to_owned(),
+                token: 9,
+            }
+        );
+    }
+
+    #[test]
     fn wasm_record_and_log_paths_name_the_same_verdict() {
         macro_rules! view {
             ($replica:ident) => {
@@ -3546,6 +3895,35 @@ mod tests {
             oracle.assert_same(&allocated);
             assert!(allocated.elements().is_empty());
         }
+    }
+
+    #[test]
+    fn wasm_string_orset_remove_admission_uses_token_sets() {
+        let mut reader = SafeMeshStringOrSetReplica::new(2);
+        let bytes = |tokens| {
+            Record {
+                id: RecordId {
+                    replica: 1,
+                    sequence: 1,
+                },
+                delta: OrSetDelta::<String, u64>::Remove { tokens },
+            }
+            .to_wire_bytes()
+            .unwrap()
+        };
+        for (tokens, expected) in [
+            (vec![1, 2], "accepted"),
+            (vec![2, 1], "duplicate"),
+            (vec![1, 2, 2], "duplicate"),
+            (vec![1, 3], "collision"),
+            (vec![], "collision"),
+        ] {
+            assert_eq!(
+                reader.try_merge_record_bytes(&bytes(tokens)).unwrap(),
+                expected
+            );
+        }
+        assert_eq!(reader.tombstones(), vec![1, 2]);
     }
 
     #[test]
@@ -4141,7 +4519,7 @@ impl SafeMeshPnCounterReplica {
             &self.state,
             decode_limits(max_collection_elements, maxRecords),
         )
-        .map_err(event_log_decode_js_error)?;
+        .map_err(|error| event_log_decode_js_error(error, true))?;
         if log.iter().any(|r| {
             safemesh_crdt::ownership::check_counter_record(
                 self.state.p_state().len(),
@@ -4256,7 +4634,7 @@ impl SafeMeshPnCounterReplica {
                     state.apply_delta(delta.clone());
                 },
             )
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+            .map_err(|error| JsValue::from(append_error(error)))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
@@ -4295,7 +4673,7 @@ impl SafeMeshPnCounterReplica {
                     state.apply_delta(delta.clone());
                 },
             )
-            .map_err(|_| safe_mesh_error(1, "event log sequence exhausted"))?;
+            .map_err(|error| JsValue::from(append_error(error)))?;
         Record { id, delta }
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
@@ -4403,6 +4781,327 @@ impl SafeMeshRgaReplica {
         )
         .map_err(|error| wire_decode_error(error, "failed to decode state"))?;
         self.state.merge(&other);
+        Ok(())
+    }
+}
+// Managed Node persistence: the envelope is local storage, never peer bytes.
+#[wasm_bindgen(typescript_custom_section)]
+const MANAGED_STORE_TYPES: &str = r#"
+export interface SafeMeshStore {
+  open(mode: "fresh" | "restart", writer: bigint): unknown;
+  readCommitted(lease: unknown): { bytes: Uint8Array; revision: bigint; anchor: bigint };
+  commit(lease: unknown, expectedRevision: bigint, nextBytes: Uint8Array): bigint;
+  close(lease: unknown): void;
+}
+export interface SafeMeshManagedCounterOptions {
+  mode: "fresh" | "restart";
+  writer: bigint;
+  writers?: number;
+}
+export type SafeMeshCounterEnvelopeVersion = 1;
+export type SafeMeshStoreErrorCode = "MISSING" | "CORRUPT" | "STALE" | "EXISTS" |
+  "LOCKED" | "COMMIT" | "DISABLED" | "REENTRY" | "CLOSED" | "COLLISION";
+export interface SafeMeshStoreError extends Error {
+  name: "SafeMeshStoreError";
+  code: SafeMeshStoreErrorCode;
+}
+"#;
+
+#[wasm_bindgen(inline_js = r#"
+export function managedError(code, message) {
+    const error = new Error(message); error.name = 'SafeMeshStoreError'; error.code = code;
+    return error;
+}
+function sync(value) {
+    if (value != null && typeof value.then === 'function')
+        throw managedError('COMMIT', 'Store callbacks must be synchronous');
+    return value;
+}
+export function managedMode(options) {
+    if (options.mode !== 'fresh' && options.mode !== 'restart')
+        throw managedError('CORRUPT', 'mode must be fresh or restart');
+    if (options.mode === 'restart' && options.writers !== undefined)
+        throw managedError('CORRUPT', 'restart obtains writers only from committed metadata');
+    return options.mode;
+}
+export function managedWriter(options) {
+    if (typeof options.writer !== 'bigint' || options.writer < 0n || options.writer > 18446744073709551615n)
+        throw managedError('CORRUPT', 'writer must be u64 bigint');
+    return options.writer;
+}
+export function managedWriters(options) {
+    if (!Number.isSafeInteger(options.writers) || options.writers < 1 || options.writers > 1000000)
+        throw managedError('CORRUPT', 'writers must be an integer in 1..1000000');
+    return options.writers;
+}
+export function managedOpen(store, mode, writer) { return sync(store.open(mode, writer)); }
+export function managedRead(store, lease) {
+    const snapshot = sync(store.readCommitted(lease));
+    if (!snapshot || !(snapshot.bytes instanceof Uint8Array) || snapshot.bytes.length < 41 ||
+        typeof snapshot.revision !== 'bigint' || typeof snapshot.anchor !== 'bigint')
+        throw managedError('CORRUPT', 'invalid committed snapshot');
+    const revision = new DataView(snapshot.bytes.buffer, snapshot.bytes.byteOffset, snapshot.bytes.byteLength).getBigUint64(33, true);
+    if (revision !== snapshot.revision || revision < 1n || snapshot.anchor !== revision)
+        throw managedError('STALE', 'envelope revision differs from independent store anchor');
+    return Array.from(snapshot.bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+export function managedCommit(store, lease, revision, bytes) {
+    const next = sync(store.commit(lease, revision, Uint8Array.from(bytes)));
+    if (typeof next !== 'bigint' || next !== revision + 1n)
+        throw managedError('COMMIT', 'Store.commit returned wrong revision');
+}
+export function managedClose(store, lease) { sync(store.close(lease)); }
+"#)]
+extern "C" {
+    #[wasm_bindgen(js_name = managedError)]
+    fn managed_error(code: &str, message: &str) -> JsValue;
+    #[wasm_bindgen(catch, js_name = managedMode)]
+    fn managed_mode(options: &JsValue) -> Result<String, JsValue>;
+    #[wasm_bindgen(catch, js_name = managedWriter)]
+    fn managed_writer(options: &JsValue) -> Result<u64, JsValue>;
+    #[wasm_bindgen(catch, js_name = managedWriters)]
+    fn managed_writers(options: &JsValue) -> Result<u32, JsValue>;
+    #[wasm_bindgen(catch, js_name = managedOpen)]
+    fn managed_open(store: &JsValue, mode: &str, writer: u64) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch, js_name = managedRead)]
+    fn managed_read(store: &JsValue, lease: &JsValue) -> Result<String, JsValue>;
+    #[wasm_bindgen(catch, js_name = managedCommit)]
+    fn managed_commit(
+        store: &JsValue,
+        lease: &JsValue,
+        revision: u64,
+        bytes: &[u8],
+    ) -> Result<(), JsValue>;
+    #[wasm_bindgen(catch, js_name = managedClose)]
+    fn managed_close(store: &JsValue, lease: &JsValue) -> Result<(), JsValue>;
+}
+
+struct ManagedCounterState {
+    counter: SafeMeshGCounterReplica,
+    revision: u64,
+    closed: bool,
+    disabled: bool,
+}
+
+/// Owns a synchronous Store lease. Call close explicitly before free.
+/// Instance methods implemented in Rust borrow through try_borrow: callback reentry
+/// is rejected as REENTRY before touching state, including read/close during commit.
+/// The wasm-bindgen-generated free() is not guarded by try_borrow. Calling free()
+/// during commit throws a wasm-bindgen ownership error and invalidates the JS handle;
+/// subsequent instance methods on that handle throw a null-pointer error. Do not
+/// call free() from a Store callback; close the handle before freeing it.
+#[wasm_bindgen]
+pub struct SafeMeshManagedGCounter {
+    store: JsValue,
+    lease: JsValue,
+    inner: RefCell<ManagedCounterState>,
+}
+
+fn managed_envelope(counter: &SafeMeshGCounterReplica, revision: u64) -> Result<Vec<u8>, JsValue> {
+    let mut bytes = b"SMNODEGC".to_vec();
+    bytes.push(1); // envelope version; magic identifies the G-Counter kind
+    bytes.extend_from_slice(&(counter.replica.state().len() as u64).to_le_bytes());
+    bytes.extend_from_slice(&counter.replica_id.to_le_bytes());
+    bytes.extend_from_slice(&counter.version_for(counter.replica_id).to_le_bytes());
+    bytes.extend_from_slice(&revision.to_le_bytes());
+    bytes.extend_from_slice(&counter.log_bytes()?);
+    Ok(bytes)
+}
+
+fn managed_restore(bytes: &[u8], writer: u64) -> Result<(SafeMeshGCounterReplica, u64), JsValue> {
+    let corrupt = || managed_error("CORRUPT", "invalid managed counter envelope or replay");
+    if bytes.len() < 41 || &bytes[..8] != b"SMNODEGC" || bytes[8] != 1 {
+        return Err(corrupt());
+    }
+    let word = |offset| u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+    let count = word(9);
+    let author = word(17);
+    let cursor = word(25);
+    let revision = word(33);
+    if count == 0 || count > 1_000_000 || author != writer || author >= count || revision == 0 {
+        return Err(corrupt());
+    }
+    let mut counter = SafeMeshGCounterReplica::new(author, count as usize);
+    let verdicts = counter
+        .merge_log_bytes(&bytes[41..], None, None)
+        .map_err(|_| corrupt())?;
+    if verdicts.iter().any(|v| v != "accepted") || counter.version_for(author) != cursor {
+        return Err(corrupt());
+    }
+    // Canonical encoding also refuses omitted history, trailing or alternate encodings.
+    if managed_envelope(&counter, revision)? != bytes {
+        return Err(corrupt());
+    }
+    Ok((counter, revision))
+}
+
+impl SafeMeshManagedGCounter {
+    fn borrow(&self, write: bool) -> Result<std::cell::RefMut<'_, ManagedCounterState>, JsValue> {
+        let inner = self
+            .inner
+            .try_borrow_mut()
+            .map_err(|_| managed_error("REENTRY", "Store callback reentry"))?;
+        if inner.closed {
+            return Err(managed_error("CLOSED", "managed handle is closed"));
+        }
+        if write && inner.disabled {
+            return Err(managed_error(
+                "DISABLED",
+                "close and restart after failed commit",
+            ));
+        }
+        Ok(inner)
+    }
+    fn candidate(inner: &ManagedCounterState) -> Result<SafeMeshGCounterReplica, JsValue> {
+        let bytes = managed_envelope(&inner.counter, inner.revision)?;
+        Ok(managed_restore(&bytes, inner.counter.replica_id)?.0)
+    }
+    fn publish(
+        &self,
+        inner: &mut ManagedCounterState,
+        candidate: SafeMeshGCounterReplica,
+    ) -> Result<(), JsValue> {
+        let next = inner
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| managed_error("COMMIT", "revision exhausted"))?;
+        let bytes = managed_envelope(&candidate, next)?;
+        if let Err(error) = managed_commit(&self.store, &self.lease, inner.revision, &bytes) {
+            inner.disabled = true;
+            return Err(error);
+        }
+        inner.counter = candidate;
+        inner.revision = next;
+        Ok(())
+    }
+}
+
+#[wasm_bindgen]
+impl SafeMeshManagedGCounter {
+    #[wasm_bindgen(js_name = open)]
+    pub fn open(
+        #[wasm_bindgen(unchecked_param_type = "SafeMeshStore")] store: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "SafeMeshManagedCounterOptions")] options: JsValue,
+    ) -> Result<SafeMeshManagedGCounter, JsValue> {
+        let mode = managed_mode(&options)?;
+        let writer = managed_writer(&options)?;
+        let count = if mode == "fresh" {
+            Some(managed_writers(&options)?)
+        } else {
+            None
+        };
+        if count.is_some_and(|n| writer >= u64::from(n)) {
+            return Err(managed_error("CORRUPT", "writer outside committed count"));
+        }
+        let lease = managed_open(&store, &mode, writer)?;
+        let result = (|| {
+            if let Some(count) = count {
+                let counter = SafeMeshGCounterReplica::new(writer, count as usize);
+                managed_commit(&store, &lease, 0, &managed_envelope(&counter, 1)?)?;
+                Ok((counter, 1))
+            } else {
+                let hex = managed_read(&store, &lease)?;
+                let bytes: Result<Vec<u8>, _> = hex
+                    .as_bytes()
+                    .chunks_exact(2)
+                    .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16))
+                    .collect();
+                managed_restore(
+                    &bytes.map_err(|_| managed_error("CORRUPT", "invalid snapshot bytes"))?,
+                    writer,
+                )
+            }
+        })();
+        match result {
+            Ok((counter, revision)) => Ok(Self {
+                store,
+                lease,
+                inner: RefCell::new(ManagedCounterState {
+                    counter,
+                    revision,
+                    closed: false,
+                    disabled: false,
+                }),
+            }),
+            Err(error) => {
+                let _ = managed_close(&store, &lease);
+                Err(error)
+            }
+        }
+    }
+
+    #[wasm_bindgen(js_name = appendBump)]
+    pub fn append_bump(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] tally: JsValue,
+    ) -> Result<Vec<u8>, JsValue> {
+        let tally = checked_u64(tally, "tally")?;
+        let mut inner = self.borrow(true)?;
+        let mut candidate = Self::candidate(&inner)?;
+        let bytes = candidate.append_bump(candidate.replica_id as usize, tally)?;
+        self.publish(&mut inner, candidate)?;
+        Ok(bytes)
+    }
+
+    #[wasm_bindgen(js_name = mergeRecordBytes, unchecked_return_type = "\"accepted\" | \"duplicate\"")]
+    pub fn merge_record_bytes(&self, bytes: &[u8]) -> Result<String, JsValue> {
+        let mut inner = self.borrow(true)?;
+        let mut candidate = Self::candidate(&inner)?;
+        let verdict = candidate.merge_record_bytes(bytes, None)?;
+        match verdict.as_str() {
+            "accepted" => self.publish(&mut inner, candidate)?,
+            "duplicate" => (),
+            _ => return Err(managed_error("COLLISION", "peer record collision")),
+        }
+        Ok(verdict)
+    }
+
+    #[wasm_bindgen(js_name = mergeLogBytes, unchecked_return_type = "(\"accepted\" | \"duplicate\")[]")]
+    pub fn merge_log_bytes(&self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
+        let mut inner = self.borrow(true)?;
+        let mut candidate = Self::candidate(&inner)?;
+        let verdicts = candidate.merge_log_bytes(bytes, None, None)?;
+        if verdicts.iter().any(|v| v == "collision") {
+            return Err(managed_error("COLLISION", "peer batch collision"));
+        }
+        if verdicts.iter().any(|v| v == "accepted") {
+            self.publish(&mut inner, candidate)?;
+        }
+        Ok(verdicts)
+    }
+
+    #[wasm_bindgen(unchecked_return_type = "bigint")]
+    pub fn value(&self) -> Result<JsValue, JsValue> {
+        Ok(self.borrow(false)?.counter.value())
+    }
+    pub fn state(&self) -> Result<Vec<u64>, JsValue> {
+        Ok(self.borrow(false)?.counter.state())
+    }
+    #[wasm_bindgen(js_name = peerLogBytes)]
+    pub fn log_bytes(&self) -> Result<Vec<u8>, JsValue> {
+        self.borrow(false)?.counter.log_bytes()
+    }
+    #[wasm_bindgen(js_name = versionFor)]
+    pub fn version_for(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] writer: JsValue,
+    ) -> Result<u64, JsValue> {
+        Ok(self
+            .borrow(false)?
+            .counter
+            .version_for(checked_u64(writer, "writer")?))
+    }
+    pub fn close(&self) -> Result<(), JsValue> {
+        let mut inner = self
+            .inner
+            .try_borrow_mut()
+            .map_err(|_| managed_error("REENTRY", "Store callback reentry"))?;
+        if !inner.closed {
+            // A throwing close may have released the lease: retain no write authority.
+            inner.disabled = true;
+            managed_close(&self.store, &self.lease)?;
+            inner.closed = true;
+        }
         Ok(())
     }
 }

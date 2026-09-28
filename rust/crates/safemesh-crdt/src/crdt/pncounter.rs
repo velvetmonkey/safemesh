@@ -28,11 +28,23 @@ pub enum PnCounterDelta {
 
 impl PnCounter {
     /// Fresh counter for `n` replicas — the lattice bottom `(⊥, ⊥)`.
+    ///
+    /// # Panics
+    /// Panics above [`GCounter::MAX_REPLICAS`] or if either side cannot be
+    /// allocated. Use [`Self::try_new`] for a fallible width check.
     pub fn new(n: usize) -> Self {
-        PnCounter {
-            p: GCounter::new(n),
-            n: GCounter::new(n),
-        }
+        Self::try_new(n).expect("counter width cannot be allocated")
+    }
+
+    /// Reject counts above [`GCounter::MAX_REPLICAS`] (4,096) before allocation.
+    /// This matches the wire author limit and bounds both sides to 64 KiB.
+    /// Allocate both sides through the zeroed allocator path, as on main.
+    /// Admitted allocation exhaustion follows the allocator's out-of-memory policy.
+    pub fn try_new(n: usize) -> Result<Self, CoordinateError> {
+        Ok(PnCounter {
+            p: GCounter::try_new(n)?,
+            n: GCounter::try_new(n)?,
+        })
     }
 
     /// Apply `SafeMesh.deltaBumpP replica tally` — increment side, one

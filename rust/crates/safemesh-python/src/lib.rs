@@ -4,11 +4,14 @@
 
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use safemesh_crdt::ownership::{allocate_token, WriterConfig};
 use safemesh_crdt::{
     CollectionLimits, Crdt, DecodeError, DecodeLimits, EnableWinsFlag, EnableWinsFlagDelta,
     EventLog, GCounter, GCounterDelta, GSet, LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta,
-    OrSet, PnCounter, Record, Rga, WireDecode, WireEncode,
+    OrSet, OrSetDelta, PnCounter, Record, Replica, ReplicaError, Rga, WireDecode, WireEncode,
+    WireError,
 };
+use safemesh_crdt::{CollisionVerdict, RecordId};
 
 // Reject bool at the Python boundary before any method body can mutate state.
 // Ordinary extraction retains PyO3's TypeError/OverflowError behavior.
@@ -29,13 +32,12 @@ fn collection_budget(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<usize>
     }
 }
 
-// Capacity is a byte limit, not just a usize limit. Checking it here keeps
-// an unrepresentable Vec allocation from escaping as a PyO3 PanicException.
+// Bound the domain before allocating any coordinates.
 fn numeric_replicas(value: &Bound<'_, PyAny>) -> PyResult<usize> {
     let replicas: usize = numeric(value)?;
-    if replicas > isize::MAX as usize / std::mem::size_of::<u64>() {
+    if replicas > GCounter::MAX_REPLICAS {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "replicas exceeds counter capacity",
+            "replicas exceeds counter maximum (4096)",
         ));
     }
     Ok(replicas)
@@ -59,13 +61,36 @@ fn encode_bytes<'py>(
         .map_err(|_| pyo3::exceptions::PyValueError::new_err(message))
 }
 
+// Preserve the binding's existing mappings for each core operation.
+fn replica_wire_error(error: ReplicaError) -> WireError {
+    match error {
+        ReplicaError::RecordDecode(error) | ReplicaError::LogEncode(error) => error,
+        _ => unreachable!("wire operation returned a different error stage"),
+    }
+}
+
+fn replica_log_error(error: ReplicaError) -> DecodeError {
+    match error {
+        ReplicaError::LogDecode(error) => error,
+        _ => unreachable!("log decode returned a different error stage"),
+    }
+}
+
+fn replica_append_error(error: ReplicaError) -> PyErr {
+    match error {
+        ReplicaError::Append(error) => append_error(error),
+        _ => unreachable!("append returned a different error stage"),
+    }
+}
+
 // Each decode path keeps one stable prefix and names the core `WireError` as
 // its cause, so the same malformed bytes read the same on either path.
 fn record_decode_error(error: safemesh_crdt::WireError) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(format!("failed to decode record: {error}"))
 }
 
-fn event_log_decode_error(error: safemesh_crdt::WireError) -> PyErr {
+// Counter ownership covers coordinates; other carriers name the record writer.
+fn event_log_decode_error(error: safemesh_crdt::WireError, counter_log: bool) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(match error {
         safemesh_crdt::WireError::RecordCollision => "record ID collision".to_owned(),
         safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
@@ -73,9 +98,12 @@ fn event_log_decode_error(error: safemesh_crdt::WireError) -> PyErr {
         }
         safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch".to_owned(),
         safemesh_crdt::WireError::MissingShape => "event log missing shape".to_owned(),
-        safemesh_crdt::WireError::OwnershipViolation => {
-            "counter coordinate out of range or not owned by record author".to_owned()
+        safemesh_crdt::WireError::OwnershipViolation => if counter_log {
+            "counter coordinate out of range or not owned by record author"
+        } else {
+            "writer replica does not match record author"
         }
+        .to_owned(),
         cause @ (safemesh_crdt::WireError::ZeroSequenceAdd { .. }
         | safemesh_crdt::WireError::ZeroSequenceRemove { .. }) => cause.to_string(),
         cause => format!("failed to decode event log: {cause}"),
@@ -101,7 +129,7 @@ fn python_zero_sequence_remove_mapping_keeps_core_cause() {
         safemesh_crdt::WireError::ZeroSequenceRemove { replica: 1 }
     );
     for error in [
-        event_log_decode_error(cause),
+        event_log_decode_error(cause, false),
         record_verdict(safemesh_crdt::Admission::Invalid(cause)).unwrap_err(),
     ] {
         let text = error.to_string();
@@ -110,9 +138,128 @@ fn python_zero_sequence_remove_mapping_keeps_core_cause() {
     }
 }
 
-fn bounded_event_log_decode_error(error: DecodeError) -> PyErr {
+/// One record ID this replica holds that a peer holds with a different payload:
+/// the collision alarm. `local` and `remote` are record wire bytes under the
+/// ID, for this replica's payload and the peer's.
+#[pyclass(name = "RecordCollision", frozen)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PyRecordCollision {
+    author: u64,
+    sequence: u64,
+    local: Vec<u8>,
+    remote: Vec<u8>,
+}
+
+#[pymethods]
+impl PyRecordCollision {
+    pub fn author(&self) -> u64 {
+        self.author
+    }
+
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    pub fn local<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new_bound(py, &self.local)
+    }
+
+    pub fn remote<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new_bound(py, &self.remote)
+    }
+
+    pub fn __repr__(&self) -> String {
+        format!(
+            "RecordCollision(author={}, sequence={})",
+            self.author, self.sequence
+        )
+    }
+}
+
+fn record_collisions<D: Clone + WireEncode>(log: &EventLog<D>) -> PyResult<Vec<PyRecordCollision>> {
+    log.collisions()
+        .into_iter()
+        .map(|collision| {
+            let record = |delta| {
+                Record {
+                    id: collision.id,
+                    delta,
+                }
+                .to_wire_bytes()
+                .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to encode record"))
+            };
+            Ok(PyRecordCollision {
+                author: collision.id.replica,
+                sequence: collision.id.sequence,
+                local: record(collision.local)?,
+                remote: record(collision.remote)?,
+            })
+        })
+        .collect()
+}
+
+fn collision_report_bytes<'py>(
+    py: Python<'py>,
+    bytes: Result<Option<Vec<u8>>, WireError>,
+) -> PyResult<Option<Bound<'py, PyBytes>>> {
+    bytes
+        .map(|bytes| bytes.map(|bytes| PyBytes::new_bound(py, &bytes)))
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to encode collision report"))
+}
+
+fn collision_report_limits(
+    max_records: Option<&Bound<'_, PyAny>>,
+    max_collection_elements: Option<&Bound<'_, PyAny>>,
+) -> PyResult<DecodeLimits> {
+    Ok(DecodeLimits {
+        max_records: collection_budget(max_records)?,
+        max_collection_elements: collection_budget(max_collection_elements)?,
+    })
+}
+
+fn collision_verdicts(
+    verdicts: Result<Vec<(RecordId, CollisionVerdict)>, DecodeError>,
+) -> PyResult<Vec<String>> {
+    let verdicts = verdicts.map_err(|error| {
+        pyo3::exceptions::PyValueError::new_err(match error {
+            DecodeError::Wire(cause) => format!("failed to decode collision report: {cause}"),
+            DecodeError::RecordLimitExceeded { max_records } => {
+                format!("failed to decode collision report: RecordLimitExceeded: {max_records}")
+            }
+        })
+    })?;
+    Ok(verdicts
+        .into_iter()
+        .map(|(_, verdict)| {
+            match verdict {
+                CollisionVerdict::Recorded => "recorded",
+                CollisionVerdict::Known => "known",
+                CollisionVerdict::Unheld => "unheld",
+                CollisionVerdict::Agrees => "agrees",
+                _ => "unknown",
+            }
+            .to_owned()
+        })
+        .collect())
+}
+
+fn replica_wire_report_error(error: ReplicaError) -> WireError {
     match error {
-        DecodeError::Wire(error) => event_log_decode_error(error),
+        ReplicaError::ReportEncode(error) => error,
+        _ => unreachable!("report encode returned a different error stage"),
+    }
+}
+
+fn replica_report_error(error: ReplicaError) -> DecodeError {
+    match error {
+        ReplicaError::ReportDecode(error) => error,
+        _ => unreachable!("report decode returned a different error stage"),
+    }
+}
+
+fn bounded_event_log_decode_error(error: DecodeError, counter_log: bool) -> PyErr {
+    match error {
+        DecodeError::Wire(error) => event_log_decode_error(error, counter_log),
         DecodeError::RecordLimitExceeded { max_records } => {
             pyo3::exceptions::PyValueError::new_err(format!(
                 "failed to decode event log: RecordLimitExceeded: {max_records}"
@@ -139,10 +286,24 @@ fn record_verdict(admission: safemesh_crdt::Admission) -> PyResult<String> {
             cause @ (safemesh_crdt::WireError::ZeroSequenceAdd { .. }
             | safemesh_crdt::WireError::ZeroSequenceRemove { .. }),
         ) => Err(pyo3::exceptions::PyValueError::new_err(cause.to_string())),
+        safemesh_crdt::Admission::Invalid(safemesh_crdt::WireError::OwnershipViolation) => Err(
+            pyo3::exceptions::PyValueError::new_err("writer replica does not match record author"),
+        ),
         safemesh_crdt::Admission::Invalid(_) => {
             Err(pyo3::exceptions::PyValueError::new_err("invalid record"))
         }
         admission => Ok(admission_name(admission)),
+    }
+}
+
+fn append_error(error: safemesh_crdt::AppendError) -> PyErr {
+    match error {
+        safemesh_crdt::AppendError::SequenceExhausted => {
+            pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
+        }
+        safemesh_crdt::AppendError::InvalidRecord(cause) => {
+            record_verdict(safemesh_crdt::Admission::Invalid(cause)).unwrap_err()
+        }
     }
 }
 
@@ -159,11 +320,14 @@ mod py_g_counter_python {
 
     #[pymethods]
     impl PyGCounter {
+        /// Construct a zero counter for at most 4096 replicas (the wire author limit).
+        /// Larger counts raise ValueError before allocation.
         #[new]
-        pub fn new(#[pyo3(from_py_with = "numeric_replicas")] replicas: usize) -> Self {
-            PyGCounter {
-                inner: GCounter::new(replicas),
-            }
+        pub fn new(#[pyo3(from_py_with = "numeric_replicas")] replicas: usize) -> PyResult<Self> {
+            Ok(PyGCounter {
+                inner: GCounter::try_new(replicas)
+                    .map_err(|error| pyo3::exceptions::PyMemoryError::new_err(error.to_string()))?,
+            })
         }
 
         pub fn apply_bump(
@@ -486,8 +650,7 @@ pub use enable_wins_flag_disable_delta_to_wire_python::enable_wins_flag_disable_
 #[pyclass(name = "GCounterReplica")]
 pub struct PyGCounterReplica {
     replica_id: u64,
-    state: GCounter,
-    log: EventLog<GCounterDelta>,
+    replica: Replica<GCounter>,
 }
 
 // PyO3 0.22 generates redundant PyErr conversions outside the annotated item.
@@ -498,16 +661,19 @@ mod py_g_counter_replica_python {
 
     #[pymethods]
     impl PyGCounterReplica {
+        /// Construct a replica with at most 4096 coordinates (the wire author limit).
+        /// Larger counts raise ValueError before allocation.
         #[new]
         pub fn new(
             #[pyo3(from_py_with = "numeric")] replica_id: u64,
             #[pyo3(from_py_with = "numeric_replicas")] replicas: usize,
-        ) -> Self {
-            PyGCounterReplica {
+        ) -> PyResult<Self> {
+            Ok(PyGCounterReplica {
                 replica_id,
-                state: GCounter::new(replicas),
-                log: EventLog::with_replica_count(replicas),
-            }
+                replica: Replica::new(GCounter::try_new(replicas).map_err(|error| {
+                    pyo3::exceptions::PyMemoryError::new_err(error.to_string())
+                })?),
+            })
         }
 
         pub fn append_bump<'py>(
@@ -517,7 +683,7 @@ mod py_g_counter_replica_python {
             #[pyo3(from_py_with = "numeric")] tally: u64,
         ) -> PyResult<Bound<'py, PyBytes>> {
             if safemesh_crdt::ownership::check_counter_record(
-                self.state.len(),
+                self.replica.state().len(),
                 safemesh_crdt::RecordId {
                     replica: self.replica_id,
                     sequence: 1,
@@ -537,33 +703,21 @@ mod py_g_counter_replica_python {
                 replica: counter_replica,
                 tally,
             };
-            let id = self
-                .log
-                .append_with(
-                    &mut self.state,
-                    self.replica_id,
-                    delta.clone(),
-                    |state, delta| {
-                        state.apply_delta(delta.clone());
-                    },
-                )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
-            encode_bytes(
-                py,
-                Record { id, delta }.to_wire_bytes(),
-                "failed to encode record",
-            )
+            let record = self
+                .replica
+                .append(self.replica_id, delta)
+                .map_err(replica_append_error)?;
+            encode_bytes(py, record.to_wire_bytes(), "failed to encode record")
         }
 
         /// Return the core admission verdict for the decoded input record, as
         /// `merge_log_bytes` does per record. Only "accepted" changes state.
         pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<String> {
             let record =
-                Record::<GCounterDelta>::from_wire_bytes(bytes).map_err(record_decode_error)?;
+                Replica::<GCounter>::inspect_record_bytes(bytes, CollectionLimits::WIRE_DEFAULT)
+                    .map_err(|error| record_decode_error(replica_wire_error(error)))?;
             if safemesh_crdt::ownership::check_counter_record(
-                self.state.len(),
+                self.replica.state().len(),
                 record.id,
                 &record.delta,
             )
@@ -573,12 +727,7 @@ mod py_g_counter_replica_python {
                     "counter coordinate out of range or not owned by record author",
                 ));
             }
-            record_verdict(
-                self.log
-                    .admit_with(&mut self.state, record, |state, delta| {
-                        state.apply_delta(delta.clone());
-                    }),
-            )
+            record_verdict(self.replica.admit(record))
         }
 
         /// Return one core admission verdict for every decoded input record.
@@ -593,15 +742,17 @@ mod py_g_counter_replica_python {
                 max_records,
                 ..DecodeLimits::default()
             };
-            let log = EventLog::<GCounterDelta>::records_from_wire_bytes_for_with_limits(
-                bytes,
-                &self.state,
-                limits,
-            )
-            .map_err(bounded_event_log_decode_error)?;
+            let log = self
+                .replica
+                .decode_log_bytes(bytes, limits)
+                .map_err(|error| bounded_event_log_decode_error(replica_log_error(error), true))?;
             if log.iter().any(|r| {
-                safemesh_crdt::ownership::check_counter_record(self.state.len(), r.id, &r.delta)
-                    .is_err()
+                safemesh_crdt::ownership::check_counter_record(
+                    self.replica.state().len(),
+                    r.id,
+                    &r.delta,
+                )
+                .is_err()
             }) {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "counter coordinate out of range or not owned by record author",
@@ -610,31 +761,71 @@ mod py_g_counter_replica_python {
             Ok(log
                 .iter()
                 .cloned()
-                .map(|record| {
-                    self.log
-                        .admit_with(&mut self.state, record, |state, delta| {
-                            state.apply_delta(delta.clone());
-                        })
-                })
+                .map(|record| self.replica.admit(record))
                 .map(admission_name)
                 .collect())
         }
 
         pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-            encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
+            encode_bytes(
+                py,
+                self.replica.log_bytes().map_err(replica_wire_error),
+                "failed to encode event log",
+            )
+        }
+
+        /// The collision alarm: every held record ID a peer holds with a
+        /// different payload, raised when a peer's record collided here or a
+        /// peer's report named one. In memory only; never merged into state.
+        pub fn collisions(&self) -> PyResult<Vec<PyRecordCollision>> {
+            record_collisions(self.replica.log())
+        }
+
+        /// The collision report to send back to the peer whose batch was just
+        /// merged, or `None` when no alarm is raised here.
+        pub fn collision_report_bytes<'py>(
+            &self,
+            py: Python<'py>,
+        ) -> PyResult<Option<Bound<'py, PyBytes>>> {
+            collision_report_bytes(
+                py,
+                self.replica
+                    .collision_report_bytes()
+                    .map_err(replica_wire_report_error),
+            )
+        }
+
+        /// Merge a peer's collision report and return one verdict per entry:
+        /// "recorded" (alarm raised here now), "known" (already raised),
+        /// "unheld" (ID not held here) or "agrees" (the entry names only the
+        /// payload held here). Only "recorded" changes anything, and only the
+        /// alarm. A malformed report raises ValueError and changes nothing.
+        #[pyo3(signature = (bytes, *, max_records = None, max_collection_elements = None))]
+        pub fn merge_collision_report_bytes(
+            &mut self,
+            bytes: &[u8],
+            max_records: Option<&Bound<'_, PyAny>>,
+            max_collection_elements: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<Vec<String>> {
+            let limits = collision_report_limits(max_records, max_collection_elements)?;
+            collision_verdicts(
+                self.replica
+                    .merge_collision_report_bytes(bytes, limits)
+                    .map_err(replica_report_error),
+            )
         }
 
         pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
-            self.log.version().get(replica)
+            self.replica.version().get(replica)
         }
 
         /// The counter total as a Python `int`, exact past the 64-bit boundary.
         pub fn value(&self) -> u128 {
-            self.state.value()
+            self.replica.state().value()
         }
 
         pub fn state(&self) -> Vec<u64> {
-            self.state.state().to_vec()
+            self.replica.state().state().to_vec()
         }
     }
 }
@@ -679,9 +870,7 @@ mod py_enable_wins_flag_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -706,9 +895,7 @@ mod py_enable_wins_flag_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -747,7 +934,7 @@ mod py_enable_wins_flag_replica_python {
                     &self.state,
                     limits,
                 )
-                .map_err(bounded_event_log_decode_error)?;
+                .map_err(|error| bounded_event_log_decode_error(error, false))?;
             Ok(log
                 .iter()
                 .cloned()
@@ -763,6 +950,38 @@ mod py_enable_wins_flag_replica_python {
 
         pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
             encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
+        }
+
+        /// The collision alarm: every held record ID a peer holds with a
+        /// different payload, raised when a peer's record collided here or a
+        /// peer's report named one. In memory only; never merged into state.
+        pub fn collisions(&self) -> PyResult<Vec<PyRecordCollision>> {
+            record_collisions(&self.log)
+        }
+
+        /// The collision report to send back to the peer whose batch was just
+        /// merged, or `None` when no alarm is raised here.
+        pub fn collision_report_bytes<'py>(
+            &self,
+            py: Python<'py>,
+        ) -> PyResult<Option<Bound<'py, PyBytes>>> {
+            collision_report_bytes(py, self.log.collision_report_bytes())
+        }
+
+        /// Merge a peer's collision report and return one verdict per entry:
+        /// "recorded" (alarm raised here now), "known" (already raised),
+        /// "unheld" (ID not held here) or "agrees" (the entry names only the
+        /// payload held here). Only "recorded" changes anything, and only the
+        /// alarm. A malformed report raises ValueError and changes nothing.
+        #[pyo3(signature = (bytes, *, max_records = None, max_collection_elements = None))]
+        pub fn merge_collision_report_bytes(
+            &mut self,
+            bytes: &[u8],
+            max_records: Option<&Bound<'_, PyAny>>,
+            max_collection_elements: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<Vec<String>> {
+            let limits = collision_report_limits(max_records, max_collection_elements)?;
+            collision_verdicts(self.log.merge_collision_report_bytes(bytes, limits))
         }
 
         pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
@@ -831,9 +1050,7 @@ mod py_lww_map_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -863,9 +1080,7 @@ mod py_lww_map_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -903,7 +1118,7 @@ mod py_lww_map_replica_python {
                 &self.state,
                 limits,
             )
-            .map_err(bounded_event_log_decode_error)?;
+            .map_err(|error| bounded_event_log_decode_error(error, false))?;
             Ok(log
                 .iter()
                 .cloned()
@@ -919,6 +1134,38 @@ mod py_lww_map_replica_python {
 
         pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
             encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
+        }
+
+        /// The collision alarm: every held record ID a peer holds with a
+        /// different payload, raised when a peer's record collided here or a
+        /// peer's report named one. In memory only; never merged into state.
+        pub fn collisions(&self) -> PyResult<Vec<PyRecordCollision>> {
+            record_collisions(&self.log)
+        }
+
+        /// The collision report to send back to the peer whose batch was just
+        /// merged, or `None` when no alarm is raised here.
+        pub fn collision_report_bytes<'py>(
+            &self,
+            py: Python<'py>,
+        ) -> PyResult<Option<Bound<'py, PyBytes>>> {
+            collision_report_bytes(py, self.log.collision_report_bytes())
+        }
+
+        /// Merge a peer's collision report and return one verdict per entry:
+        /// "recorded" (alarm raised here now), "known" (already raised),
+        /// "unheld" (ID not held here) or "agrees" (the entry names only the
+        /// payload held here). Only "recorded" changes anything, and only the
+        /// alarm. A malformed report raises ValueError and changes nothing.
+        #[pyo3(signature = (bytes, *, max_records = None, max_collection_elements = None))]
+        pub fn merge_collision_report_bytes(
+            &mut self,
+            bytes: &[u8],
+            max_records: Option<&Bound<'_, PyAny>>,
+            max_collection_elements: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<Vec<String>> {
+            let limits = collision_report_limits(max_records, max_collection_elements)?;
+            collision_verdicts(self.log.merge_collision_report_bytes(bytes, limits))
         }
 
         pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
@@ -997,9 +1244,7 @@ mod py_lww_register_replica_python {
                         state.apply_delta(delta.clone());
                     },
                 )
-                .map_err(|_| {
-                    pyo3::exceptions::PyValueError::new_err("event log sequence exhausted")
-                })?;
+                .map_err(append_error)?;
             encode_bytes(
                 py,
                 Record { id, delta }.to_wire_bytes(),
@@ -1037,7 +1282,7 @@ mod py_lww_register_replica_python {
                 &self.state,
                 limits,
             )
-            .map_err(bounded_event_log_decode_error)?;
+            .map_err(|error| bounded_event_log_decode_error(error, false))?;
             Ok(log
                 .iter()
                 .cloned()
@@ -1053,6 +1298,38 @@ mod py_lww_register_replica_python {
 
         pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
             encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
+        }
+
+        /// The collision alarm: every held record ID a peer holds with a
+        /// different payload, raised when a peer's record collided here or a
+        /// peer's report named one. In memory only; never merged into state.
+        pub fn collisions(&self) -> PyResult<Vec<PyRecordCollision>> {
+            record_collisions(&self.log)
+        }
+
+        /// The collision report to send back to the peer whose batch was just
+        /// merged, or `None` when no alarm is raised here.
+        pub fn collision_report_bytes<'py>(
+            &self,
+            py: Python<'py>,
+        ) -> PyResult<Option<Bound<'py, PyBytes>>> {
+            collision_report_bytes(py, self.log.collision_report_bytes())
+        }
+
+        /// Merge a peer's collision report and return one verdict per entry:
+        /// "recorded" (alarm raised here now), "known" (already raised),
+        /// "unheld" (ID not held here) or "agrees" (the entry names only the
+        /// payload held here). Only "recorded" changes anything, and only the
+        /// alarm. A malformed report raises ValueError and changes nothing.
+        #[pyo3(signature = (bytes, *, max_records = None, max_collection_elements = None))]
+        pub fn merge_collision_report_bytes(
+            &mut self,
+            bytes: &[u8],
+            max_records: Option<&Bound<'_, PyAny>>,
+            max_collection_elements: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<Vec<String>> {
+            let limits = collision_report_limits(max_records, max_collection_elements)?;
+            collision_verdicts(self.log.merge_collision_report_bytes(bytes, limits))
         }
 
         pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
@@ -1090,6 +1367,8 @@ mod py_lww_register_replica_python {
 fn safemesh_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGCounter>()?;
     m.add_class::<PyOrSet>()?;
+    m.add_class::<PyStringOrSetReplica>()?;
+    m.add_class::<PyStringOrSetRecord>()?;
     m.add_class::<PyGSet>()?;
     m.add_class::<PyPnCounter>()?;
     m.add_class::<PyRga>()?;
@@ -1100,6 +1379,7 @@ fn safemesh_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEnableWinsFlagReplica>()?;
     m.add_class::<PyLwwMap>()?;
     m.add_class::<PyLwwMapReplica>()?;
+    m.add_class::<PyRecordCollision>()?;
     m.add_function(wrap_pyfunction!(gcounter_delta_to_wire, m)?)?;
     m.add_function(wrap_pyfunction!(lww_register_delta_to_wire, m)?)?;
     m.add_function(wrap_pyfunction!(lww_map_set_delta_to_wire, m)?)?;
@@ -1172,6 +1452,589 @@ mod py_or_set_python {
 impl PyOrSet {
     pub fn merge(&mut self, other: &PyOrSet) {
         self.inner.merge(&other.inner);
+    }
+}
+
+// Record-decode texts match WASM. Log-decode texts normally match too, but
+// Python prefixes zero-sequence core errors with "failed to decode event log: "
+// while WASM returns those reasons alone.
+fn string_orset_record_decode_error(error: WireError) -> String {
+    match error {
+        WireError::CollectionElementLimitExceeded { max_elements } => {
+            format!("maxCollectionElements limit exceeded: {max_elements}")
+        }
+        cause => format!("failed to decode record: {cause}"),
+    }
+}
+
+fn string_orset_log_decode_error(error: DecodeError) -> String {
+    match error {
+        DecodeError::Wire(WireError::CollectionElementLimitExceeded { max_elements }) => {
+            format!("maxCollectionElements limit exceeded: {max_elements}")
+        }
+        DecodeError::Wire(WireError::RecordCollision) => "record ID collision".to_owned(),
+        DecodeError::Wire(WireError::ReplicaCountMismatch { .. }) => {
+            "replica count mismatch".to_owned()
+        }
+        DecodeError::Wire(WireError::DeltaTypeMismatch) => "delta type mismatch".to_owned(),
+        DecodeError::Wire(WireError::MissingShape) => "event log missing shape".to_owned(),
+        DecodeError::Wire(cause) => format!("failed to decode event log: {cause}"),
+        DecodeError::RecordLimitExceeded { .. } => "failed to decode event log".to_owned(),
+    }
+}
+
+/// A record decoded by the core, exposed field by field.
+///
+/// `delta_kind()` is `"add"` (then `element()` and `token()` are set, `tokens()`
+/// is empty) or `"remove"` (then `tokens()` carries the tombstoned tokens and
+/// `element()`/`token()` are `None`).
+#[pyclass(name = "StringOrSetRecord", frozen)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PyStringOrSetRecord {
+    id: safemesh_crdt::RecordId,
+    delta: OrSetDelta<String, u64>,
+}
+
+#[pymethods]
+impl PyStringOrSetRecord {
+    pub fn replica(&self) -> u64 {
+        self.id.replica
+    }
+
+    pub fn sequence(&self) -> u64 {
+        self.id.sequence
+    }
+
+    pub fn delta_kind(&self) -> &'static str {
+        match self.delta {
+            OrSetDelta::Add { .. } => "add",
+            OrSetDelta::Remove { .. } => "remove",
+        }
+    }
+
+    pub fn element(&self) -> Option<String> {
+        match &self.delta {
+            OrSetDelta::Add { element, .. } => Some(element.clone()),
+            OrSetDelta::Remove { .. } => None,
+        }
+    }
+
+    pub fn token(&self) -> Option<u64> {
+        match &self.delta {
+            OrSetDelta::Add { token, .. } => Some(*token),
+            OrSetDelta::Remove { .. } => None,
+        }
+    }
+
+    pub fn tokens(&self) -> Vec<u64> {
+        match &self.delta {
+            OrSetDelta::Add { .. } => Vec::new(),
+            OrSetDelta::Remove { tokens } => tokens.clone(),
+        }
+    }
+}
+
+/// Observed-remove set of UTF-8 string elements and u64 tokens, carried by an
+/// event log so records can be replayed, deduplicated and repaired from a log.
+///
+/// Every value is computed by `safemesh_crdt::OrSet<String, u64>` and
+/// `safemesh_crdt::EventLog`. The optional allocated lifecycle checks ownership
+/// and holds a live-author claim within this Python process. Tokens remain
+/// global to the set, exactly as in `OrSet`. Python exposes the WASM
+/// `SafeMeshStringOrSetReplica` replica, read, merge, inspect and allocated-writer
+/// operations in snake_case where WASM uses camelCase. The WASM lifecycle methods
+/// `free()` and `[Symbol.dispose]()` have no Python counterpart. Verdict strings
+/// match for the shared operations. Record-decode and allocated-writer refusal texts
+/// match WASM; Python raises `ValueError`. Invalid record admission differs:
+/// for example, a sequence-0 OR-Set remove raises `ValueError("invalid record")`
+/// in Python, while WASM names the reason (`ZeroSequenceRemove`). For a log
+/// containing that record, Python prefixes the core reason with
+/// `failed to decode event log: `; WASM returns the core reason alone.
+#[pyclass(name = "StringOrSetReplica")]
+pub struct PyStringOrSetReplica {
+    replica_id: u64,
+    allocated_writers: Option<u64>,
+    replica: Replica<OrSet<String, u64>>,
+}
+
+// WASM keeps this registry `thread_local`, which is one WASM instance. A Python
+// object can be created on one thread and dropped on another, so the Python
+// registry is one process-wide set behind a mutex: at most one live allocated
+// handle per author in this process. This is not cross-process fencing.
+// Replicas built with the plain constructor never enter it.
+static STRING_ORSET_ALLOCATED_AUTHORS: std::sync::Mutex<std::collections::BTreeSet<u64>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+// The set holds plain integers, so a panic elsewhere cannot leave it half
+// updated; recover the guard instead of refusing every later claim.
+fn string_orset_allocated_authors(
+) -> std::sync::MutexGuard<'static, std::collections::BTreeSet<u64>> {
+    STRING_ORSET_ALLOCATED_AUTHORS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+impl Drop for PyStringOrSetReplica {
+    fn drop(&mut self) {
+        if self.allocated_writers.is_some() {
+            string_orset_allocated_authors().remove(&self.replica_id);
+        }
+    }
+}
+
+impl PyStringOrSetReplica {
+    fn unallocated(replica_id: u64) -> Self {
+        PyStringOrSetReplica {
+            replica_id,
+            allocated_writers: None,
+            replica: Replica::new(OrSet::new()),
+        }
+    }
+
+    fn claim(&mut self, writers: u64) -> Result<(), String> {
+        WriterConfig {
+            writers,
+            writer: self.replica_id,
+        }
+        .validate()
+        .map_err(|_| "invalid writer configuration".to_owned())?;
+        if !string_orset_allocated_authors().insert(self.replica_id) {
+            return Err("author already has a live allocated writer".to_owned());
+        }
+        self.allocated_writers = Some(writers);
+        Ok(())
+    }
+
+    fn try_create_allocated(writers: u64, author: u64) -> Result<Self, String> {
+        let mut replica = Self::unallocated(author);
+        replica.claim(writers)?;
+        Ok(replica)
+    }
+
+    fn check_owned_record(
+        writers: u64,
+        record: &Record<OrSetDelta<String, u64>>,
+    ) -> Result<(), String> {
+        if record.id.replica >= writers || record.id.sequence == 0 {
+            return Err(
+                "allocation/history consistency: invalid record author or sequence".to_owned(),
+            );
+        }
+        if let OrSetDelta::Add { token, .. } = &record.delta {
+            if allocate_token(writers, record.id.replica, record.id.sequence) != Some(*token) {
+                return Err("allocation/history consistency: token mismatch".to_owned());
+            }
+        }
+        Ok(())
+    }
+
+    // Check every add, including tombstoned adds, and require a complete local
+    // history. Peer histories may contain gaps during ordinary record exchange.
+    fn checked_next(&self, writers: u64) -> Result<u64, String> {
+        WriterConfig {
+            writers,
+            writer: self.replica_id,
+        }
+        .validate()
+        .map_err(|_| "invalid writer configuration".to_owned())?;
+        let mut last = 0;
+        let mut count = 0;
+        for record in self.replica.log().records() {
+            Self::check_owned_record(writers, record)?;
+            if record.id.replica == self.replica_id {
+                last = last.max(record.id.sequence);
+                count += 1;
+            }
+        }
+        if count != last {
+            return Err("allocation/history consistency: incomplete local history".to_owned());
+        }
+        last.checked_add(1)
+            .ok_or_else(|| "allocation sequence exhausted".to_owned())
+    }
+
+    fn checked_write_next(&self, writers: u64) -> Result<u64, String> {
+        let next = self.checked_next(writers)?;
+        // Keep an exhausted but consistent identity exportable/restorable.
+        // A write must leave its subsequent cursor representable as well.
+        if next == u64::MAX {
+            return Err("allocation sequence exhausted".to_owned());
+        }
+        Ok(next)
+    }
+
+    fn check_incoming(&self, record: &Record<OrSetDelta<String, u64>>) -> Result<(), String> {
+        if let Some(writers) = self.allocated_writers {
+            Self::check_owned_record(writers, record)?;
+            if record.id.replica == self.replica_id
+                && !self
+                    .replica
+                    .log()
+                    .records()
+                    .iter()
+                    .any(|known| known.id == record.id)
+            {
+                return Err("incoming record claims the local author".to_owned());
+            }
+        }
+        Ok(())
+    }
+
+    fn try_append_allocated_add(&mut self, element: String) -> Result<Vec<u8>, String> {
+        let writers = self
+            .allocated_writers
+            .ok_or_else(|| "replica has no allocated identity".to_owned())?;
+        let sequence = self.checked_write_next(writers)?;
+        let token = allocate_token(writers, self.replica_id, sequence)
+            .ok_or_else(|| "token allocation exhausted".to_owned())?;
+        self.append(OrSetDelta::Add { element, token })
+    }
+
+    fn try_export_identity(&self) -> Result<Vec<u8>, String> {
+        let writers = self
+            .allocated_writers
+            .ok_or_else(|| "replica has no allocated identity".to_owned())?;
+        let next = self.checked_next(writers)?;
+        // Local identity storage only, not a new CRDT transport encoding. The
+        // suffix is the existing core log, including its shape/integrity checks.
+        // Byte for byte the layout WASM `exportIdentity` writes.
+        let mut bytes = b"SMOI\x01".to_vec();
+        for word in [writers, self.replica_id, next] {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        bytes.extend(
+            self.replica
+                .log_bytes()
+                .map_err(replica_wire_error)
+                .map_err(|error| format!("failed to encode event log: {error:?}"))?,
+        );
+        Ok(bytes)
+    }
+
+    fn try_import_identity(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() < 29 || &bytes[..5] != b"SMOI\x01" {
+            return Err("allocation/history consistency: invalid identity storage".to_owned());
+        }
+        let word = |i: usize| {
+            let mut buffer = [0u8; 8];
+            buffer.copy_from_slice(&bytes[i..i + 8]);
+            u64::from_le_bytes(buffer)
+        };
+        let (writers, author, next) = (word(5), word(13), word(21));
+        let mut candidate = Self::unallocated(author);
+        candidate.replica =
+            Replica::restore(OrSet::new(), &bytes[29..], DecodeLimits::default())
+                .map_err(|error| string_orset_log_decode_error(replica_log_error(error)))?;
+        if candidate.checked_next(writers)? != next {
+            return Err("allocation/history consistency: next sequence mismatch".to_owned());
+        }
+        // Claim only after all checks; a failed import creates no live writer.
+        candidate.claim(writers)?;
+        Ok(candidate)
+    }
+
+    fn append(&mut self, delta: OrSetDelta<String, u64>) -> Result<Vec<u8>, String> {
+        let record = self
+            .replica
+            .append(self.replica_id, delta)
+            .map_err(|_| "event log sequence exhausted".to_owned())?;
+        record
+            .to_wire_bytes()
+            .map_err(|error| format!("failed to encode record: {error:?}"))
+    }
+
+    fn try_append_add(&mut self, element: String, token: u64) -> Result<Vec<u8>, String> {
+        if self.allocated_writers.is_some() {
+            return Err(
+                "allocated replica rejects caller-supplied tokens; use appendAllocatedAdd"
+                    .to_owned(),
+            );
+        }
+        self.append(OrSetDelta::Add { element, token })
+    }
+
+    fn try_append_remove_observed(&mut self, element: String) -> Result<Vec<u8>, String> {
+        if let Some(writers) = self.allocated_writers {
+            self.checked_write_next(writers)?;
+        }
+        let tokens = self
+            .replica
+            .state()
+            .observed_tokens(&element)
+            .into_iter()
+            .collect();
+        self.append(OrSetDelta::Remove { tokens })
+    }
+
+    fn decode_record(
+        bytes: &[u8],
+        max_collection_elements: Option<usize>,
+    ) -> Result<Record<OrSetDelta<String, u64>>, String> {
+        Replica::<OrSet<String, u64>>::inspect_record_bytes(
+            bytes,
+            CollectionLimits {
+                max_elements: max_collection_elements
+                    .or(CollectionLimits::WIRE_DEFAULT.max_elements),
+            },
+        )
+        .map_err(|error| string_orset_record_decode_error(replica_wire_error(error)))
+    }
+
+    // A duplicate or collision is a verdict, not an error, as on the log path.
+    // Only an invalid record raises.
+    fn try_merge_record_bytes(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<usize>,
+    ) -> Result<String, String> {
+        let record = Self::decode_record(bytes, max_collection_elements)?;
+        self.check_incoming(&record)?;
+        match self.replica.admit(record) {
+            safemesh_crdt::Admission::Invalid(_) => Err("invalid record".to_owned()),
+            admission => Ok(admission_name(admission)),
+        }
+    }
+
+    fn try_merge_log_bytes(
+        &mut self,
+        bytes: &[u8],
+        max_collection_elements: Option<usize>,
+    ) -> Result<Vec<String>, String> {
+        let log = self
+            .replica
+            .decode_log_bytes(
+                bytes,
+                DecodeLimits {
+                    max_collection_elements,
+                    ..DecodeLimits::default()
+                },
+            )
+            .map_err(|error| string_orset_log_decode_error(replica_log_error(error)))?;
+        // Every record passes the ownership check before any is admitted.
+        for record in &log {
+            self.check_incoming(record)?;
+        }
+        Ok(log
+            .iter()
+            .cloned()
+            .map(|record| self.replica.admit(record))
+            .map(admission_name)
+            .collect())
+    }
+
+    fn try_log_bytes(&self) -> Result<Vec<u8>, String> {
+        self.replica
+            .log_bytes()
+            .map_err(replica_wire_error)
+            .map_err(|error| format!("failed to encode event log: {error:?}"))
+    }
+
+    fn try_inspect_record_bytes(
+        bytes: &[u8],
+        max_collection_elements: Option<usize>,
+    ) -> Result<PyStringOrSetRecord, String> {
+        let Record { id, delta } = Self::decode_record(bytes, max_collection_elements)?;
+        Ok(PyStringOrSetRecord { id, delta })
+    }
+}
+
+fn py_value_error(message: String) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(message)
+}
+
+// PyO3 0.22 generates redundant PyErr conversions outside the annotated item.
+// Scope this lint allowance to this entry point and its generated wrappers.
+#[allow(clippy::useless_conversion)]
+mod py_string_or_set_replica_python {
+    use super::*;
+
+    #[pymethods]
+    impl PyStringOrSetReplica {
+        #[new]
+        pub fn new(#[pyo3(from_py_with = "numeric")] replica_id: u64) -> Self {
+            Self::unallocated(replica_id)
+        }
+
+        /// Create an allocated writer. At most one allocated handle per author
+        /// may live in this Python process; dropping the last reference
+        /// releases it. The caller provides any cross-process exclusion and
+        /// must not restore stale snapshots.
+        #[staticmethod]
+        pub fn create_allocated(
+            #[pyo3(from_py_with = "numeric")] writers: u64,
+            #[pyo3(from_py_with = "numeric")] author: u64,
+        ) -> PyResult<Self> {
+            Self::try_create_allocated(writers, author).map_err(py_value_error)
+        }
+
+        /// Allocate through the Rust ownership rule, append, and return record bytes.
+        pub fn append_allocated_add<'py>(
+            &mut self,
+            py: Python<'py>,
+            element: String,
+        ) -> PyResult<Bound<'py, PyBytes>> {
+            self.try_append_allocated_add(element)
+                .map(|bytes| PyBytes::new_bound(py, &bytes))
+                .map_err(py_value_error)
+        }
+
+        /// Export fixed writer configuration, next sequence, and the complete
+        /// log. The bytes are caller-persisted identity storage, not a
+        /// transport packet.
+        pub fn export_identity<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+            self.try_export_identity()
+                .map(|bytes| PyBytes::new_bound(py, &bytes))
+                .map_err(py_value_error)
+        }
+
+        /// Allocation/history consistency check; failure never creates a
+        /// fresh writer. A self-consistent stale snapshot is not detected.
+        /// There is no disk I/O.
+        #[staticmethod]
+        pub fn import_identity(bytes: &[u8]) -> PyResult<Self> {
+            Self::try_import_identity(bytes).map_err(py_value_error)
+        }
+
+        /// Append an add record for `(element, token)` and return its wire bytes.
+        /// Allocated instances reject caller tokens; use `append_allocated_add`.
+        pub fn append_add<'py>(
+            &mut self,
+            py: Python<'py>,
+            element: String,
+            #[pyo3(from_py_with = "numeric")] token: u64,
+        ) -> PyResult<Bound<'py, PyBytes>> {
+            self.try_append_add(element, token)
+                .map(|bytes| PyBytes::new_bound(py, &bytes))
+                .map_err(py_value_error)
+        }
+
+        /// Append a remove record tombstoning every token this replica has
+        /// observed for `element`, as the core reports them, and return its bytes.
+        pub fn append_remove_observed<'py>(
+            &mut self,
+            py: Python<'py>,
+            element: String,
+        ) -> PyResult<Bound<'py, PyBytes>> {
+            self.try_append_remove_observed(element)
+                .map(|bytes| PyBytes::new_bound(py, &bytes))
+                .map_err(py_value_error)
+        }
+
+        /// Decode one record and admit it through the core event log.
+        ///
+        /// Returns the core's admission verdict, as `merge_log_bytes` does per
+        /// record: `"accepted"` when the record was new and applied,
+        /// `"duplicate"` when a record with the same identity and payload was
+        /// already in the log, and `"collision"` when the identity is known
+        /// with a different payload. Only `"accepted"` changes state. Decode
+        /// and ownership failures raise.
+        #[pyo3(signature = (bytes, *, max_collection_elements = None))]
+        pub fn merge_record_bytes(
+            &mut self,
+            bytes: &[u8],
+            max_collection_elements: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<String> {
+            let max_collection_elements = collection_budget(max_collection_elements)?;
+            self.try_merge_record_bytes(bytes, max_collection_elements)
+                .map_err(py_value_error)
+        }
+
+        /// Return one core admission verdict for every decoded input record.
+        #[pyo3(signature = (bytes, *, max_collection_elements = None))]
+        pub fn merge_log_bytes(
+            &mut self,
+            bytes: &[u8],
+            max_collection_elements: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<Vec<String>> {
+            let max_collection_elements = collection_budget(max_collection_elements)?;
+            self.try_merge_log_bytes(bytes, max_collection_elements)
+                .map_err(py_value_error)
+        }
+
+        pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+            self.try_log_bytes()
+                .map(|bytes| PyBytes::new_bound(py, &bytes))
+                .map_err(py_value_error)
+        }
+
+        /// The collision alarm: every held record ID a peer holds with a
+        /// different payload, raised when a peer's record collided here or a
+        /// peer's report named one. In memory only; never merged into state.
+        pub fn collisions(&self) -> PyResult<Vec<PyRecordCollision>> {
+            record_collisions(self.replica.log())
+        }
+
+        /// The collision report to send back to the peer whose batch was just
+        /// merged, or `None` when no alarm is raised here.
+        pub fn collision_report_bytes<'py>(
+            &self,
+            py: Python<'py>,
+        ) -> PyResult<Option<Bound<'py, PyBytes>>> {
+            collision_report_bytes(
+                py,
+                self.replica
+                    .collision_report_bytes()
+                    .map_err(replica_wire_report_error),
+            )
+        }
+
+        /// Merge a peer's collision report and return one verdict per entry:
+        /// "recorded" (alarm raised here now), "known" (already raised),
+        /// "unheld" (ID not held here) or "agrees" (the entry names only the
+        /// payload held here). Only "recorded" changes anything, and only the
+        /// alarm. A malformed report raises ValueError and changes nothing.
+        #[pyo3(signature = (bytes, *, max_records = None, max_collection_elements = None))]
+        pub fn merge_collision_report_bytes(
+            &mut self,
+            bytes: &[u8],
+            max_records: Option<&Bound<'_, PyAny>>,
+            max_collection_elements: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<Vec<String>> {
+            let limits = collision_report_limits(max_records, max_collection_elements)?;
+            collision_verdicts(
+                self.replica
+                    .merge_collision_report_bytes(bytes, limits)
+                    .map_err(replica_report_error),
+            )
+        }
+
+        pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
+            self.replica.version().get(replica)
+        }
+
+        /// Live members, sorted and unique, as the core computes them.
+        pub fn elements(&self) -> Vec<String> {
+            self.replica.state().elements().into_iter().collect()
+        }
+
+        /// Live add tokens for `element`, excluding tombstoned tokens.
+        pub fn observed_tokens(&self, element: String) -> Vec<u64> {
+            self.replica
+                .state()
+                .observed_tokens(&element)
+                .into_iter()
+                .collect()
+        }
+
+        pub fn tombstones(&self) -> Vec<u64> {
+            self.replica.state().tombstones().iter().copied().collect()
+        }
+
+        /// Every `(element, token)` add pair the core holds, tombstoned or not.
+        pub fn add_entries(&self) -> Vec<(String, u64)> {
+            self.replica.state().adds().iter().cloned().collect()
+        }
+
+        /// Decode record bytes through the core without admitting them anywhere.
+        #[staticmethod]
+        #[pyo3(signature = (bytes, *, max_collection_elements = None))]
+        pub fn inspect_record_bytes(
+            bytes: &[u8],
+            max_collection_elements: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<PyStringOrSetRecord> {
+            let max_collection_elements = collection_budget(max_collection_elements)?;
+            Self::try_inspect_record_bytes(bytes, max_collection_elements).map_err(py_value_error)
+        }
     }
 }
 
@@ -1275,6 +2138,8 @@ mod py_rga_python {
         pub fn live_entries(&self) -> Vec<(u64, u64)> {
             self.inner.live_entries()
         }
+        /// Sorted, duplicate-free live positions, matching Lean `read`.
+        /// Use `live_entries` to retrieve every live value at shared positions.
         pub fn read_positions(&self) -> Vec<u64> {
             self.inner.read_positions()
         }
@@ -1326,11 +2191,14 @@ mod py_pncounter_python {
     use super::*;
     #[pymethods]
     impl PyPnCounter {
+        /// Construct a zero counter for at most 4096 replicas (the wire author limit).
+        /// Larger counts raise ValueError before allocation.
         #[new]
-        pub fn new(#[pyo3(from_py_with = "numeric_replicas")] replicas: usize) -> Self {
-            Self {
-                inner: PnCounter::new(replicas),
-            }
+        pub fn new(#[pyo3(from_py_with = "numeric_replicas")] replicas: usize) -> PyResult<Self> {
+            Ok(Self {
+                inner: PnCounter::try_new(replicas)
+                    .map_err(|error| pyo3::exceptions::PyMemoryError::new_err(error.to_string()))?,
+            })
         }
 
         /// Exact signed read, including totals outside the 64-bit range.
@@ -1403,13 +2271,76 @@ mod tests {
         Python::with_gil(f)
     }
 
+    // Run in a separate process so allocator refusal does not restrict other tests.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn python_counter_width_limit() {
+        if std::env::var_os("SAFEMESH_WIDTH_CHILD").is_none() {
+            let output = std::process::Command::new("bash")
+                .args(["-c", "ulimit -c 0; ulimit -v 524288; exec \"$1\" --exact tests::python_counter_width_limit --nocapture --test-threads=1", "width-test"])
+                .arg(std::env::current_exe().unwrap())
+                .env("SAFEMESH_WIDTH_CHILD", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "child status {:?}: {}{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        with_python(|py| {
+            let module = PyModule::new_bound(py, "safemesh_python").unwrap();
+            safemesh_python(&module).unwrap();
+            let globals = pyo3::types::PyDict::new_bound(py);
+            globals.set_item("sm", module).unwrap();
+            py.run_bound(
+                r#"
+for make in (sm.GCounter, sm.PnCounter, lambda n: sm.GCounterReplica(0, n)):
+    for width in (4097, 2**40, 2**32, (2**63 - 1)//8):
+        try:
+            make(width)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('replica maximum was not enforced')
+    for width, error in (((2**63 - 1)//8 + 1, ValueError),
+                         (-1, OverflowError), (1.5, TypeError), (True, TypeError)):
+        try:
+            make(width)
+        except error:
+            pass
+        else:
+            raise AssertionError('invalid width was accepted')
+    for width in (0, 1, 2, 4096):
+        make(width)
+g = sm.GCounter(2)
+g.apply_bump(0, 7)
+assert g.value() == 7
+assert len(sm.gcounter_delta_to_wire(0, 7)) == 17
+p = sm.PnCounter(2)
+p.apply_inc(0, 7)
+assert p.value() == 7
+r = sm.GCounterReplica(0, 2)
+assert len(r.append_bump(0, 7)) > 0
+assert r.value() == 7
+"#,
+                Some(&globals),
+                None,
+            )
+            .unwrap();
+        });
+    }
+
     #[test]
     fn zero_sequence_add_uses_wire_cause_in_python_errors() {
         with_python(|py| {
             let cause = safemesh_crdt::WireError::ZeroSequenceAdd { replica: 1 };
             for error in [
                 record_verdict(safemesh_crdt::Admission::Invalid(cause)).unwrap_err(),
-                event_log_decode_error(cause),
+                event_log_decode_error(cause, false),
             ] {
                 assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
                 assert_eq!(error.to_string(), format!("ValueError: {cause}"));
@@ -1426,6 +2357,22 @@ mod tests {
             globals.set_item("sm", module).unwrap();
             py.run_bound(
                 include_str!("../tests/collection_wrappers.py"),
+                Some(&globals),
+                None,
+            )
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn python_collision_alarm() {
+        with_python(|py| {
+            let module = PyModule::new_bound(py, "safemesh_python").unwrap();
+            safemesh_python(&module).unwrap();
+            let globals = pyo3::types::PyDict::new_bound(py);
+            globals.set_item("sm", module).unwrap();
+            py.run_bound(
+                include_str!("../tests/collision_alarm.py"),
                 Some(&globals),
                 None,
             )
@@ -1780,7 +2727,7 @@ for make, append, read in [
     #[test]
     fn checked_counter_raises_index_error_without_mutation() {
         with_python(|py| {
-            let mut counter = PyGCounter::new(2);
+            let mut counter = PyGCounter::new(2).unwrap();
             let error = counter.try_apply_bump(2, 9).unwrap_err();
             assert!(error.is_instance_of::<pyo3::exceptions::PyIndexError>(py));
             assert_eq!(
@@ -1791,7 +2738,7 @@ for make, append, read in [
             let error = counter.apply_bump(2, 9).unwrap_err();
             assert!(error.is_instance_of::<pyo3::exceptions::PyIndexError>(py));
             // Exercise PyO3 extraction as well as the native shape guard.
-            let exported = Py::new(py, PyGCounter::new(2)).unwrap();
+            let exported = Py::new(py, PyGCounter::new(2).unwrap()).unwrap();
             for replica in [1u64 << 32, 1u64 << 53] {
                 let error = exported
                     .bind(py)
@@ -1856,7 +2803,7 @@ for make, append, read in [
 
     #[test]
     fn python_counter_calls_rust_core() {
-        let mut counter = PyGCounter::new(3);
+        let mut counter = PyGCounter::new(3).unwrap();
         counter.apply_bump(1, 5).unwrap();
         counter.apply_bump(1, 2).unwrap();
         assert_eq!(counter.value(), 5);
@@ -1875,8 +2822,8 @@ for make, append, read in [
     #[test]
     fn python_replicas_exchange_canonical_record_bytes() {
         with_python(|py| {
-            let mut left = PyGCounterReplica::new(1, 3);
-            let mut right = PyGCounterReplica::new(2, 3);
+            let mut left = PyGCounterReplica::new(1, 3).unwrap();
+            let mut right = PyGCounterReplica::new(2, 3).unwrap();
 
             let bytes = left.append_bump(py, 1, 5).unwrap().as_bytes().to_vec();
             let expected = Record {
@@ -2090,6 +3037,103 @@ for make, append, read in [
     }
 
     #[test]
+    fn python_lww_foreign_writer_refused_in_single_and_log_merge() {
+        struct Unchecked<D>(std::marker::PhantomData<D>);
+        impl<D> safemesh_crdt::Mergeable for Unchecked<D> {
+            fn merge(&mut self, _: &Self) -> Result<(), safemesh_crdt::MergeError> {
+                Ok(())
+            }
+        }
+        impl<D> Crdt for Unchecked<D> {
+            type Delta = D;
+            fn validate_record(&self, _: RecordId, _: &D) -> Result<(), safemesh_crdt::WireError> {
+                Ok(())
+            }
+            fn apply_delta(&mut self, _: D) {}
+        }
+        with_python(|py| {
+            let mut ownership_failures = Vec::new();
+            macro_rules! check {
+                ($replica:expr, $delta:expr) => {{
+                    let record = Record {
+                        id: RecordId {
+                            replica: 0,
+                            sequence: 1,
+                        },
+                        delta: $delta,
+                    };
+                    let mut replica = $replica;
+                    let state = replica.state.clone();
+                    let log = replica.log.clone();
+                    assert!(replica
+                        .merge_record_bytes(&record.to_wire_bytes().unwrap())
+                        .is_err());
+                    let unchecked = Unchecked(std::marker::PhantomData);
+                    let mut incoming = EventLog::new();
+                    assert_eq!(
+                        incoming.insert_record(&unchecked, record),
+                        safemesh_crdt::Admission::Accepted
+                    );
+                    let error = replica
+                        .merge_log_bytes(&incoming.to_wire_bytes().unwrap(), None)
+                        .unwrap_err();
+                    if error.to_string()
+                        != "ValueError: writer replica does not match record author"
+                    {
+                        ownership_failures.push(format!(
+                            "{}: {}",
+                            std::any::type_name_of_val(&replica),
+                            error
+                        ));
+                    }
+                    assert_eq!(replica.state, state);
+                    assert_eq!(replica.log, log);
+                    assert_eq!(replica.log.since(log.version()).len(), 0);
+                }};
+            }
+            for foreign in [9, 1, 99, u32::MAX as u64 + 1, u64::MAX] {
+                check!(
+                    PyLwwRegisterReplica::new(0),
+                    LwwRegisterDelta {
+                        timestamp: 100,
+                        replica: foreign,
+                        value: 9
+                    }
+                );
+                check!(
+                    PyLwwMapReplica::new(0),
+                    LwwMapDelta::Set {
+                        key: 1,
+                        timestamp: 100,
+                        replica: foreign,
+                        value: 9
+                    }
+                );
+                check!(
+                    PyLwwMapReplica::new(0),
+                    LwwMapDelta::Remove {
+                        key: 1,
+                        timestamp: 100,
+                        replica: foreign
+                    }
+                );
+            }
+            println!(
+                "LWW_OWNERSHIP_TEXT_CASES=15 FAILURES={}",
+                ownership_failures.len()
+            );
+            assert_eq!(
+                ownership_failures,
+                Vec::<String>::new(),
+                "15 LWW ownership text cases"
+            );
+            let mut writer = PyLwwRegisterReplica::new(0);
+            writer.append_set(py, 1, 0, 7).unwrap();
+            assert_eq!(writer.value_or(0), 7);
+        });
+    }
+
+    #[test]
     fn python_lww_replicas_exchange_canonical_record_bytes() {
         with_python(|py| {
             let mut left = PyLwwRegisterReplica::new(1);
@@ -2163,7 +3207,7 @@ for make, append, read in [
             for (frame, found, [counter, flag, map, register]) in cases {
                 let core = WireError::LegacyEventLogFrame { found }.to_string();
                 let expected = format!("ValueError: failed to decode event log: {core}");
-                let mut c = PyGCounterReplica::new(0, 2);
+                let mut c = PyGCounterReplica::new(0, 2).unwrap();
                 let mut f = PyEnableWinsFlagReplica::new(0);
                 let mut m = PyLwwMapReplica::new(0);
                 let mut r = PyLwwRegisterReplica::new(0);
@@ -2179,7 +3223,7 @@ for make, append, read in [
                 }
                 println!("Python {frame}: {expected}");
                 assert_eq!(c.value(), 0);
-                assert!(c.log.records().is_empty());
+                assert!(c.replica.log().records().is_empty());
                 assert!(f.log.records().is_empty());
                 assert!(m.log.records().is_empty());
                 assert!(r.log.records().is_empty());
@@ -2217,8 +3261,8 @@ mod admission_tests {
                             .unwrap(),
                         "accepted"
                     );
-                    let state = replica.state.clone();
-                    let log = replica.log.clone();
+                    let state = replica.test_state().clone();
+                    let log = replica.test_log().clone();
                     // Both paths name the same core verdict for the same record. A
                     // redelivery or a conflicting payload never raises or moves state.
                     for (record, verdict) in [(first, "duplicate"), (second, "collision")] {
@@ -2228,11 +3272,11 @@ mod admission_tests {
                                 .unwrap(),
                             verdict
                         );
-                        assert_eq!(replica.state, state);
-                        assert_eq!(replica.log, log);
-                        let mut incoming = EventLog::for_crdt(&replica.state);
+                        assert_eq!(*replica.test_state(), state);
+                        assert_eq!(*replica.test_log(), log);
+                        let mut incoming = EventLog::for_crdt(replica.test_state());
                         assert_eq!(
-                            incoming.insert_record(&replica.state, record),
+                            incoming.insert_record(replica.test_state(), record),
                             safemesh_crdt::Admission::Accepted
                         );
                         assert_eq!(
@@ -2241,25 +3285,25 @@ mod admission_tests {
                                 .unwrap(),
                             vec![verdict]
                         );
-                        assert_eq!(replica.state, state);
-                        assert_eq!(replica.log, log);
+                        assert_eq!(*replica.test_state(), state);
+                        assert_eq!(*replica.test_log(), log);
                     }
                     // Conflicting entries inside a single wire log must not be silently deduped.
                     // Generated by safemesh-crdt's product EventLog encoder.
                     let bytes = include_bytes!($fixture);
                     let mut empty = $replica;
-                    let state = empty.state.clone();
+                    let state = empty.test_state().clone();
                     assert!(empty
                         .merge_log_bytes(bytes, None)
                         .unwrap_err()
                         .to_string()
                         .contains("record ID collision"));
-                    assert_eq!(empty.state, state);
-                    assert!(empty.log.records().is_empty());
+                    assert_eq!(*empty.test_state(), state);
+                    assert!(empty.test_log().records().is_empty());
                 }};
             }
             check!(
-                PyGCounterReplica::new(2, 2),
+                PyGCounterReplica::new(2, 2).unwrap(),
                 GCounterDelta {
                     replica: 1,
                     tally: 5
@@ -2334,9 +3378,9 @@ mod admission_tests {
                     delta: $delta,
                 };
                 let record_bytes = record.to_wire_bytes().unwrap();
-                let mut log = EventLog::for_crdt(&replica.state);
+                let mut log = EventLog::for_crdt(replica.test_state());
                 assert_eq!(
-                    log.insert_record(&replica.state, record),
+                    log.insert_record(replica.test_state(), record),
                     safemesh_crdt::Admission::Accepted
                 );
                 let log_bytes = log.to_wire_bytes().unwrap();
@@ -2378,7 +3422,7 @@ mod admission_tests {
                         "{} {case}: not the core error",
                         $name
                     );
-                    assert!(target.log.records().is_empty());
+                    assert!(target.test_log().records().is_empty());
                 }
             }};
         }
@@ -2386,7 +3430,7 @@ mod admission_tests {
         Python::with_gil(|_| {
             check!(
                 "GCounterReplica",
-                PyGCounterReplica::new(2, 2),
+                PyGCounterReplica::new(2, 2).unwrap(),
                 GCounterDelta {
                     replica: 1,
                     tally: 5
@@ -2472,7 +3516,7 @@ mod admission_tests {
             },
         };
 
-        let mut target = PyGCounterReplica::new(0, 2);
+        let mut target = PyGCounterReplica::new(0, 2).unwrap();
         assert_eq!(
             target
                 .merge_record_bytes(&existing.to_wire_bytes().unwrap())
@@ -2485,7 +3529,7 @@ mod admission_tests {
         );
         assert_eq!(target.state(), vec![5, 0]);
 
-        let mut one = PyGCounterReplica::new(0, 2);
+        let mut one = PyGCounterReplica::new(0, 2).unwrap();
         assert_eq!(
             one.merge_log_bytes(&wire([accepted.clone()]), None)
                 .unwrap(),
@@ -2532,7 +3576,7 @@ mod admission_tests {
         );
         assert_eq!(target.state(), before);
 
-        let mut late = PyGCounterReplica::new(0, 2);
+        let mut late = PyGCounterReplica::new(0, 2).unwrap();
         assert_eq!(
             late.merge_record_bytes(&existing.to_wire_bytes().unwrap())
                 .unwrap(),
@@ -2617,25 +3661,25 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
     fn persisted_counter_shape_mismatch_leaves_destination_unchanged() {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
-            let mut source = PyGCounterReplica::new(0, 2);
+            let mut source = PyGCounterReplica::new(0, 2).unwrap();
             source.append_bump(py, 0, 10).unwrap();
-            let mut second_writer = PyGCounterReplica::new(1, 2);
+            let mut second_writer = PyGCounterReplica::new(1, 2).unwrap();
             let second = second_writer.append_bump(py, 1, 20).unwrap();
             source.merge_record_bytes(second.as_bytes()).unwrap();
-            let bytes = source.log.to_wire_bytes().unwrap();
-            let mut target = PyGCounterReplica::new(0, 3);
-            let state = target.state.clone();
-            let log = target.log.clone();
+            let bytes = source.replica.log().to_wire_bytes().unwrap();
+            let mut target = PyGCounterReplica::new(0, 3).unwrap();
+            let state = target.replica.state().clone();
+            let log = target.replica.log().clone();
             assert!(target
                 .merge_log_bytes(&bytes, None)
                 .unwrap_err()
                 .to_string()
                 .contains("replica count mismatch"));
-            assert_eq!(target.state, state);
-            assert_eq!(target.log, log);
-            let mut matching = PyGCounterReplica::new(0, 2);
+            assert_eq!(*target.replica.state(), state);
+            assert_eq!(*target.replica.log(), log);
+            let mut matching = PyGCounterReplica::new(0, 2).unwrap();
             matching.merge_log_bytes(&bytes, None).unwrap();
-            assert_eq!(matching.state, source.state);
+            assert_eq!(*matching.replica.state(), *source.replica.state());
         });
     }
 
@@ -2643,7 +3687,7 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
     fn invalid_counter_coordinates_are_rejected_before_admission() {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
-            let mut replica = PyGCounterReplica::new(1, 2);
+            let mut replica = PyGCounterReplica::new(1, 2).unwrap();
             assert!(replica.append_bump(py, 2, 5).is_err());
             let mut errors = Vec::new();
             for (name, coordinate) in [("out-of-range", 2), ("not-owned", 0)] {
@@ -2678,14 +3722,14 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
                 );
             }
             assert_eq!(replica.value(), 0);
-            assert!(replica.log.records().is_empty());
+            assert!(replica.replica.log().records().is_empty());
         });
     }
 
     #[test]
     fn invalid_second_counter_log_record_admits_neither_record() {
         pyo3::prepare_freethreaded_python();
-        let mut replica = PyGCounterReplica::new(0, 2);
+        let mut replica = PyGCounterReplica::new(0, 2).unwrap();
         let good = Record {
             id: RecordId {
                 replica: 1,
@@ -2717,6 +3761,677 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
             replica.value()
         );
         assert_eq!(replica.value(), 0);
-        assert!(replica.log.records().is_empty());
+        assert!(replica.replica.log().records().is_empty());
     }
 }
+
+// Mirrors the `wasm_string_orset_*` host tests in safemesh-wasm: same inputs,
+// same verdict strings and the tested decode/allocated-writer refusal texts, checked against
+// the Rust core. Invalid record admission error texts differ between bindings.
+#[cfg(test)]
+mod string_orset_tests {
+    use super::*;
+    use safemesh_crdt::RecordId;
+
+    type Replica = PyStringOrSetReplica;
+
+    fn replica(replica_id: u64) -> Replica {
+        PyStringOrSetReplica::new(replica_id)
+    }
+
+    // The allocated registry is process-wide and the test harness runs tests on
+    // parallel threads, so every allocated test below owns a distinct author.
+
+    #[test]
+    fn python_allocated_identity_checks_history_and_restarts() {
+        // WASM `allocated_identity_checks_history_and_restarts`, author moved to
+        // 1000 so it cannot meet another test's claim.
+        let author = 1000;
+        let writers = 1001;
+        let mut left = Replica::try_create_allocated(writers, author).unwrap();
+        let first = left.try_append_allocated_add("water".into()).unwrap();
+        let record = Replica::decode_record(&first, None).unwrap();
+        assert_eq!(record.id.sequence, 1);
+        assert_eq!(
+            record.delta,
+            OrSetDelta::Add {
+                element: "water".into(),
+                token: writers + author
+            }
+        );
+        let saved = left.try_export_identity().unwrap();
+        assert_eq!(&saved[..5], b"SMOI\x01");
+        // A second live handle for the same author is refused.
+        assert_eq!(
+            Replica::try_import_identity(&saved).err().unwrap(),
+            "author already has a live allocated writer"
+        );
+        assert_eq!(
+            Replica::try_create_allocated(writers, author)
+                .err()
+                .unwrap(),
+            "author already has a live allocated writer"
+        );
+        drop(left);
+        for (offset, word) in [
+            (5, 0u64),
+            (5, author),
+            (5, writers + 1),
+            (13, author - 1),
+            (21, 0),
+            (21, u64::MAX),
+        ] {
+            let mut bad = saved.clone();
+            bad[offset..offset + 8].copy_from_slice(&word.to_le_bytes());
+            assert!(
+                Replica::try_import_identity(&bad).is_err(),
+                "{offset} {word}"
+            );
+        }
+        let mut restored = Replica::try_import_identity(&saved).unwrap();
+        let next = restored.try_append_allocated_add("radio".into()).unwrap();
+        let record = Replica::decode_record(&next, None).unwrap();
+        assert_eq!(record.id.sequence, 2);
+        assert_eq!(
+            record.delta,
+            OrSetDelta::Add {
+                element: "radio".into(),
+                token: 2 * writers + author
+            }
+        );
+        assert_eq!(
+            restored.elements(),
+            vec!["radio".to_string(), "water".to_string()]
+        );
+    }
+
+    #[test]
+    fn python_allocated_history_refuses_gaps_zero_and_max_sequence() {
+        let mut zero = replica(0);
+        assert_eq!(
+            zero.replica.admit(Record {
+                id: RecordId {
+                    replica: 0,
+                    sequence: 0,
+                },
+                delta: OrSetDelta::Remove { tokens: vec![] },
+            }),
+            safemesh_crdt::Admission::Invalid(WireError::ZeroSequenceRemove { replica: 0 })
+        );
+        assert!(zero.replica.log().records().is_empty());
+        assert_eq!(zero.checked_next(1), Ok(1));
+        for sequence in [2, u64::MAX] {
+            let mut replica = replica(0);
+            replica.replica.admit(Record {
+                id: RecordId {
+                    replica: 0,
+                    sequence,
+                },
+                delta: OrSetDelta::Remove { tokens: vec![] },
+            });
+            assert!(replica.checked_next(1).is_err());
+        }
+    }
+
+    #[test]
+    fn python_allocated_writer_refuses_misuse_with_wasm_texts() {
+        let author = 2000;
+        assert_eq!(
+            Replica::try_create_allocated(author, author).err().unwrap(),
+            "invalid writer configuration"
+        );
+        assert_eq!(
+            Replica::try_create_allocated(0, 0).err().unwrap(),
+            "invalid writer configuration"
+        );
+        // A failed claim leaves no live writer behind.
+        let mut writer = Replica::try_create_allocated(author + 1, author).unwrap();
+        assert_eq!(
+            writer.try_append_add("x".into(), 5).unwrap_err(),
+            "allocated replica rejects caller-supplied tokens; use appendAllocatedAdd"
+        );
+        let mut plain = replica(author);
+        assert_eq!(
+            plain.try_append_allocated_add("x".into()).unwrap_err(),
+            "replica has no allocated identity"
+        );
+        assert_eq!(
+            plain.try_export_identity().unwrap_err(),
+            "replica has no allocated identity"
+        );
+        assert_eq!(
+            Replica::try_import_identity(b"SMOI").err().unwrap(),
+            "allocation/history consistency: invalid identity storage"
+        );
+
+        // Incoming records must follow the allocation rule and must not claim
+        // the local author.
+        let own: Record<OrSetDelta<String, u64>> = Record {
+            id: RecordId {
+                replica: author,
+                sequence: 1,
+            },
+            delta: OrSetDelta::Add {
+                element: "x".into(),
+                token: allocate_token(author + 1, author, 1).unwrap(),
+            },
+        };
+        assert_eq!(
+            writer
+                .try_merge_record_bytes(&own.to_wire_bytes().unwrap(), None)
+                .unwrap_err(),
+            "incoming record claims the local author"
+        );
+        let wrong_token: Record<OrSetDelta<String, u64>> = Record {
+            id: RecordId {
+                replica: 3,
+                sequence: 1,
+            },
+            delta: OrSetDelta::Add {
+                element: "x".to_string(),
+                token: 7u64,
+            },
+        };
+        assert_eq!(
+            writer
+                .try_merge_record_bytes(&wrong_token.to_wire_bytes().unwrap(), None)
+                .unwrap_err(),
+            "allocation/history consistency: token mismatch"
+        );
+        let outsider: Record<OrSetDelta<String, u64>> = Record {
+            id: RecordId {
+                replica: author + 1,
+                sequence: 1,
+            },
+            delta: OrSetDelta::Remove { tokens: vec![] },
+        };
+        assert_eq!(
+            writer
+                .try_merge_record_bytes(&outsider.to_wire_bytes().unwrap(), None)
+                .unwrap_err(),
+            "allocation/history consistency: invalid record author or sequence"
+        );
+        assert!(writer.replica.log().records().is_empty());
+        assert!(writer.elements().is_empty());
+    }
+
+    #[test]
+    fn python_allocated_writers_report_a_collision_as_a_verdict() {
+        // Two allocated writers in two processes may share an author id; the
+        // registry only fences one process. Simulate the second process by
+        // releasing the first handle, then show the core reports the clash.
+        let (writers, author) = (3010, 3000);
+        let mut first = Replica::try_create_allocated(writers, author).unwrap();
+        let from_first = first.try_append_allocated_add("apple".into()).unwrap();
+        drop(first);
+        let mut second = Replica::try_create_allocated(writers, author).unwrap();
+        let from_second = second.try_append_allocated_add("pear".into()).unwrap();
+        drop(second);
+
+        let mut reader = Replica::try_create_allocated(writers, 3002).unwrap();
+        assert_eq!(
+            reader.try_merge_record_bytes(&from_first, None).unwrap(),
+            "accepted"
+        );
+        let state = reader.replica.state().clone();
+        let log = reader.replica.log().clone();
+        assert_eq!(
+            reader.try_merge_record_bytes(&from_second, None).unwrap(),
+            "collision"
+        );
+        assert_eq!(*reader.replica.state(), state);
+        assert_eq!(*reader.replica.log(), log);
+    }
+
+    fn fields(
+        record: &PyStringOrSetRecord,
+    ) -> (
+        u64,
+        u64,
+        &'static str,
+        Option<String>,
+        Option<u64>,
+        Vec<u64>,
+    ) {
+        (
+            record.replica(),
+            record.sequence(),
+            record.delta_kind(),
+            record.element(),
+            record.token(),
+            record.tokens(),
+        )
+    }
+
+    #[test]
+    fn python_string_orset_replica_round_trips_records_through_core() {
+        let mut left = replica(1);
+        let mut right = replica(2);
+        let mut core = OrSet::<String, u64>::new();
+
+        let add_bytes = left.try_append_add("vaccine".to_string(), 11).unwrap();
+        assert_eq!(
+            right.try_merge_record_bytes(&add_bytes, None).unwrap(),
+            "accepted"
+        );
+        core.apply_delta(OrSetDelta::Add {
+            element: "vaccine".to_string(),
+            token: 11,
+        });
+        assert_eq!(right.elements(), left.elements());
+        assert_eq!(right.elements(), vec!["vaccine".to_string()]);
+        assert_eq!(
+            right.elements(),
+            core.elements().into_iter().collect::<Vec<_>>()
+        );
+        assert_eq!(right.observed_tokens("vaccine".to_string()), vec![11]);
+
+        let remove_bytes = left
+            .try_append_remove_observed("vaccine".to_string())
+            .unwrap();
+        assert_eq!(
+            right.try_merge_record_bytes(&remove_bytes, None).unwrap(),
+            "accepted"
+        );
+        core.apply_delta(OrSetDelta::Remove { tokens: vec![11] });
+        assert_eq!(right.elements(), left.elements());
+        assert!(right.elements().is_empty());
+        assert_eq!(right.tombstones(), left.tombstones());
+        assert_eq!(right.tombstones(), vec![11]);
+        assert_eq!(
+            right.tombstones(),
+            core.tombstones().iter().copied().collect::<Vec<_>>()
+        );
+        let entries = right.add_entries();
+        assert_eq!(entries, left.add_entries());
+        assert_eq!(entries, vec![("vaccine".to_string(), 11)]);
+        assert_eq!(entries, core.adds().iter().cloned().collect::<Vec<_>>());
+
+        let mut third = replica(3);
+        third
+            .try_merge_log_bytes(&left.try_log_bytes().unwrap(), None)
+            .unwrap();
+        assert_eq!(third.elements(), left.elements());
+        assert_eq!(third.tombstones(), left.tombstones());
+        assert_eq!(third.add_entries(), left.add_entries());
+        for replica in [&left, &right, &third] {
+            assert_eq!(replica.version_for(1), 2);
+            assert_eq!(replica.version_for(2), 0);
+        }
+    }
+
+    #[test]
+    fn python_string_orset_remove_admission_uses_token_sets() {
+        let mut reader = replica(2);
+        let bytes = |tokens| {
+            Record {
+                id: RecordId {
+                    replica: 1,
+                    sequence: 1,
+                },
+                delta: OrSetDelta::<String, u64>::Remove { tokens },
+            }
+            .to_wire_bytes()
+            .unwrap()
+        };
+        for (tokens, expected) in [
+            (vec![1, 2], "accepted"),
+            (vec![2, 1], "duplicate"),
+            (vec![1, 2, 2], "duplicate"),
+            (vec![1, 3], "collision"),
+            (vec![], "collision"),
+        ] {
+            assert_eq!(
+                reader.try_merge_record_bytes(&bytes(tokens), None).unwrap(),
+                expected
+            );
+        }
+        assert_eq!(reader.tombstones(), vec![1, 2]);
+    }
+
+    #[test]
+    fn python_string_orset_replica_rejects_duplicate_record_without_moving_state() {
+        let mut author = replica(1);
+        let mut reader = replica(2);
+        let bytes = author.try_append_add("vaccine".to_string(), 11).unwrap();
+
+        let first = reader.try_merge_record_bytes(&bytes, None).unwrap();
+        let before = (
+            reader.elements(),
+            reader.tombstones(),
+            reader.version_for(1),
+            reader.replica.log().records().len(),
+        );
+        let second = reader.try_merge_record_bytes(&bytes, None).unwrap();
+        let after = (
+            reader.elements(),
+            reader.tombstones(),
+            reader.version_for(1),
+            reader.replica.log().records().len(),
+        );
+        assert_eq!(first, "accepted");
+        assert_eq!(second, "duplicate");
+        assert_eq!(before, after);
+        assert_eq!(after.3, 1);
+
+        // Same identity, different payload: the core reports a collision. The
+        // binding returns that verdict, as the log path does, and absorbs
+        // neither reading.
+        let forged = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 1,
+            },
+            delta: OrSetDelta::Add {
+                element: "forged".to_string(),
+                token: 99,
+            },
+        };
+        let verdict = reader
+            .try_merge_record_bytes(&forged.to_wire_bytes().unwrap(), None)
+            .unwrap();
+        assert_eq!(verdict, "collision");
+        let mut incoming = EventLog::for_crdt(reader.replica.state());
+        assert_eq!(
+            incoming.insert_record(reader.replica.state(), forged),
+            safemesh_crdt::Admission::Accepted
+        );
+        assert_eq!(
+            reader
+                .try_merge_log_bytes(&incoming.to_wire_bytes().unwrap(), None)
+                .unwrap(),
+            vec![verdict]
+        );
+        assert_eq!(reader.elements(), before.0);
+        assert_eq!(reader.tombstones(), before.1);
+        assert_eq!(reader.replica.log().records().len(), 1);
+    }
+
+    #[test]
+    fn python_string_orset_replica_reports_log_collision_without_moving_state() {
+        let first = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 1,
+            },
+            delta: OrSetDelta::Add {
+                element: "first".to_owned(),
+                token: 5,
+            },
+        };
+        let second = Record {
+            id: first.id,
+            delta: OrSetDelta::Add {
+                element: "second".to_owned(),
+                token: 9,
+            },
+        };
+        let mut replica = replica(2);
+        assert_eq!(
+            replica
+                .try_merge_record_bytes(&first.to_wire_bytes().unwrap(), None)
+                .unwrap(),
+            "accepted"
+        );
+        let state = replica.replica.state().clone();
+        let log = replica.replica.log().clone();
+        let mut incoming = EventLog::for_crdt(replica.replica.state());
+        assert_eq!(
+            incoming.insert_record(replica.replica.state(), second),
+            safemesh_crdt::Admission::Accepted
+        );
+        assert_eq!(
+            replica
+                .try_merge_log_bytes(&incoming.to_wire_bytes().unwrap(), None)
+                .unwrap(),
+            vec!["collision"]
+        );
+        assert_eq!(*replica.replica.state(), state);
+        assert_eq!(*replica.replica.log(), log);
+    }
+
+    #[test]
+    fn python_string_orset_replica_refuses_corrupted_bytes_without_panicking() {
+        let mut author = replica(1);
+        let good = author.try_append_add("vaccine".to_string(), 11).unwrap();
+
+        let mut reader = replica(2);
+        assert_eq!(
+            reader.try_merge_record_bytes(&good, None).unwrap(),
+            "accepted"
+        );
+        assert_eq!(reader.elements(), vec!["vaccine".to_string()]);
+
+        let mut planted = good.clone();
+        planted[0] ^= 0xff;
+        let mut reader = replica(2);
+        let error = reader.try_merge_record_bytes(&planted, None).unwrap_err();
+        assert_eq!(error, "failed to decode record: unexpected wire tag");
+        assert!(reader.elements().is_empty());
+        assert_eq!(reader.replica.log().records().len(), 0);
+
+        // Every single-byte change on the bare record path either errors or
+        // decodes as a visibly different record. None panics, none is absorbed
+        // as the original.
+        let original = Replica::try_inspect_record_bytes(&good, None).unwrap();
+        let (mut errored, mut decoded_differently) = (0usize, 0usize);
+        for position in 0..good.len() {
+            let mut bad = good.clone();
+            bad[position] ^= 0x01;
+            let mut reader = replica(2);
+            match reader.try_merge_record_bytes(&bad, None) {
+                Err(_) => {
+                    errored += 1;
+                    assert!(reader.elements().is_empty());
+                    assert_eq!(reader.replica.log().records().len(), 0);
+                }
+                Ok(_) => {
+                    decoded_differently += 1;
+                    let seen = Replica::try_inspect_record_bytes(&bad, None).unwrap();
+                    assert_ne!(
+                        (
+                            seen.replica(),
+                            seen.sequence(),
+                            seen.element(),
+                            seen.token()
+                        ),
+                        (
+                            original.replica(),
+                            original.sequence(),
+                            original.element(),
+                            original.token()
+                        )
+                    );
+                }
+            }
+        }
+        assert_eq!(errored + decoded_differently, good.len());
+        assert!(errored > 0);
+
+        // The event-log frame carries a CRC, so every single-byte change errors.
+        let log = author.try_log_bytes().unwrap();
+        for position in 0..log.len() {
+            let mut bad = log.clone();
+            bad[position] ^= 0x01;
+            let mut reader = replica(2);
+            assert!(reader.try_merge_log_bytes(&bad, None).is_err());
+            assert!(reader.elements().is_empty());
+        }
+        let mut reader = replica(2);
+        reader.try_merge_log_bytes(&log, None).unwrap();
+        assert_eq!(reader.elements(), vec!["vaccine".to_string()]);
+    }
+
+    #[test]
+    fn python_string_orset_replica_keeps_core_token_semantics() {
+        // (a) A reused token keeps both pairs.
+        let mut replica_a = replica(1);
+        replica_a.try_append_add("a".to_string(), 7).unwrap();
+        replica_a.try_append_add("b".to_string(), 7).unwrap();
+        let mut core = OrSet::<String, u64>::new();
+        core.add("a".to_string(), 7);
+        core.add("b".to_string(), 7);
+        assert_eq!(replica_a.elements(), vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            replica_a.elements(),
+            core.elements().into_iter().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            replica_a.add_entries(),
+            vec![("a".to_string(), 7), ("b".to_string(), 7)]
+        );
+        // Tokens are global: removing what was observed for `a` tombstones 7 and
+        // takes `b` with it, as the core does.
+        replica_a
+            .try_append_remove_observed("a".to_string())
+            .unwrap();
+        core.apply_remove([7]);
+        assert!(replica_a.elements().is_empty());
+        assert!(core.elements().is_empty());
+
+        // (b) Observed tokens exclude removals, while tombstones retain history.
+        let mut replica_b = replica(1);
+        replica_b.try_append_add("a".to_string(), 7).unwrap();
+        let remove = replica_b
+            .try_append_remove_observed("a".to_string())
+            .unwrap();
+        let mut core = OrSet::<String, u64>::new();
+        core.add("a".to_string(), 7);
+        core.apply_remove([7]);
+        assert_eq!(
+            replica_b.observed_tokens("a".to_string()),
+            Vec::<u64>::new()
+        );
+        assert_eq!(
+            replica_b.observed_tokens("a".to_string()),
+            core.observed_tokens(&"a".to_string())
+                .into_iter()
+                .collect::<Vec<_>>()
+        );
+        assert!(replica_b.elements().is_empty());
+        assert_eq!(replica_b.tombstones(), vec![7]);
+        let record = Replica::try_inspect_record_bytes(&remove, None).unwrap();
+        assert_eq!(record.delta_kind(), "remove");
+        assert_eq!(record.tokens(), vec![7]);
+    }
+
+    #[test]
+    fn python_string_orset_record_inspector_reports_core_decoded_fields() {
+        let mut author = replica(9);
+        let add = author.try_append_add("vaccine".to_string(), 11).unwrap();
+        let expected = Record {
+            id: RecordId {
+                replica: 9,
+                sequence: 1,
+            },
+            delta: OrSetDelta::Add {
+                element: "vaccine".to_string(),
+                token: 11,
+            },
+        }
+        .to_wire_bytes()
+        .unwrap();
+        assert_eq!(add, expected);
+
+        let view = Replica::try_inspect_record_bytes(&add, None).unwrap();
+        assert_eq!(
+            fields(&view),
+            (9, 1, "add", Some("vaccine".to_string()), Some(11), vec![])
+        );
+
+        let remove = author
+            .try_append_remove_observed("vaccine".to_string())
+            .unwrap();
+        let view = Replica::try_inspect_record_bytes(&remove, None).unwrap();
+        assert_eq!(fields(&view), (9, 2, "remove", None, None, vec![11]));
+
+        // Inspecting admits nothing: a reader still accepts the record afterwards.
+        let mut reader = replica(2);
+        assert_eq!(
+            reader.try_merge_record_bytes(&add, None).unwrap(),
+            "accepted"
+        );
+
+        let mut bad = add.clone();
+        bad[0] ^= 0xff;
+        assert_eq!(
+            Replica::try_inspect_record_bytes(&bad, None).unwrap_err(),
+            "failed to decode record: unexpected wire tag"
+        );
+    }
+
+    #[test]
+    fn python_string_orset_replica_surface() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let module = PyModule::new_bound(py, "safemesh_python").unwrap();
+            safemesh_python(&module).unwrap();
+            let globals = pyo3::types::PyDict::new_bound(py);
+            globals.set_item("sm", module).unwrap();
+            py.run_bound(
+                include_str!("../tests/string_orset_replica.py")
+                    .split("# REPLICA_DIFFERENTIAL")
+                    .next()
+                    .unwrap(),
+                Some(&globals),
+                None,
+            )
+            .unwrap();
+        });
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn python_replica_differential_frozen_main() {
+    pyo3::prepare_freethreaded_python();
+    Python::with_gil(|py| {
+        let module = PyModule::new_bound(py, "safemesh_python").unwrap();
+        safemesh_python(&module).unwrap();
+        let globals = pyo3::types::PyDict::new_bound(py);
+        globals.set_item("sm", module).unwrap();
+        let source = include_str!("../tests/string_orset_replica.py")
+            .split("# REPLICA_DIFFERENTIAL")
+            .nth(1)
+            .unwrap();
+        py.run_bound(source, Some(&globals), None).unwrap();
+    });
+}
+
+// Shared read-only test views keep the cross-carrier assertions intact.
+#[cfg(test)]
+trait ReplicaTestViews {
+    type State: Crdt;
+    fn test_state(&self) -> &Self::State;
+    fn test_log(&self) -> &EventLog<<Self::State as Crdt>::Delta>;
+}
+#[cfg(test)]
+impl ReplicaTestViews for PyGCounterReplica {
+    type State = GCounter;
+    fn test_state(&self) -> &GCounter {
+        self.replica.state()
+    }
+    fn test_log(&self) -> &EventLog<GCounterDelta> {
+        self.replica.log()
+    }
+}
+#[cfg(test)]
+macro_rules! legacy_replica_test_views {
+    ($binding:ty, $state:ty) => {
+        impl ReplicaTestViews for $binding {
+            type State = $state;
+            fn test_state(&self) -> &Self::State {
+                &self.state
+            }
+            fn test_log(&self) -> &EventLog<<Self::State as Crdt>::Delta> {
+                &self.log
+            }
+        }
+    };
+}
+#[cfg(test)]
+legacy_replica_test_views!(PyEnableWinsFlagReplica, EnableWinsFlag<u64>);
+#[cfg(test)]
+legacy_replica_test_views!(PyLwwMapReplica, LwwMap<u64, u64>);
+#[cfg(test)]
+legacy_replica_test_views!(PyLwwRegisterReplica, LwwRegister<u64>);

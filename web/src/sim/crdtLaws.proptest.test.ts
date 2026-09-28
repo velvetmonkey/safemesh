@@ -203,7 +203,7 @@ function flagScenario(input: Generated<typeof flagHistory>, make: (id: number) =
 checkLaws('EnableWinsFlag', flagHistory, id => new SafeMeshEnableWinsFlagReplica(BigInt(id)), flagScenario,
   r => ({ value: r.value(), enables: Array.from(r.enabledTokens()), tombstones: Array.from(r.tombstoneTokens()) }))
 
-const registerHistory = fc.array(fc.record({ peer, timestamp: dotTime, writer: small, value: tally }), { minLength: 3, maxLength: 36 })
+const registerHistory = fc.array(fc.record({ peer, timestamp: dotTime, value: tally }).map(op => ({ ...op, writer: BigInt(op.peer) })), { minLength: 3, maxLength: 36 })
 function registerScenario(input: Generated<typeof registerHistory>, make: (id: number) => SafeMeshLwwRegisterReplica) {
   const peers = [0, 1, 2].map(make)
   const records = input.map(op => peers[op.peer].appendSet(op.timestamp, op.writer, op.value))
@@ -212,7 +212,7 @@ function registerScenario(input: Generated<typeof registerHistory>, make: (id: n
 checkLaws('LwwRegister', registerHistory, id => new SafeMeshLwwRegisterReplica(BigInt(id)), registerScenario,
   r => ({ has: r.hasValue(), value: r.valueOr(0n), timestamp: r.timestampOr(0n), writer: r.writerReplicaOr(0n) }))
 
-const mapHistory = fc.array(fc.record({ peer, key: small, timestamp: dotTime, writer: small, value: tally, remove: fc.boolean() }), { minLength: 3, maxLength: 36 })
+const mapHistory = fc.array(fc.record({ peer, key: small, timestamp: dotTime, value: tally, remove: fc.boolean() }).map(op => ({ ...op, writer: BigInt(op.peer) })), { minLength: 3, maxLength: 36 })
 function mapScenario(input: Generated<typeof mapHistory>, make: (id: number) => SafeMeshLwwMapReplica) {
   const peers = [0, 1, 2].map(make)
   const records = input.map(op => op.remove

@@ -13,6 +13,35 @@
 #include "safemesh.h"
 
 int main(void) {
+    SafeMeshGCounter *maximum = safemesh_gcounter_new(4096);
+    uint64_t maximum_value = 1;
+    if (maximum == NULL || safemesh_gcounter_try_value(maximum, &maximum_value) != Ok || maximum_value != 0) {
+        return 15;
+    }
+    safemesh_gcounter_free(maximum);
+    if (safemesh_gcounter_new(4097) != NULL ||
+        (SIZE_MAX > UINT32_MAX && safemesh_gcounter_new((size_t)(UINT64_C(1) << 40)) != NULL)) {
+        return 16;
+    }
+    if (safemesh_gcounter_new(SIZE_MAX) != NULL) {
+        return 11;
+    }
+    SafeMeshGCounter *recovered = safemesh_gcounter_new(2);
+    if (recovered == NULL) {
+        return 12;
+    }
+    uint64_t recovered_value = 0;
+    if (!safemesh_gcounter_apply_bump(recovered, 0, 7) ||
+        safemesh_gcounter_try_value(recovered, &recovered_value) != Ok ||
+        recovered_value != 7) {
+        return 13;
+    }
+    SafeMeshBytes recovered_bytes = safemesh_gcounter_delta_to_wire(0, 7);
+    if (recovered_bytes.ptr == NULL || recovered_bytes.len != 17) {
+        return 14;
+    }
+    safemesh_bytes_free(recovered_bytes);
+    safemesh_gcounter_free(recovered);
     SafeMeshGCounter *counter = safemesh_gcounter_new(3);
     if (counter == NULL) {
         return 2;
