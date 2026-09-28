@@ -195,5 +195,16 @@ if (process.argv.includes('--low-level')) {
     assert.throws(() => restart(new FileSystemStore(path, anchorPath)), error('CORRUPT'));
   }
   groups++;
+  {
+    const writerStore = new Store(), original = fresh(writerStore, 1n);
+    original.close(); original.free();
+    assert.throws(() => restart(writerStore, 0n), error('CORRUPT'),
+      'restart must refuse a different writer');
+    assert.equal(writerStore.lease, undefined, 'refused restart releases lease');
+    const sameWriter = restart(writerStore, 1n);
+    assert.equal(sameWriter.value(), 0n);
+    sameWriter.close(); sameWriter.free();
+    console.log('PRODUCT writer mismatch refused with CORRUPT; same writer restarted'); groups++;
+  }
   console.log(`MANAGED_COUNTER_GROUPS=${groups}`);
 }

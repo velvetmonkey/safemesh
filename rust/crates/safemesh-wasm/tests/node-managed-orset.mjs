@@ -140,6 +140,17 @@ if (process.argv.includes('--child')) {
   h.close(); h.free(); peer.close(); peer.free();
   console.log('PRODUCT receive/remove/restart/sinceLogBytes converged'); groups++;
   {
+    const writerStore = new Store(), original = fresh(writerStore, 1n);
+    original.close(); original.free();
+    assert.throws(() => restart(writerStore, 0n), error('CORRUPT'),
+      'restart must refuse a different writer');
+    assert.equal(writerStore.lease, undefined, 'refused restart releases lease');
+    const sameWriter = restart(writerStore, 1n);
+    assert.deepEqual(sameWriter.elements(), []);
+    sameWriter.close(); sameWriter.free();
+    console.log('PRODUCT writer mismatch refused with CORRUPT; same writer restarted'); groups++;
+  }
+  {
     const root = mkdtempSync(join(tmpdir(), 'managed-set-kill-'));
     const path = join(root, 'store'), anchor = join(root, 'anchor');
     const child = spawnSync(process.execPath,
