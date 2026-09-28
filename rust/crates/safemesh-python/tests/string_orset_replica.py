@@ -95,6 +95,49 @@ def check_sequence_zero(kind):
 check_sequence_zero('add')
 check_sequence_zero('remove')
 
+# An allocated reader checks the same core cause before allocation. A refused
+# record must not affect its next allocated write or a saved identity.
+def check_allocated_sequence_zero(kind, author):
+    writers = 9200
+    source = sm.StringOrSetReplica(9090)
+    good = source.append_add('allocated sequence check', 9100)
+    if kind == 'remove':
+        good = source.append_remove_observed('allocated sequence check')
+    invalid = bytearray(good)
+    struct.pack_into('<Q', invalid, 9, 0)
+    frame = bytearray(source.log_bytes())
+    position = frame.index(good)
+    frame[position:position + len(good)] = invalid
+    frame[-4:] = zlib.crc32(frame[1:-4]).to_bytes(4, 'little')
+
+    reader = sm.StringOrSetReplica.create_allocated(writers, author)
+    before = (reader.log_bytes(), reader.elements(), reader.add_entries(),
+              reader.tombstones(), reader.version_for(9090))
+    single_error = raises(ValueError, lambda: reader.merge_record_bytes(bytes(invalid)))
+    assert (reader.log_bytes(), reader.elements(), reader.add_entries(),
+            reader.tombstones(), reader.version_for(9090)) == before
+    log_error = raises(ValueError, lambda: reader.merge_log_bytes(bytes(frame)))
+    prefix = 'failed to decode event log: '
+    assert str(log_error).startswith(prefix)
+    assert str(single_error) == str(log_error)[len(prefix):]
+    assert (reader.log_bytes(), reader.elements(), reader.add_entries(),
+            reader.tombstones(), reader.version_for(9090)) == before
+
+    next_record = reader.append_allocated_add('next allocated add')
+    assert sm.StringOrSetReplica.inspect_record_bytes(next_record).sequence() == 1
+    saved = reader.export_identity()
+    expected = (reader.elements(), reader.add_entries(), reader.tombstones(),
+                reader.version_for(author), reader.version_for(9090))
+    del reader
+    restored = sm.StringOrSetReplica.import_identity(saved)
+    assert (restored.elements(), restored.add_entries(), restored.tombstones(),
+            restored.version_for(author), restored.version_for(9090)) == expected
+    assert restored.elements() == ['next allocated add']
+    del restored
+
+check_allocated_sequence_zero('add', 9091)
+check_allocated_sequence_zero('remove', 9092)
+
 # The shared admission mapper still preserves an ownership refusal.
 writer = sm.LwwRegisterReplica(51)
 good = writer.append_set(1, 51, 7)

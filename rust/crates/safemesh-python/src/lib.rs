@@ -292,16 +292,19 @@ fn admission_name(admission: safemesh_crdt::Admission) -> String {
 
 // A single record reports the verdict `merge_log_bytes` reports for it: a
 // duplicate or collision is a verdict, not an error. An invalid record raises.
+fn record_invalid_text(cause: WireError) -> String {
+    match cause {
+        cause @ (WireError::ZeroSequenceAdd { .. } | WireError::ZeroSequenceRemove { .. }) => {
+            cause.to_string()
+        }
+        WireError::OwnershipViolation => "writer replica does not match record author".to_owned(),
+        _ => "invalid record".to_owned(),
+    }
+}
+
 fn record_verdict_text(admission: safemesh_crdt::Admission) -> Result<String, String> {
     match admission {
-        safemesh_crdt::Admission::Invalid(
-            cause @ (safemesh_crdt::WireError::ZeroSequenceAdd { .. }
-            | safemesh_crdt::WireError::ZeroSequenceRemove { .. }),
-        ) => Err(cause.to_string()),
-        safemesh_crdt::Admission::Invalid(safemesh_crdt::WireError::OwnershipViolation) => {
-            Err("writer replica does not match record author".to_owned())
-        }
-        safemesh_crdt::Admission::Invalid(_) => Err("invalid record".to_owned()),
+        safemesh_crdt::Admission::Invalid(cause) => Err(record_invalid_text(cause)),
         admission => Ok(admission_name(admission)),
     }
 }
@@ -1629,6 +1632,10 @@ impl PyStringOrSetReplica {
         writers: u64,
         record: &Record<OrSetDelta<String, u64>>,
     ) -> Result<(), String> {
+        // Match WASM: the core identifies sequence-0 records before allocation checks.
+        OrSet::<String, u64>::new()
+            .validate_record(record.id, &record.delta)
+            .map_err(record_invalid_text)?;
         if record.id.replica >= writers || record.id.sequence == 0 {
             return Err(
                 "allocation/history consistency: invalid record author or sequence".to_owned(),
