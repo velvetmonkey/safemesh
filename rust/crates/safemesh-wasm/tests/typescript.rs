@@ -25,6 +25,8 @@ fn typescript_surface_lists_the_public_binding() {
     assert!(DTS.contains("export class SafeMeshLwwMap"));
     assert!(DTS.contains("export class SafeMeshLwwMapReplica"));
     assert!(DTS.contains("export class SafeMeshStringOrSetReplica"));
+    assert!(DTS.contains("export class SafeMeshManagedStringOrSet"));
+    assert!(DTS.contains("static open(store: SafeMeshStore, options: SafeMeshManagedStringOrSetOptions): SafeMeshManagedStringOrSet"));
     assert!(DTS.contains("export class SafeMeshStringOrSetAddEntry"));
     assert!(DTS.contains("export class SafeMeshStringOrSetRecord"));
     assert!(DTS.contains("appendAdd(element: string, token: bigint): Uint8Array"));
@@ -75,11 +77,11 @@ fn typescript_surface_lists_the_public_binding() {
     // Every replica with `logBytes` lists record IDs and builds since batches.
     for listing in [
         "recordIds(): BigUint64Array;",
-        "versionVector(): BigUint64Array;",
         "sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;",
     ] {
         assert_eq!(DTS.matches(listing).count(), 6, "{listing}");
     }
+    assert_eq!(DTS.matches("versionVector(): BigUint64Array;").count(), 7);
     assert_eq!(DTS.matches("logBytes(): Uint8Array;").count(), 6);
     assert!(DTS.contains("gcounterDeltaToWire(replica: number, tally: bigint): Uint8Array"));
     assert!(DTS.contains(

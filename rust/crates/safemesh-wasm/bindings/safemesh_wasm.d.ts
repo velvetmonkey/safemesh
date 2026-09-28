@@ -12,6 +12,12 @@ export interface SafeMeshManagedCounterOptions {
     writer: bigint;
     writers?: number;
 }
+export interface SafeMeshManagedStringOrSetOptions {
+    mode: "fresh" | "restart";
+    writer: bigint;
+    writers?: number;
+}
+export type SafeMeshStringOrSetEnvelopeVersion = 1;
 export type SafeMeshCounterEnvelopeVersion = 1;
 export type SafeMeshStoreErrorCode = "MISSING" | "CORRUPT" | "STALE" | "EXISTS" |
 "LOCKED" | "COMMIT" | "DISABLED" | "REENTRY" | "CLOSED" | "COLLISION";
@@ -363,6 +369,26 @@ export class SafeMeshManagedGCounter {
     state(): BigUint64Array;
     value(): bigint;
     versionFor(writer: bigint): bigint;
+}
+
+/**
+ * A synchronous, leased durable handle for an allocated UTF-8 OR-Set.
+ */
+export class SafeMeshManagedStringOrSet {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    appendAdd(element: string): Uint8Array;
+    appendRemoveObserved(element: string): Uint8Array;
+    close(): void;
+    elements(): string[];
+    mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate")[];
+    mergeRecordBytes(bytes: Uint8Array): "accepted" | "duplicate";
+    observedTokens(element: string): BigUint64Array;
+    static open(store: SafeMeshStore, options: SafeMeshManagedStringOrSetOptions): SafeMeshManagedStringOrSet;
+    peerLogBytes(): Uint8Array;
+    sinceLogBytes(peerVersion: BigUint64Array): Uint8Array;
+    versionVector(): BigUint64Array;
 }
 
 /**
