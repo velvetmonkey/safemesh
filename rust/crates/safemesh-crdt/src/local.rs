@@ -1301,7 +1301,7 @@ mod durable_tests {
             SERIAL.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(&root).unwrap();
-        root
+        root.canonicalize().unwrap()
     }
     #[test]
     fn fresh_root_syncs_exact_created_parents() {
