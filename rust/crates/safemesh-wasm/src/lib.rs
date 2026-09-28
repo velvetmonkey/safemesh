@@ -4798,6 +4798,12 @@ export interface SafeMeshManagedCounterOptions {
   writer: bigint;
   writers?: number;
 }
+export interface SafeMeshManagedStringOrSetOptions {
+  mode: "fresh" | "restart";
+  writer: bigint;
+  writers?: number;
+}
+export type SafeMeshStringOrSetEnvelopeVersion = 1;
 export type SafeMeshCounterEnvelopeVersion = 1;
 export type SafeMeshStoreErrorCode = "MISSING" | "CORRUPT" | "STALE" | "EXISTS" |
   "LOCKED" | "COMMIT" | "DISABLED" | "REENTRY" | "CLOSED" | "COLLISION";
@@ -4972,6 +4978,292 @@ impl SafeMeshManagedGCounter {
         }
         inner.counter = candidate;
         inner.revision = next;
+        Ok(())
+    }
+}
+
+struct ManagedSetState {
+    set: SafeMeshStringOrSetReplica,
+    writers: u64,
+    revision: u64,
+    closed: bool,
+    disabled: bool,
+}
+
+/// A synchronous, leased durable handle for an allocated UTF-8 OR-Set.
+#[wasm_bindgen]
+pub struct SafeMeshManagedStringOrSet {
+    store: JsValue,
+    lease: JsValue,
+    inner: RefCell<ManagedSetState>,
+}
+
+fn managed_set_envelope(
+    set: &SafeMeshStringOrSetReplica,
+    writers: u64,
+    revision: u64,
+) -> Result<Vec<u8>, JsValue> {
+    let cursor = set.checked_next(writers).map_err(JsValue::from)?;
+    let mut bytes = b"SMNODEOS".to_vec();
+    bytes.push(1);
+    for word in [writers, set.replica_id, cursor, revision] {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
+    bytes.extend_from_slice(b"SMOI\x01");
+    for word in [writers, set.replica_id, cursor] {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
+    bytes.extend_from_slice(&set.log_bytes()?);
+    Ok(bytes)
+}
+
+// Restore without taking a second live-author claim. The handle transfers its
+// existing claim to a candidate only after the Store confirms the commit.
+fn managed_set_restore(
+    bytes: &[u8],
+    writer: u64,
+) -> Result<(SafeMeshStringOrSetReplica, u64, u64), JsValue> {
+    let corrupt = || managed_error("CORRUPT", "invalid managed OR-Set envelope or replay");
+    if bytes.len() < 70
+        || &bytes[..8] != b"SMNODEOS"
+        || bytes[8] != 1
+        || &bytes[41..46] != b"SMOI\x01"
+    {
+        return Err(corrupt());
+    }
+    let word = |at| u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap());
+    let (writers, author, cursor, revision) = (word(9), word(17), word(25), word(33));
+    if writers == 0
+        || writers > 1_000_000
+        || author != writer
+        || author >= writers
+        || revision == 0
+        || word(46) != writers
+        || word(54) != author
+        || word(62) != cursor
+    {
+        return Err(corrupt());
+    }
+    let replica = Replica::restore(OrSet::new(), &bytes[70..], decode_limits(None, None))
+        .map_err(|_| corrupt())?;
+    let set = SafeMeshStringOrSetReplica {
+        replica_id: author,
+        allocated_writers: None,
+        replica,
+    };
+    if set.checked_next(writers).map_err(|_| corrupt())? != cursor
+        || managed_set_envelope(&set, writers, revision)? != bytes
+    {
+        return Err(corrupt());
+    }
+    Ok((set, writers, revision))
+}
+
+impl SafeMeshManagedStringOrSet {
+    fn borrow(&self, write: bool) -> Result<std::cell::RefMut<'_, ManagedSetState>, JsValue> {
+        let inner = self
+            .inner
+            .try_borrow_mut()
+            .map_err(|_| managed_error("REENTRY", "Store callback reentry"))?;
+        if inner.closed {
+            return Err(managed_error("CLOSED", "managed handle is closed"));
+        }
+        if write && inner.disabled {
+            return Err(managed_error(
+                "DISABLED",
+                "close and restart after failed commit",
+            ));
+        }
+        Ok(inner)
+    }
+    fn candidate(inner: &ManagedSetState) -> Result<SafeMeshStringOrSetReplica, JsValue> {
+        let bytes = managed_set_envelope(&inner.set, inner.writers, inner.revision)?;
+        Ok(managed_set_restore(&bytes, inner.set.replica_id)?.0)
+    }
+    fn publish(
+        &self,
+        inner: &mut ManagedSetState,
+        mut candidate: SafeMeshStringOrSetReplica,
+    ) -> Result<(), JsValue> {
+        let next = inner
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| managed_error("COMMIT", "revision exhausted"))?;
+        let bytes = managed_set_envelope(&candidate, inner.writers, next)?;
+        if let Err(error) = managed_commit(&self.store, &self.lease, inner.revision, &bytes) {
+            inner.disabled = true;
+            return Err(error);
+        }
+        inner.set.allocated_writers = None;
+        candidate.allocated_writers = Some(inner.writers);
+        inner.set = candidate;
+        inner.revision = next;
+        Ok(())
+    }
+}
+
+#[wasm_bindgen]
+impl SafeMeshManagedStringOrSet {
+    #[wasm_bindgen(js_name = open)]
+    pub fn open(
+        #[wasm_bindgen(unchecked_param_type = "SafeMeshStore")] store: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "SafeMeshManagedStringOrSetOptions")]
+        options: JsValue,
+    ) -> Result<SafeMeshManagedStringOrSet, JsValue> {
+        let mode = managed_mode(&options)?;
+        let writer = managed_writer(&options)?;
+        let count = if mode == "fresh" {
+            Some(managed_writers(&options)?)
+        } else {
+            None
+        };
+        if count.is_some_and(|n| writer >= u64::from(n)) {
+            return Err(managed_error("CORRUPT", "writer outside committed count"));
+        }
+        let lease = managed_open(&store, &mode, writer)?;
+        let result = (|| {
+            if let Some(count) = count {
+                let mut set = SafeMeshStringOrSetReplica::new(writer);
+                let writers = u64::from(count);
+                set.claim(writers).map_err(JsValue::from)?;
+                managed_commit(&store, &lease, 0, &managed_set_envelope(&set, writers, 1)?)?;
+                Ok((set, writers, 1))
+            } else {
+                let hex = managed_read(&store, &lease)?;
+                let bytes: Result<Vec<u8>, _> = hex
+                    .as_bytes()
+                    .chunks_exact(2)
+                    .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16))
+                    .collect();
+                let (mut set, writers, revision) = managed_set_restore(
+                    &bytes.map_err(|_| managed_error("CORRUPT", "invalid snapshot bytes"))?,
+                    writer,
+                )?;
+                set.claim(writers).map_err(JsValue::from)?;
+                Ok((set, writers, revision))
+            }
+        })();
+        match result {
+            Ok((set, writers, revision)) => Ok(Self {
+                store,
+                lease,
+                inner: RefCell::new(ManagedSetState {
+                    set,
+                    writers,
+                    revision,
+                    closed: false,
+                    disabled: false,
+                }),
+            }),
+            Err(error) => {
+                let _ = managed_close(&store, &lease);
+                Err(error)
+            }
+        }
+    }
+
+    #[wasm_bindgen(js_name = appendAdd)]
+    pub fn append_add(&self, element: String) -> Result<Vec<u8>, JsValue> {
+        let mut inner = self.borrow(true)?;
+        let mut candidate = Self::candidate(&inner)?;
+        candidate.allocated_writers = Some(inner.writers);
+        let result = candidate.try_append_allocated_add(element);
+        candidate.allocated_writers = None;
+        let bytes = result.map_err(JsValue::from)?;
+        self.publish(&mut inner, candidate)?;
+        Ok(bytes)
+    }
+
+    #[wasm_bindgen(js_name = appendRemoveObserved)]
+    pub fn append_remove_observed(&self, element: String) -> Result<Vec<u8>, JsValue> {
+        let mut inner = self.borrow(true)?;
+        let mut candidate = Self::candidate(&inner)?;
+        candidate.allocated_writers = Some(inner.writers);
+        let result = candidate.append_remove_observed(element);
+        candidate.allocated_writers = None;
+        let bytes = result?;
+        self.publish(&mut inner, candidate)?;
+        Ok(bytes)
+    }
+
+    #[wasm_bindgen(js_name = mergeRecordBytes, unchecked_return_type = "\"accepted\" | \"duplicate\"")]
+    pub fn merge_record_bytes(&self, bytes: &[u8]) -> Result<String, JsValue> {
+        let mut inner = self.borrow(true)?;
+        let mut candidate = Self::candidate(&inner)?;
+        candidate.allocated_writers = Some(inner.writers);
+        let result = candidate.try_merge_record_bytes_with_limits(bytes, None);
+        candidate.allocated_writers = None;
+        let verdict = result.map_err(JsValue::from)?;
+        match verdict.as_str() {
+            "accepted" => self.publish(&mut inner, candidate)?,
+            "duplicate" => (),
+            _ => return Err(managed_error("COLLISION", "peer record collision")),
+        }
+        Ok(verdict)
+    }
+
+    #[wasm_bindgen(js_name = mergeLogBytes, unchecked_return_type = "(\"accepted\" | \"duplicate\")[]")]
+    pub fn merge_log_bytes(&self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
+        let mut inner = self.borrow(true)?;
+        let mut candidate = Self::candidate(&inner)?;
+        candidate.allocated_writers = Some(inner.writers);
+        let result = candidate.try_merge_log_bytes_with_limits(bytes, None, None);
+        candidate.allocated_writers = None;
+        let verdicts = result.map_err(JsValue::from)?;
+        if verdicts.iter().any(|v| v == "collision") {
+            return Err(managed_error("COLLISION", "peer batch collision"));
+        }
+        if verdicts.iter().any(|v| v == "accepted") {
+            self.publish(&mut inner, candidate)?;
+        }
+        Ok(verdicts)
+    }
+
+    pub fn elements(&self) -> Result<Vec<String>, JsValue> {
+        Ok(self.borrow(false)?.set.elements())
+    }
+    #[wasm_bindgen(js_name = observedTokens)]
+    pub fn observed_tokens(&self, element: String) -> Result<Vec<u64>, JsValue> {
+        Ok(self.borrow(false)?.set.observed_tokens(element))
+    }
+    #[wasm_bindgen(js_name = peerLogBytes)]
+    pub fn peer_log_bytes(&self) -> Result<Vec<u8>, JsValue> {
+        self.borrow(false)?.set.log_bytes()
+    }
+    #[wasm_bindgen(js_name = versionVector)]
+    pub fn version_vector(&self) -> Result<Vec<u64>, JsValue> {
+        Ok(version_pairs(self.borrow(false)?.set.replica.log()))
+    }
+    #[wasm_bindgen(js_name = sinceLogBytes)]
+    #[allow(non_snake_case)]
+    pub fn since_log_bytes(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "BigUint64Array")] peerVersion: JsValue,
+    ) -> Result<Vec<u8>, JsValue> {
+        let peer = checked_peer_version(peerVersion)?;
+        let inner = self.borrow(false)?;
+        since_log_bytes(
+            inner.set.replica.state(),
+            inner.set.replica.log(),
+            &peer,
+            decode_limits(None, None),
+        )
+        .map_err(|error| since_js_error(error, false))
+    }
+    pub fn close(&self) -> Result<(), JsValue> {
+        let mut inner = self
+            .inner
+            .try_borrow_mut()
+            .map_err(|_| managed_error("REENTRY", "Store callback reentry"))?;
+        if !inner.closed {
+            inner.disabled = true;
+            managed_close(&self.store, &self.lease)?;
+            ALLOCATED_AUTHORS.with(|authors| {
+                authors.borrow_mut().remove(&inner.set.replica_id);
+            });
+            inner.set.allocated_writers = None;
+            inner.closed = true;
+        }
         Ok(())
     }
 }
