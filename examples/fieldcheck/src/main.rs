@@ -190,6 +190,7 @@ fn run() -> Result<(), RunError> {
             LocalError::Refused => "owned",
             LocalError::PeerWriterAhead => "writer_ahead",
             LocalError::Io(_) => "storage",
+            LocalError::AncestorSync { .. } => "ancestor_sync",
             LocalError::Configuration => "configuration",
             LocalError::CounterWidth(_) => "counter_width",
             // Only `_with_limits` restarts, which fieldcheck does not use, refuse by budget.
