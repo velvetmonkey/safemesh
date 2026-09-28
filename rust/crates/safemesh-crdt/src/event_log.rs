@@ -281,7 +281,7 @@ impl<D> EventLog<D> {
     }
 
     // Keep the first differing payload offered for a held ID as the witness.
-    fn raise_on_collision(&mut self, outcome: Admission, record: Record<D>) {
+    pub(crate) fn raise_on_collision(&mut self, outcome: Admission, record: Record<D>) {
         if outcome == Admission::Collision {
             self.collisions.entry(record.id).or_insert(record.delta);
         }
