@@ -2,12 +2,39 @@
 // No stored digest or generated Markdown can make stale output pass this check.
 import { readFileSync } from 'node:fs';
 import { unified } from 'unified';
+import remarkParse from 'remark-parse';
 import remarkRehype from 'remark-rehype';
 import rehypeRaw from 'rehype-raw';
 import { parse } from 'parse5';
 import { pages, root, revision, sourceTree, walk } from './assurance.mjs';
 
 const blocks = new Set(['p', 'div', 'li', 'ul', 'ol', 'blockquote', 'h1', 'h2', 'h3', 'h4', 'pre', 'br']);
+const crcClaim = 'The EventLog CRC detects accidental damage; it is not a MAC and does not stop a deliberate forger.';
+const occurrences = text => text.split(crcClaim).length - 1;
+function checkSourceSurface(name, source, tree, heading) {
+  let inside = false, count = 0, total = 0;
+  for (const node of tree.children) {
+    if (node.type === 'heading' && node.depth === 2) {
+      inside = node.children.map(child => child.value ?? '').join('') === heading;
+      continue;
+    }
+    // Count rendered prose; code fences and HTML comments are not visible claims.
+    const prose = [];
+    function visit(child) {
+      if (child.type === 'text') prose.push(child.value);
+      for (const nested of child.children ?? []) visit(nested);
+    }
+    if (node.type !== 'code' && node.type !== 'html') visit(node);
+    const matches = occurrences(prose.join(''));
+    total += matches;
+    if (inside) count += matches;
+  }
+  const raw = occurrences(readFileSync(root + source, 'utf8'));
+  if (count !== 1 || total !== 1 || raw !== 1) {
+    throw new Error(`${name}: found ${count} in ${heading}, ${total} in prose overall, ${raw} in source; expected one in each`);
+  }
+}
+checkSourceSurface('README.md Status', 'README.md', unified().use(remarkParse).parse(readFileSync(root + 'README.md', 'utf8')), 'Status');
 function signature(node) {
   let text = '';
   const links = [];
@@ -63,10 +90,14 @@ for (const [route, source] of Object.entries(pages)) {
     throw new Error(`${route}: stale build commit`);
   }
   const tree = sourceTree(source, sha);
+  if (route === 'claims') checkSourceSurface('CLAIMS.md', source, tree, 'Not covered in v0');
   const expected = signature(await unified().use(remarkRehype, { allowDangerousHtml: true }).use(rehypeRaw).run(tree));
   const actual = signature(matches[0]);
+  if (route === 'claims' && occurrences(actual.text) !== 1) {
+    throw new Error(`hosted claims page: found ${occurrences(actual.text)} visible CRC non-claims; expected one`);
+  }
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-    throw new Error(`${route}: rendered text or evidence links disagree with ${source}`);
+    throw new Error(`${route === 'claims' ? 'hosted claims page' : route}: rendered text or evidence links disagree with ${source}`);
   }
   if (route === 'claims') {
     // Every listed statement (including the parent kernel scope) plus the

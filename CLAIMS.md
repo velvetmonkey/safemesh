@@ -39,6 +39,7 @@ SafeMesh's verified claim is deliberately narrow:
 
 ## Not covered in v0
 
+- The EventLog CRC detects accidental damage; it is not a MAC and does not stop a deliberate forger. **NOT COVERED** — Scope evidence: [`frame_crc32`](rust/crates/safemesh-crdt/src/codec.rs#LC748).
 - References between objects. **NOT COVERED** — Scope evidence: [assurance boundary](WHAT-IS-PROVEN.md#the-honesty-boundary).
 - Trees and ordered move semantics. **NOT COVERED** — Scope evidence: [assurance boundary](WHAT-IS-PROVEN.md#the-honesty-boundary).
 - Leader election or consensus. **NOT COVERED** — Scope evidence: [assurance boundary](WHAT-IS-PROVEN.md#the-honesty-boundary).
