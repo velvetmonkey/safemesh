@@ -194,11 +194,12 @@ fn run() -> Result<(), RunError> {
             LocalError::Configuration => "configuration",
             LocalError::CounterWidth(_) => "counter_width",
             // Only `_with_limits` restarts, which fieldcheck does not use, refuse by budget.
-            LocalError::Exhausted | LocalError::RecordLimitExceeded { .. } => "storage",
-            LocalError::RecoveryRequired
-            | LocalError::InvalidRecord(_)
-            | LocalError::History(_)
-            | LocalError::InvalidHistory => "replay",
+            LocalError::Exhausted => "storage",
+            LocalError::RecordLimitExceeded { .. } => "storage",
+            LocalError::RecoveryRequired => "replay",
+            LocalError::InvalidRecord(_) => "replay",
+            LocalError::History(_) => "replay",
+            LocalError::InvalidHistory => "replay",
             // Preserve the Display reason and identify future local errors separately.
             _ => "unknown_local_error",
         };

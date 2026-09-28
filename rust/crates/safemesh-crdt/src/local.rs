@@ -25,12 +25,15 @@ use std::{
 ///     match error {
 ///         LocalError::Refused => "refused",
 ///         LocalError::Exhausted => "exhausted",
+///         LocalError::PeerWriterAhead => "writer ahead",
 ///         LocalError::RecoveryRequired => "recovery",
 ///         LocalError::Configuration => "configuration",
+///         LocalError::CounterWidth(_) => "counter width",
 ///         LocalError::InvalidRecord(_) => "record",
 ///         LocalError::History(_) => "history",
 ///         LocalError::InvalidHistory => "invalid history",
 ///         LocalError::Io(_) => "io",
+///         LocalError::AncestorSync { .. } => "ancestor sync",
 ///         LocalError::RecordLimitExceeded { .. } => "record limit",
 ///     }
 /// }
