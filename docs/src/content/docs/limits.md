@@ -42,14 +42,14 @@ SafeMesh's convergence claim is conditional on missing deltas eventually being r
 A gap is a missing sequence number between records from one writer. The peer's
 contiguous prefix stops before that number. On each exchange, `EventLog::since`
 offers every later record from that writer again until the missing record arrives.
-See [`EventLog::since`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/event_log.rs#L304-L314)
+See [`EventLog::since`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/event_log.rs#LC308)
 and [the exchange guide](/safemesh/connect-replicas/#exchange-and-repair).
 
 If the receiver decodes the batch, records it already holds get
 `Admission::Duplicate`. They do not change its data. This repeated transfer uses
 bandwidth, and its cost grows with each later record after the gap. Deliver or
 restore the missing record to advance the prefix. See the
-[admission decision](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/event_log.rs#L183-L197)
+[admission decision](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/event_log.rs#LC253)
 and [the gap trace](/safemesh/concepts/#anti-entropy).
 
 The batch limit can stop repair. In a measured Rust exchange, the receiver held
@@ -57,8 +57,8 @@ sequences 1, 3 and 4, and the sender held 1 through 7. With `max_records = 3`,
 `since` offered [2, 3, 4, 5, 6, 7] on each of three exchanges. The receiver
 refused the full six-record batch each time with `RecordLimitExceeded`; it
 admitted no record below the limit. Its prefix stayed at 1. The receiver
-[decodes the full batch before admission](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/replica.rs#L139-L151),
-and the [limit check](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/codec.rs#L395-L424)
+[decodes the full batch before admission](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/replica.rs#LC147),
+and the [limit check](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/codec.rs#LC417)
 returns an error before it returns any records. Deliver or restore the missing
 record through a record-level path, or use a batch limit that accepts the full
 offered set. The [exchange guide](/safemesh/connect-replicas/#exchange-and-repair)
