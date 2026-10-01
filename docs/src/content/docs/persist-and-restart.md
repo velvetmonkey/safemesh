@@ -396,8 +396,8 @@ framing. Every WASM handle is freed in `finally`. Read the [complete TypeScript 
 The Node binding exports `SafeMeshManagedGCounter` for a G-Counter and
 `SafeMeshManagedStringOrSet` for an allocated UTF-8 OR-Set. Both handles take a
 caller-supplied `SafeMeshStore` when they open. The application supplies the Store.
-See the [binding source](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/src/lib.rs#L4790-L4815)
-and the [generated Node declarations](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/bindings/safemesh_wasm.d.ts#L350-L390).
+See the [binding source](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/src/lib.rs)
+and the [generated Node declarations](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/bindings/safemesh_wasm.d.ts).
 The [counter test](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/tests/node-managed-counter.mjs)
 and [set test](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/tests/node-managed-orset.mjs)
 open the two handles with Stores.
@@ -405,10 +405,10 @@ open the two handles with Stores.
 An edit becomes visible through a handle only after the Store confirms the commit.
 After a failed or unclear commit, that handle refuses more writes until it is
 closed and restarted from the Store. A restart with a different writer is refused.
-These behaviors are in the [counter publish and open methods](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/src/lib.rs#L4944-L4985)
-and [set publish and open methods](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/src/lib.rs#L5062-L5150).
-The [counter test](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/tests/node-managed-counter.mjs#L65-L112)
-and [set test](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/tests/node-managed-orset.mjs#L40-L75)
+These behaviors are in the [counter publish and open methods](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/src/lib.rs)
+and [set publish and open methods](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/src/lib.rs).
+The [counter test](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/tests/node-managed-counter.mjs)
+and [set test](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/tests/node-managed-orset.mjs)
 check failed commits and invisible edits. Both tests also check wrong-writer
 restart refusal.
 
@@ -416,13 +416,13 @@ restart refusal.
 is an example Store. It is not a packaged, supported Store. The
 [package script](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/scripts/package-wasm.sh)
 packs only the generated WASM output. The binding's
-[Store interface](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/bindings/safemesh_wasm.d.ts#L4-L9)
-and the [filesystem test](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/tests/node-managed-counter.mjs#L174-L190)
+[Store interface](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/bindings/safemesh_wasm.d.ts)
+and the [filesystem test](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/tests/node-managed-counter.mjs)
 show how the example is supplied to a handle. The set test measured recovery
 after `SIGKILL` between edits
-([source](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/tests/node-managed-orset.mjs#L153-L167)).
+([source](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/tests/node-managed-orset.mjs)).
 Power loss and a crash between rename and directory fsync were not injected.
-The [example Store source](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/examples/node-filesystem-store.mjs#L1-L14)
+The [example Store source](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/examples/node-filesystem-store.mjs)
 names the latter limit. These are test limits, not durability claims.
 
 <a id="wire-compatibility-and-upgrades"></a>
