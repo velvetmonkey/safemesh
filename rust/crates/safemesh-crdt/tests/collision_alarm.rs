@@ -91,7 +91,7 @@ mod local_alarm {
             durable.receive(ticket, peer(5)).unwrap(),
             Admission::Accepted
         );
-        let before = std::fs::read(root.join("writer-0.transaction")).unwrap();
+        let before = std::fs::read(root.join("writer-0.journal")).unwrap();
         let state = durable.state().clone();
         let version = durable.log().version().clone();
         let allocation = durable.allocation_bytes();
@@ -109,7 +109,7 @@ mod local_alarm {
         );
         assert!(durable.log().collision_report_bytes().unwrap().is_some());
         assert_eq!(
-            std::fs::read(root.join("writer-0.transaction")).unwrap(),
+            std::fs::read(root.join("writer-0.journal")).unwrap(),
             before
         );
         assert_eq!(durable.state(), &state);
