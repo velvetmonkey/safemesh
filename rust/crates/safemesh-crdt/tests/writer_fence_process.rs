@@ -36,7 +36,7 @@ fn second_process_cannot_write_same_writer() {
         );
         return;
     }
-    let root = Path::new(&env::var("TMPDIR").expect("set TMPDIR"))
+    let root = env::temp_dir()
         .join(format!("rust-writer-fence-{}", std::process::id()));
     fs::create_dir(&root).unwrap();
     let store = root.join("store");
