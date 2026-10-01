@@ -1176,8 +1176,8 @@ impl SafeMeshEnableWinsFlagReplica {
         .map_err(JsValue::from)
     }
 
-        // This class keeps its own admission copy by the 2026-10-01 ruling (P2 step 4 tight, OR-1 = A).
-        // A shared Replica admission fix does not reach this copy; apply it here by hand.
+    // This class keeps its own admission copy by the 2026-10-01 ruling (P2 step 4 tight, OR-1 = A).
+    // A shared Replica admission fix does not reach this copy; apply it here by hand.
     /// Return one core admission verdict for every decoded input record.
     /// `maxRecords` is the third argument; the second limits collection elements.
     #[wasm_bindgen(
@@ -1319,8 +1319,8 @@ impl SafeMeshLwwMapReplica {
         .map_err(JsValue::from)
     }
 
-        // This class keeps its own admission copy by the 2026-10-01 ruling (P2 step 4 tight, OR-1 = A).
-        // A shared Replica admission fix does not reach this copy; apply it here by hand.
+    // This class keeps its own admission copy by the 2026-10-01 ruling (P2 step 4 tight, OR-1 = A).
+    // A shared Replica admission fix does not reach this copy; apply it here by hand.
     /// Return one core admission verdict for every decoded input record.
     /// `maxRecords` is the third argument; the second limits collection elements.
     #[wasm_bindgen(
@@ -1460,8 +1460,8 @@ impl SafeMeshLwwRegisterReplica {
         .map_err(JsValue::from)
     }
 
-        // This class keeps its own admission copy by the 2026-10-01 ruling (P2 step 4 tight, OR-1 = A).
-        // A shared Replica admission fix does not reach this copy; apply it here by hand.
+    // This class keeps its own admission copy by the 2026-10-01 ruling (P2 step 4 tight, OR-1 = A).
+    // A shared Replica admission fix does not reach this copy; apply it here by hand.
     /// Return one core admission verdict for every decoded input record.
     /// `maxRecords` is the third argument; the second limits collection elements.
     #[wasm_bindgen(
@@ -4507,8 +4507,8 @@ impl SafeMeshPnCounterReplica {
         .map_err(JsValue::from)
     }
 
-        // This class keeps its own admission copy by the 2026-10-01 ruling (P2 step 4 tight, OR-1 = A).
-        // A shared Replica admission fix does not reach this copy; apply it here by hand.
+    // This class keeps its own admission copy by the 2026-10-01 ruling (P2 step 4 tight, OR-1 = A).
+    // A shared Replica admission fix does not reach this copy; apply it here by hand.
     /// Return one core admission verdict for every decoded input record.
     /// `maxRecords` is the third argument; the second limits collection elements.
     #[wasm_bindgen(
