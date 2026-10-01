@@ -51,7 +51,8 @@ by searching the Git repository for its manifest, so the Git URL needs neither a
 subdirectory nor a root `Cargo.toml`. See [Cargo's Git dependency rules](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies-from-git-repositories)
 and the [package manifest](Cargo.toml).
 
-Compatibility note for the first release: `WireError` is `#[non_exhaustive]`.
+Compatibility note for the first release: `WireError` and `LocalError` are
+`#[non_exhaustive]`.
 Downstream Rust matches must include a wildcard arm so future error variants do
 not break compilation. Existing variants, messages, and wire bytes are unchanged.
 
@@ -630,6 +631,10 @@ For a journal, restart first discards an unfinished final entry (an append
 interrupted before its sync) by truncating the file, and reports it through
 `torn_tail()`; a damaged entry followed by other data is refused as
 `History(IntegrityMismatch)` with the journal unchanged.
+Restart also truncates a final journal entry that fails its length or checksum
+test and reports it through `torn_tail()`. SafeMesh does not claim that an
+acknowledged final record survives later damage to its bytes. Such damage is
+discarded as a torn tail and is not refused.
 The fresh `counter` and `utf8_set` constructors still return `RecoveryRequired`
 for an existing store. This path does not claim general power-loss certification.
 
@@ -639,3 +644,7 @@ that writing can resume without reusing the checked record IDs or set tokens,
 and that the reconciled state survives a second reopen.
 It does not exercise a machine power cut or interruption partway through a commit,
 so it does not establish recovery from those failures.
+
+Restoring a store file from a backup requires opening it with a new writer identity before it writes, because reopening under the old identity clears the in-memory write stop and the restore is not detected until a peer returns an own-ID record above the durable high-water.
+
+The pure `EventLog` allocator uses the greatest recorded sequence plus one and does not protect a writer from peer-supplied own-ID records.

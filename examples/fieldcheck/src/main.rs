@@ -142,6 +142,25 @@ impl From<String> for RunError {
         Self::Other(reason)
     }
 }
+fn local_error_kind(error: &LocalError) -> &'static str {
+    match error {
+        LocalError::Refused => "owned",
+        LocalError::PeerWriterAhead => "writer_ahead",
+        LocalError::Io(_) => "storage",
+        LocalError::AncestorSync { .. } => "ancestor_sync",
+        LocalError::Configuration => "configuration",
+        LocalError::CounterWidth(_) => "counter_width",
+        // Only `_with_limits` restarts, which fieldcheck does not use, refuse by budget.
+        LocalError::Exhausted => "storage",
+        LocalError::RecordLimitExceeded { .. } => "storage",
+        LocalError::RecoveryRequired => "replay",
+        LocalError::InvalidRecord(_) => "replay",
+        LocalError::History(_) => "replay",
+        LocalError::InvalidHistory => "replay",
+        // Preserve the Display reason and identify future local errors separately.
+        _ => "unknown_local_error",
+    }
+}
 fn run() -> Result<(), RunError> {
     let args: Vec<_> = std::env::args().collect();
     let root = Path::new(args.get(1).ok_or("store path required".to_string())?);
@@ -185,22 +204,9 @@ fn run() -> Result<(), RunError> {
             })
         }
     }
-    .map_err(|e| {
-        let kind = match e {
-            LocalError::Refused => "owned",
-            LocalError::Io(_) => "storage",
-            LocalError::Configuration => "configuration",
-            // Only `_with_limits` restarts, which fieldcheck does not use, refuse by budget.
-            LocalError::Exhausted | LocalError::RecordLimitExceeded { .. } => "storage",
-            LocalError::RecoveryRequired
-            | LocalError::InvalidRecord(_)
-            | LocalError::History(_)
-            | LocalError::InvalidHistory => "replay",
-        };
-        RunError::Recovery {
-            kind,
-            reason: e.to_string(),
-        }
+    .map_err(|e| RunError::Recovery {
+        kind: local_error_kind(&e),
+        reason: e.to_string(),
     })?;
     let service = Arc::new(Mutex::new(
         exchange::Service::open(replica, writer, root).map_err(|reason| RunError::Recovery {
@@ -296,6 +302,75 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use safemesh_crdt::{CoordinateError, WireError};
+
+    #[test]
+    fn every_current_local_error_has_its_fieldcheck_kind() {
+        assert_eq!(local_error_kind(&LocalError::Refused), "owned", "Refused");
+        assert_eq!(
+            local_error_kind(&LocalError::Exhausted),
+            "storage",
+            "Exhausted"
+        );
+        assert_eq!(
+            local_error_kind(&LocalError::PeerWriterAhead),
+            "writer_ahead",
+            "PeerWriterAhead"
+        );
+        assert_eq!(
+            local_error_kind(&LocalError::RecoveryRequired),
+            "replay",
+            "RecoveryRequired"
+        );
+        assert_eq!(
+            local_error_kind(&LocalError::Configuration),
+            "configuration",
+            "Configuration"
+        );
+        assert_eq!(
+            local_error_kind(&LocalError::CounterWidth(
+                CoordinateError::ReplicaLimitExceeded {
+                    requested: 2,
+                    maximum: 1,
+                }
+            )),
+            "counter_width",
+            "CounterWidth"
+        );
+        assert_eq!(
+            local_error_kind(&LocalError::InvalidRecord(WireError::InvalidTag)),
+            "replay",
+            "InvalidRecord"
+        );
+        assert_eq!(
+            local_error_kind(&LocalError::History(WireError::InvalidTag)),
+            "replay",
+            "History"
+        );
+        assert_eq!(
+            local_error_kind(&LocalError::InvalidHistory),
+            "replay",
+            "InvalidHistory"
+        );
+        assert_eq!(
+            local_error_kind(&LocalError::Io(io::Error::other("test"))),
+            "storage",
+            "Io"
+        );
+        assert_eq!(
+            local_error_kind(&LocalError::AncestorSync {
+                path: std::path::PathBuf::from("ancestor"),
+                source: io::Error::other("test"),
+            }),
+            "ancestor_sync",
+            "AncestorSync"
+        );
+        assert_eq!(
+            local_error_kind(&LocalError::RecordLimitExceeded { max_records: 1 }),
+            "storage",
+            "RecordLimitExceeded"
+        );
+    }
 
     fn record(id: &str, answer: &str, refs: &[&str]) -> String {
         serde_json::to_string(&Inspection {

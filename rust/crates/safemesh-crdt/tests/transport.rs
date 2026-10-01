@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use safemesh_crdt::{
-    anti_entropy, EventLog, GCounterDelta, InMemoryTransport, TransportAdapter, TransportError,
+    queue_anti_entropy, EventLog, GCounterDelta, InMemoryTransport, TransportAdapter,
+    TransportError,
 };
 
 fn deliver_all(
@@ -153,12 +154,12 @@ fn anti_entropy_recovers_after_drop_duplicate_and_reorder() {
     transport.subscribe(2);
 
     transport.drop_next_send();
-    anti_entropy(&mut transport, 1, 2, &left, right.version()).unwrap();
+    queue_anti_entropy(&mut transport, 1, 2, &left, right.version()).unwrap();
     assert_eq!(transport.dropped_len(), 1);
     assert_eq!(right.records().len(), 0);
 
     transport.duplicate_next_send();
-    anti_entropy(&mut transport, 1, 2, &left, right.version()).unwrap();
+    queue_anti_entropy(&mut transport, 1, 2, &left, right.version()).unwrap();
     transport.reverse_pending_for(2);
     deliver_all(&mut transport, 2, &mut right);
 
@@ -187,13 +188,13 @@ fn partition_then_heal_uses_versions_to_cover_missing_records() {
     transport.set_connected(1, 2, false);
 
     assert_eq!(
-        anti_entropy(&mut transport, 1, 2, &left, right.version()),
+        queue_anti_entropy(&mut transport, 1, 2, &left, right.version()),
         Err(TransportError::Disconnected { from: 1, to: 2 })
     );
     assert_eq!(transport.pending_len(), 0);
 
     transport.set_connected(1, 2, true);
-    anti_entropy(&mut transport, 1, 2, &left, right.version()).unwrap();
+    queue_anti_entropy(&mut transport, 1, 2, &left, right.version()).unwrap();
     deliver_all(&mut transport, 2, &mut right);
 
     assert_eq!(right.records().len(), 1);
@@ -389,4 +390,184 @@ fn sm70_invariant_duplicate_recipient() {
 #[test]
 fn sm70_invariant_duplicate_disconnected() {
     sm70_rejected_fault(false, 2);
+}
+
+#[test]
+fn invalid_sync_names_every_refusal_and_recovers_after_width_fix() {
+    use safemesh_crdt::{GCounter, Replica, WireError};
+    let mut sender = Replica::new(GCounter::new(10));
+    let record = sender
+        .append(
+            9,
+            GCounterDelta {
+                replica: 9,
+                tally: 1,
+            },
+        )
+        .unwrap();
+    let mut receiver = Replica::new(GCounter::new(3));
+    let mut transport = InMemoryTransport::new();
+    transport.subscribe(1);
+    transport.subscribe(2);
+    for _ in 0..3 {
+        assert_eq!(
+            safemesh_crdt::anti_entropy(&mut transport, 1, 2, sender.log(), &mut receiver).unwrap(),
+            vec![(
+                1,
+                record.id,
+                Admission::Invalid(WireError::OwnershipViolation)
+            )]
+        );
+        assert!(receiver.log().records().is_empty());
+    }
+    receiver = Replica::new(GCounter::new(10));
+    assert_eq!(
+        safemesh_crdt::anti_entropy(&mut transport, 1, 2, sender.log(), &mut receiver).unwrap(),
+        vec![(1, record.id, Admission::Accepted)]
+    );
+    assert_eq!(receiver.state().value(), 1);
+    assert!(
+        safemesh_crdt::anti_entropy(&mut transport, 1, 2, sender.log(), &mut receiver)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn sync_reports_many_refusals_and_restart_without_hiding_valid_records() {
+    use safemesh_crdt::{anti_entropy, GCounter, Replica, WireError};
+    let mut sender = Replica::new(GCounter::new(10));
+    let valid = sender
+        .append(
+            1,
+            GCounterDelta {
+                replica: 1,
+                tally: 7,
+            },
+        )
+        .unwrap();
+    let refused: Vec<_> = (1..=128)
+        .map(|tally| {
+            sender
+                .append(9, GCounterDelta { replica: 9, tally })
+                .unwrap()
+                .id
+        })
+        .collect();
+    let mut transport = InMemoryTransport::new();
+    transport.subscribe(1);
+    transport.subscribe(2);
+    for _ in 0..2 {
+        let mut receiver = Replica::new(GCounter::new(3)); // restart
+        let outcomes = anti_entropy(&mut transport, 1, 2, sender.log(), &mut receiver).unwrap();
+        assert_eq!(outcomes[0], (1, valid.id, Admission::Accepted));
+        assert_eq!(
+            &outcomes[1..],
+            refused
+                .iter()
+                .map(|id| (1, *id, Admission::Invalid(WireError::OwnershipViolation)))
+                .collect::<Vec<_>>()
+        );
+        let again = anti_entropy(&mut transport, 1, 2, sender.log(), &mut receiver).unwrap();
+        assert_eq!(again.len(), 128);
+        assert_eq!(receiver.state().value(), 7);
+    }
+}
+
+#[test]
+fn sync_distinguishes_collision_duplicate_and_invalid_with_sender_ids() {
+    use safemesh_crdt::{anti_entropy, GCounter, Replica, WireError};
+    let sender = Replica::new(GCounter::new(10));
+    let mut receiver = Replica::new(GCounter::new(3));
+    let existing = receiver
+        .append(
+            1,
+            GCounterDelta {
+                replica: 1,
+                tally: 1,
+            },
+        )
+        .unwrap();
+    let collision = Record {
+        id: existing.id,
+        delta: GCounterDelta {
+            replica: 1,
+            tally: 2,
+        },
+    };
+    let invalid = Record {
+        id: RecordId {
+            replica: 9,
+            sequence: 1,
+        },
+        delta: GCounterDelta {
+            replica: 9,
+            tally: 1,
+        },
+    };
+    let mut transport = InMemoryTransport::new();
+    for peer in [1, 2, 3] {
+        transport.subscribe(peer);
+    }
+    transport
+        .send(3, 2, vec![existing.clone(), collision, invalid.clone()])
+        .unwrap();
+    let outcomes = anti_entropy(&mut transport, 1, 2, sender.log(), &mut receiver).unwrap();
+    assert_eq!(
+        outcomes,
+        vec![
+            (3, existing.id, Admission::Duplicate),
+            (3, existing.id, Admission::Collision),
+            (
+                3,
+                invalid.id,
+                Admission::Invalid(WireError::OwnershipViolation)
+            )
+        ]
+    );
+    assert_eq!(receiver.state().value(), 1);
+}
+
+#[test]
+fn sync_preserves_drop_duplicate_and_partition_recovery() {
+    use safemesh_crdt::{anti_entropy, GCounter, Replica};
+    let mut sender = Replica::new(GCounter::new(3));
+    let record = sender
+        .append(
+            1,
+            GCounterDelta {
+                replica: 1,
+                tally: 1,
+            },
+        )
+        .unwrap();
+    let mut receiver = Replica::new(GCounter::new(3));
+    let mut transport = InMemoryTransport::new();
+    transport.subscribe(1);
+    transport.subscribe(2);
+    transport.drop_next_send();
+    assert!(
+        anti_entropy(&mut transport, 1, 2, sender.log(), &mut receiver)
+            .unwrap()
+            .is_empty()
+    );
+    transport.set_connected(1, 2, false);
+    assert_eq!(
+        anti_entropy(&mut transport, 1, 2, sender.log(), &mut receiver),
+        Err(TransportError::Disconnected { from: 1, to: 2 })
+    );
+    transport.set_connected(1, 2, true);
+    transport.duplicate_next_send();
+    assert_eq!(
+        anti_entropy(&mut transport, 1, 2, sender.log(), &mut receiver).unwrap(),
+        vec![
+            (1, record.id, Admission::Accepted),
+            (1, record.id, Admission::Duplicate)
+        ]
+    );
+    assert!(
+        anti_entropy(&mut transport, 1, 2, sender.log(), &mut receiver)
+            .unwrap()
+            .is_empty()
+    );
 }

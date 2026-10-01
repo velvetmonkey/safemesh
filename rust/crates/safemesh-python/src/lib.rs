@@ -11,6 +11,7 @@ use safemesh_crdt::{
     OrSet, OrSetDelta, PnCounter, Record, Replica, ReplicaError, Rga, WireDecode, WireEncode,
     WireError,
 };
+use safemesh_crdt::{CollisionVerdict, RecordId};
 
 // Reject bool at the Python boundary before any method body can mutate state.
 // Ordinary extraction retains PyO3's TypeError/OverflowError behavior.
@@ -88,7 +89,8 @@ fn record_decode_error(error: safemesh_crdt::WireError) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(format!("failed to decode record: {error}"))
 }
 
-fn event_log_decode_error(error: safemesh_crdt::WireError) -> PyErr {
+// Counter ownership covers coordinates; other carriers name the record writer.
+fn event_log_decode_error(error: safemesh_crdt::WireError, counter_log: bool) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(match error {
         safemesh_crdt::WireError::RecordCollision => "record ID collision".to_owned(),
         safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
@@ -96,9 +98,12 @@ fn event_log_decode_error(error: safemesh_crdt::WireError) -> PyErr {
         }
         safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch".to_owned(),
         safemesh_crdt::WireError::MissingShape => "event log missing shape".to_owned(),
-        safemesh_crdt::WireError::OwnershipViolation => {
-            "counter coordinate out of range or not owned by record author".to_owned()
+        safemesh_crdt::WireError::OwnershipViolation => if counter_log {
+            "counter coordinate out of range or not owned by record author"
+        } else {
+            "writer replica does not match record author"
         }
+        .to_owned(),
         cause @ (safemesh_crdt::WireError::ZeroSequenceAdd { .. }
         | safemesh_crdt::WireError::ZeroSequenceRemove { .. }) => cause.to_string(),
         cause => format!("failed to decode event log: {cause}"),
@@ -124,18 +129,149 @@ fn python_zero_sequence_remove_mapping_keeps_core_cause() {
         safemesh_crdt::WireError::ZeroSequenceRemove { replica: 1 }
     );
     for error in [
-        event_log_decode_error(cause),
+        event_log_decode_error(cause, false),
         record_verdict(safemesh_crdt::Admission::Invalid(cause)).unwrap_err(),
     ] {
         let text = error.to_string();
         assert_eq!(text, format!("ValueError: {cause}"));
         assert!(text.contains("Recovery: "), "{text}");
     }
+    assert_eq!(
+        record_verdict_text(safemesh_crdt::Admission::Invalid(
+            safemesh_crdt::WireError::OwnershipViolation
+        )),
+        Err("writer replica does not match record author".to_owned())
+    );
+    assert_eq!(
+        record_verdict_text(safemesh_crdt::Admission::Invalid(
+            safemesh_crdt::WireError::InvalidTag
+        )),
+        Err("invalid record".to_owned())
+    );
 }
 
-fn bounded_event_log_decode_error(error: DecodeError) -> PyErr {
+/// One record ID this replica holds that a peer holds with a different payload:
+/// the collision alarm. `local` and `remote` are record wire bytes under the
+/// ID, for this replica's payload and the peer's.
+#[pyclass(name = "RecordCollision", frozen)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PyRecordCollision {
+    author: u64,
+    sequence: u64,
+    local: Vec<u8>,
+    remote: Vec<u8>,
+}
+
+#[pymethods]
+impl PyRecordCollision {
+    pub fn author(&self) -> u64 {
+        self.author
+    }
+
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    pub fn local<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new_bound(py, &self.local)
+    }
+
+    pub fn remote<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new_bound(py, &self.remote)
+    }
+
+    pub fn __repr__(&self) -> String {
+        format!(
+            "RecordCollision(author={}, sequence={})",
+            self.author, self.sequence
+        )
+    }
+}
+
+fn record_collisions<D: Clone + WireEncode>(log: &EventLog<D>) -> PyResult<Vec<PyRecordCollision>> {
+    log.collisions()
+        .into_iter()
+        .map(|collision| {
+            let record = |delta| {
+                Record {
+                    id: collision.id,
+                    delta,
+                }
+                .to_wire_bytes()
+                .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to encode record"))
+            };
+            Ok(PyRecordCollision {
+                author: collision.id.replica,
+                sequence: collision.id.sequence,
+                local: record(collision.local)?,
+                remote: record(collision.remote)?,
+            })
+        })
+        .collect()
+}
+
+fn collision_report_bytes<'py>(
+    py: Python<'py>,
+    bytes: Result<Option<Vec<u8>>, WireError>,
+) -> PyResult<Option<Bound<'py, PyBytes>>> {
+    bytes
+        .map(|bytes| bytes.map(|bytes| PyBytes::new_bound(py, &bytes)))
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("failed to encode collision report"))
+}
+
+fn collision_report_limits(
+    max_records: Option<&Bound<'_, PyAny>>,
+    max_collection_elements: Option<&Bound<'_, PyAny>>,
+) -> PyResult<DecodeLimits> {
+    Ok(DecodeLimits {
+        max_records: collection_budget(max_records)?,
+        max_collection_elements: collection_budget(max_collection_elements)?,
+    })
+}
+
+fn collision_verdicts(
+    verdicts: Result<Vec<(RecordId, CollisionVerdict)>, DecodeError>,
+) -> PyResult<Vec<String>> {
+    let verdicts = verdicts.map_err(|error| {
+        pyo3::exceptions::PyValueError::new_err(match error {
+            DecodeError::Wire(cause) => format!("failed to decode collision report: {cause}"),
+            DecodeError::RecordLimitExceeded { max_records } => {
+                format!("failed to decode collision report: RecordLimitExceeded: {max_records}")
+            }
+        })
+    })?;
+    Ok(verdicts
+        .into_iter()
+        .map(|(_, verdict)| {
+            match verdict {
+                CollisionVerdict::Recorded => "recorded",
+                CollisionVerdict::Known => "known",
+                CollisionVerdict::Unheld => "unheld",
+                CollisionVerdict::Agrees => "agrees",
+                _ => "unknown",
+            }
+            .to_owned()
+        })
+        .collect())
+}
+
+fn replica_wire_report_error(error: ReplicaError) -> WireError {
     match error {
-        DecodeError::Wire(error) => event_log_decode_error(error),
+        ReplicaError::ReportEncode(error) => error,
+        _ => unreachable!("report encode returned a different error stage"),
+    }
+}
+
+fn replica_report_error(error: ReplicaError) -> DecodeError {
+    match error {
+        ReplicaError::ReportDecode(error) => error,
+        _ => unreachable!("report decode returned a different error stage"),
+    }
+}
+
+fn bounded_event_log_decode_error(error: DecodeError, counter_log: bool) -> PyErr {
+    match error {
+        DecodeError::Wire(error) => event_log_decode_error(error, counter_log),
         DecodeError::RecordLimitExceeded { max_records } => {
             pyo3::exceptions::PyValueError::new_err(format!(
                 "failed to decode event log: RecordLimitExceeded: {max_records}"
@@ -156,20 +292,25 @@ fn admission_name(admission: safemesh_crdt::Admission) -> String {
 
 // A single record reports the verdict `merge_log_bytes` reports for it: a
 // duplicate or collision is a verdict, not an error. An invalid record raises.
-fn record_verdict(admission: safemesh_crdt::Admission) -> PyResult<String> {
-    match admission {
-        safemesh_crdt::Admission::Invalid(
-            cause @ (safemesh_crdt::WireError::ZeroSequenceAdd { .. }
-            | safemesh_crdt::WireError::ZeroSequenceRemove { .. }),
-        ) => Err(pyo3::exceptions::PyValueError::new_err(cause.to_string())),
-        safemesh_crdt::Admission::Invalid(safemesh_crdt::WireError::OwnershipViolation) => Err(
-            pyo3::exceptions::PyValueError::new_err("writer replica does not match record author"),
-        ),
-        safemesh_crdt::Admission::Invalid(_) => {
-            Err(pyo3::exceptions::PyValueError::new_err("invalid record"))
+fn record_invalid_text(cause: WireError) -> String {
+    match cause {
+        cause @ (WireError::ZeroSequenceAdd { .. } | WireError::ZeroSequenceRemove { .. }) => {
+            cause.to_string()
         }
+        WireError::OwnershipViolation => "writer replica does not match record author".to_owned(),
+        _ => "invalid record".to_owned(),
+    }
+}
+
+fn record_verdict_text(admission: safemesh_crdt::Admission) -> Result<String, String> {
+    match admission {
+        safemesh_crdt::Admission::Invalid(cause) => Err(record_invalid_text(cause)),
         admission => Ok(admission_name(admission)),
     }
+}
+
+fn record_verdict(admission: safemesh_crdt::Admission) -> PyResult<String> {
+    record_verdict_text(admission).map_err(py_value_error)
 }
 
 fn append_error(error: safemesh_crdt::AppendError) -> PyErr {
@@ -621,7 +762,7 @@ mod py_g_counter_replica_python {
             let log = self
                 .replica
                 .decode_log_bytes(bytes, limits)
-                .map_err(|error| bounded_event_log_decode_error(replica_log_error(error)))?;
+                .map_err(|error| bounded_event_log_decode_error(replica_log_error(error), true))?;
             if log.iter().any(|r| {
                 safemesh_crdt::ownership::check_counter_record(
                     self.replica.state().len(),
@@ -647,6 +788,47 @@ mod py_g_counter_replica_python {
                 py,
                 self.replica.log_bytes().map_err(replica_wire_error),
                 "failed to encode event log",
+            )
+        }
+
+        /// The collision alarm: every held record ID a peer holds with a
+        /// different payload, raised when a peer's record collided here or a
+        /// peer's report named one. In memory only; never merged into state.
+        pub fn collisions(&self) -> PyResult<Vec<PyRecordCollision>> {
+            record_collisions(self.replica.log())
+        }
+
+        /// The collision report to send back to the peer whose batch was just
+        /// merged, or `None` when no alarm is raised here.
+        pub fn collision_report_bytes<'py>(
+            &self,
+            py: Python<'py>,
+        ) -> PyResult<Option<Bound<'py, PyBytes>>> {
+            collision_report_bytes(
+                py,
+                self.replica
+                    .collision_report_bytes()
+                    .map_err(replica_wire_report_error),
+            )
+        }
+
+        /// Merge a peer's collision report and return one verdict per entry:
+        /// "recorded" (alarm raised here now), "known" (already raised),
+        /// "unheld" (ID not held here) or "agrees" (the entry names only the
+        /// payload held here). Only "recorded" changes anything, and only the
+        /// alarm. A malformed report raises ValueError and changes nothing.
+        #[pyo3(signature = (bytes, *, max_records = None, max_collection_elements = None))]
+        pub fn merge_collision_report_bytes(
+            &mut self,
+            bytes: &[u8],
+            max_records: Option<&Bound<'_, PyAny>>,
+            max_collection_elements: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<Vec<String>> {
+            let limits = collision_report_limits(max_records, max_collection_elements)?;
+            collision_verdicts(
+                self.replica
+                    .merge_collision_report_bytes(bytes, limits)
+                    .map_err(replica_report_error),
             )
         }
 
@@ -769,7 +951,7 @@ mod py_enable_wins_flag_replica_python {
                     &self.state,
                     limits,
                 )
-                .map_err(bounded_event_log_decode_error)?;
+                .map_err(|error| bounded_event_log_decode_error(error, false))?;
             Ok(log
                 .iter()
                 .cloned()
@@ -785,6 +967,38 @@ mod py_enable_wins_flag_replica_python {
 
         pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
             encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
+        }
+
+        /// The collision alarm: every held record ID a peer holds with a
+        /// different payload, raised when a peer's record collided here or a
+        /// peer's report named one. In memory only; never merged into state.
+        pub fn collisions(&self) -> PyResult<Vec<PyRecordCollision>> {
+            record_collisions(&self.log)
+        }
+
+        /// The collision report to send back to the peer whose batch was just
+        /// merged, or `None` when no alarm is raised here.
+        pub fn collision_report_bytes<'py>(
+            &self,
+            py: Python<'py>,
+        ) -> PyResult<Option<Bound<'py, PyBytes>>> {
+            collision_report_bytes(py, self.log.collision_report_bytes())
+        }
+
+        /// Merge a peer's collision report and return one verdict per entry:
+        /// "recorded" (alarm raised here now), "known" (already raised),
+        /// "unheld" (ID not held here) or "agrees" (the entry names only the
+        /// payload held here). Only "recorded" changes anything, and only the
+        /// alarm. A malformed report raises ValueError and changes nothing.
+        #[pyo3(signature = (bytes, *, max_records = None, max_collection_elements = None))]
+        pub fn merge_collision_report_bytes(
+            &mut self,
+            bytes: &[u8],
+            max_records: Option<&Bound<'_, PyAny>>,
+            max_collection_elements: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<Vec<String>> {
+            let limits = collision_report_limits(max_records, max_collection_elements)?;
+            collision_verdicts(self.log.merge_collision_report_bytes(bytes, limits))
         }
 
         pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
@@ -921,7 +1135,7 @@ mod py_lww_map_replica_python {
                 &self.state,
                 limits,
             )
-            .map_err(bounded_event_log_decode_error)?;
+            .map_err(|error| bounded_event_log_decode_error(error, false))?;
             Ok(log
                 .iter()
                 .cloned()
@@ -937,6 +1151,38 @@ mod py_lww_map_replica_python {
 
         pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
             encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
+        }
+
+        /// The collision alarm: every held record ID a peer holds with a
+        /// different payload, raised when a peer's record collided here or a
+        /// peer's report named one. In memory only; never merged into state.
+        pub fn collisions(&self) -> PyResult<Vec<PyRecordCollision>> {
+            record_collisions(&self.log)
+        }
+
+        /// The collision report to send back to the peer whose batch was just
+        /// merged, or `None` when no alarm is raised here.
+        pub fn collision_report_bytes<'py>(
+            &self,
+            py: Python<'py>,
+        ) -> PyResult<Option<Bound<'py, PyBytes>>> {
+            collision_report_bytes(py, self.log.collision_report_bytes())
+        }
+
+        /// Merge a peer's collision report and return one verdict per entry:
+        /// "recorded" (alarm raised here now), "known" (already raised),
+        /// "unheld" (ID not held here) or "agrees" (the entry names only the
+        /// payload held here). Only "recorded" changes anything, and only the
+        /// alarm. A malformed report raises ValueError and changes nothing.
+        #[pyo3(signature = (bytes, *, max_records = None, max_collection_elements = None))]
+        pub fn merge_collision_report_bytes(
+            &mut self,
+            bytes: &[u8],
+            max_records: Option<&Bound<'_, PyAny>>,
+            max_collection_elements: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<Vec<String>> {
+            let limits = collision_report_limits(max_records, max_collection_elements)?;
+            collision_verdicts(self.log.merge_collision_report_bytes(bytes, limits))
         }
 
         pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
@@ -1053,7 +1299,7 @@ mod py_lww_register_replica_python {
                 &self.state,
                 limits,
             )
-            .map_err(bounded_event_log_decode_error)?;
+            .map_err(|error| bounded_event_log_decode_error(error, false))?;
             Ok(log
                 .iter()
                 .cloned()
@@ -1069,6 +1315,38 @@ mod py_lww_register_replica_python {
 
         pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
             encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
+        }
+
+        /// The collision alarm: every held record ID a peer holds with a
+        /// different payload, raised when a peer's record collided here or a
+        /// peer's report named one. In memory only; never merged into state.
+        pub fn collisions(&self) -> PyResult<Vec<PyRecordCollision>> {
+            record_collisions(&self.log)
+        }
+
+        /// The collision report to send back to the peer whose batch was just
+        /// merged, or `None` when no alarm is raised here.
+        pub fn collision_report_bytes<'py>(
+            &self,
+            py: Python<'py>,
+        ) -> PyResult<Option<Bound<'py, PyBytes>>> {
+            collision_report_bytes(py, self.log.collision_report_bytes())
+        }
+
+        /// Merge a peer's collision report and return one verdict per entry:
+        /// "recorded" (alarm raised here now), "known" (already raised),
+        /// "unheld" (ID not held here) or "agrees" (the entry names only the
+        /// payload held here). Only "recorded" changes anything, and only the
+        /// alarm. A malformed report raises ValueError and changes nothing.
+        #[pyo3(signature = (bytes, *, max_records = None, max_collection_elements = None))]
+        pub fn merge_collision_report_bytes(
+            &mut self,
+            bytes: &[u8],
+            max_records: Option<&Bound<'_, PyAny>>,
+            max_collection_elements: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<Vec<String>> {
+            let limits = collision_report_limits(max_records, max_collection_elements)?;
+            collision_verdicts(self.log.merge_collision_report_bytes(bytes, limits))
         }
 
         pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
@@ -1118,6 +1396,7 @@ fn safemesh_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEnableWinsFlagReplica>()?;
     m.add_class::<PyLwwMap>()?;
     m.add_class::<PyLwwMapReplica>()?;
+    m.add_class::<PyRecordCollision>()?;
     m.add_function(wrap_pyfunction!(gcounter_delta_to_wire, m)?)?;
     m.add_function(wrap_pyfunction!(lww_register_delta_to_wire, m)?)?;
     m.add_function(wrap_pyfunction!(lww_map_set_delta_to_wire, m)?)?;
@@ -1283,11 +1562,11 @@ impl PyStringOrSetRecord {
 /// operations in snake_case where WASM uses camelCase. The WASM lifecycle methods
 /// `free()` and `[Symbol.dispose]()` have no Python counterpart. Verdict strings
 /// match for the shared operations. Record-decode and allocated-writer refusal texts
-/// match WASM; Python raises `ValueError`. Invalid record admission differs:
-/// for example, a sequence-0 OR-Set remove raises `ValueError("invalid record")`
-/// in Python, while WASM names the reason (`ZeroSequenceRemove`). For a log
-/// containing that record, Python prefixes the core reason with
-/// `failed to decode event log: `; WASM returns the core reason alone.
+/// match WASM; Python raises `ValueError`. A sequence-0 OR-Set add or remove
+/// raises `ValueError` with the core `ZeroSequenceAdd` or `ZeroSequenceRemove`
+/// reason on the single-record path. For a log containing that record,
+/// Python prefixes the core reason with `failed to decode event log: `;
+/// WASM returns the core reason alone.
 #[pyclass(name = "StringOrSetReplica")]
 pub struct PyStringOrSetReplica {
     replica_id: u64,
@@ -1353,6 +1632,10 @@ impl PyStringOrSetReplica {
         writers: u64,
         record: &Record<OrSetDelta<String, u64>>,
     ) -> Result<(), String> {
+        // Match WASM: the core identifies sequence-0 records before allocation checks.
+        OrSet::<String, u64>::new()
+            .validate_record(record.id, &record.delta)
+            .map_err(record_invalid_text)?;
         if record.id.replica >= writers || record.id.sequence == 0 {
             return Err(
                 "allocation/history consistency: invalid record author or sequence".to_owned(),
@@ -1527,10 +1810,7 @@ impl PyStringOrSetReplica {
     ) -> Result<String, String> {
         let record = Self::decode_record(bytes, max_collection_elements)?;
         self.check_incoming(&record)?;
-        match self.replica.admit(record) {
-            safemesh_crdt::Admission::Invalid(_) => Err("invalid record".to_owned()),
-            admission => Ok(admission_name(admission)),
-        }
+        record_verdict_text(self.replica.admit(record))
     }
 
     fn try_merge_log_bytes(
@@ -1695,6 +1975,47 @@ mod py_string_or_set_replica_python {
                 .map_err(py_value_error)
         }
 
+        /// The collision alarm: every held record ID a peer holds with a
+        /// different payload, raised when a peer's record collided here or a
+        /// peer's report named one. In memory only; never merged into state.
+        pub fn collisions(&self) -> PyResult<Vec<PyRecordCollision>> {
+            record_collisions(self.replica.log())
+        }
+
+        /// The collision report to send back to the peer whose batch was just
+        /// merged, or `None` when no alarm is raised here.
+        pub fn collision_report_bytes<'py>(
+            &self,
+            py: Python<'py>,
+        ) -> PyResult<Option<Bound<'py, PyBytes>>> {
+            collision_report_bytes(
+                py,
+                self.replica
+                    .collision_report_bytes()
+                    .map_err(replica_wire_report_error),
+            )
+        }
+
+        /// Merge a peer's collision report and return one verdict per entry:
+        /// "recorded" (alarm raised here now), "known" (already raised),
+        /// "unheld" (ID not held here) or "agrees" (the entry names only the
+        /// payload held here). Only "recorded" changes anything, and only the
+        /// alarm. A malformed report raises ValueError and changes nothing.
+        #[pyo3(signature = (bytes, *, max_records = None, max_collection_elements = None))]
+        pub fn merge_collision_report_bytes(
+            &mut self,
+            bytes: &[u8],
+            max_records: Option<&Bound<'_, PyAny>>,
+            max_collection_elements: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<Vec<String>> {
+            let limits = collision_report_limits(max_records, max_collection_elements)?;
+            collision_verdicts(
+                self.replica
+                    .merge_collision_report_bytes(bytes, limits)
+                    .map_err(replica_report_error),
+            )
+        }
+
         pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
             self.replica.version().get(replica)
         }
@@ -1835,6 +2156,8 @@ mod py_rga_python {
         pub fn live_entries(&self) -> Vec<(u64, u64)> {
             self.inner.live_entries()
         }
+        /// Sorted, duplicate-free live positions, matching Lean `read`.
+        /// Use `live_entries` to retrieve every live value at shared positions.
         pub fn read_positions(&self) -> Vec<u64> {
             self.inner.read_positions()
         }
@@ -2035,7 +2358,7 @@ assert r.value() == 7
             let cause = safemesh_crdt::WireError::ZeroSequenceAdd { replica: 1 };
             for error in [
                 record_verdict(safemesh_crdt::Admission::Invalid(cause)).unwrap_err(),
-                event_log_decode_error(cause),
+                event_log_decode_error(cause, false),
             ] {
                 assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
                 assert_eq!(error.to_string(), format!("ValueError: {cause}"));
@@ -2052,6 +2375,22 @@ assert r.value() == 7
             globals.set_item("sm", module).unwrap();
             py.run_bound(
                 include_str!("../tests/collection_wrappers.py"),
+                Some(&globals),
+                None,
+            )
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn python_collision_alarm() {
+        with_python(|py| {
+            let module = PyModule::new_bound(py, "safemesh_python").unwrap();
+            safemesh_python(&module).unwrap();
+            let globals = pyo3::types::PyDict::new_bound(py);
+            globals.set_item("sm", module).unwrap();
+            py.run_bound(
+                include_str!("../tests/collision_alarm.py"),
                 Some(&globals),
                 None,
             )
@@ -2731,6 +3070,7 @@ for make, append, read in [
             fn apply_delta(&mut self, _: D) {}
         }
         with_python(|py| {
+            let mut ownership_failures = Vec::new();
             macro_rules! check {
                 ($replica:expr, $delta:expr) => {{
                     let record = Record {
@@ -2752,15 +3092,24 @@ for make, append, read in [
                         incoming.insert_record(&unchecked, record),
                         safemesh_crdt::Admission::Accepted
                     );
-                    assert!(replica
+                    let error = replica
                         .merge_log_bytes(&incoming.to_wire_bytes().unwrap(), None)
-                        .is_err());
+                        .unwrap_err();
+                    if error.to_string()
+                        != "ValueError: writer replica does not match record author"
+                    {
+                        ownership_failures.push(format!(
+                            "{}: {}",
+                            std::any::type_name_of_val(&replica),
+                            error
+                        ));
+                    }
                     assert_eq!(replica.state, state);
                     assert_eq!(replica.log, log);
                     assert_eq!(replica.log.since(log.version()).len(), 0);
                 }};
             }
-            for foreign in [1, 99, u32::MAX as u64 + 1, u64::MAX] {
+            for foreign in [9, 1, 99, u32::MAX as u64 + 1, u64::MAX] {
                 check!(
                     PyLwwRegisterReplica::new(0),
                     LwwRegisterDelta {
@@ -2787,6 +3136,15 @@ for make, append, read in [
                     }
                 );
             }
+            println!(
+                "LWW_OWNERSHIP_TEXT_CASES=15 FAILURES={}",
+                ownership_failures.len()
+            );
+            assert_eq!(
+                ownership_failures,
+                Vec::<String>::new(),
+                "15 LWW ownership text cases"
+            );
             let mut writer = PyLwwRegisterReplica::new(0);
             writer.append_set(py, 1, 0, 7).unwrap();
             assert_eq!(writer.value_or(0), 7);

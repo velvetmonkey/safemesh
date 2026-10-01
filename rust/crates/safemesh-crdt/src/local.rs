@@ -15,16 +15,49 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Errors from local writer and durable store operations.
+///
+/// Downstream callers must allow for future variants:
+///
+/// ```compile_fail,E0004
+/// use safemesh_crdt::local::LocalError;
+/// fn classify(error: LocalError) -> &'static str {
+///     match error {
+///         LocalError::Refused => "refused",
+///         LocalError::Exhausted => "exhausted",
+///         LocalError::PeerWriterAhead => "writer ahead",
+///         LocalError::RecoveryRequired => "recovery",
+///         LocalError::Configuration => "configuration",
+///         LocalError::CounterWidth(_) => "counter width",
+///         LocalError::InvalidRecord(_) => "record",
+///         LocalError::History(_) => "history",
+///         LocalError::InvalidHistory => "invalid history",
+///         LocalError::Io(_) => "io",
+///         LocalError::AncestorSync { .. } => "ancestor sync",
+///         LocalError::RecordLimitExceeded { .. } => "record limit",
+///     }
+/// }
+/// ```
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum LocalError {
     Refused,
     Exhausted,
+    /// A peer supplied an own-writer record above the committed high-water.
+    PeerWriterAhead,
     RecoveryRequired,
     Configuration,
+    /// The requested counter width exceeds the core constructor domain.
+    CounterWidth(crate::CoordinateError),
     InvalidRecord(WireError),
     History(WireError),
     InvalidHistory,
     Io(io::Error),
+    /// First creation could not open or sync an ancestor; no fence is written.
+    AncestorSync {
+        path: PathBuf,
+        source: io::Error,
+    },
     /// A `_with_limits` restart found a committed history that declares more
     /// records than [`DecodeLimits::max_records`](crate::DecodeLimits). Checked
     /// from the frame header before any record is read; the store is unchanged.
@@ -42,13 +75,16 @@ impl core::fmt::Display for LocalError {
             Self::Exhausted => {
                 f.write_str("local writer sequence, generation, or token allocation exhausted")
             }
+            Self::PeerWriterAhead => f.write_str("a peer returned a record for this writer above its durable high-water; local writes on this open replica are stopped; reopening clears this stop and an old-identity restore is detected only when a peer returns such a record; open a restored store with a new writer identity"),
             Self::RecoveryRequired => f.write_str("local store requires recovery"),
+            Self::CounterWidth(error) => error.fmt(f),
             Self::Configuration => f.write_str("invalid or mismatched local writer configuration"),
             Self::InvalidRecord(error) => error.fmt(f),
             Self::History(error) => write!(f, "local history wire validation failed: {error}"),
             Self::InvalidHistory => {
                 f.write_str("local history failed replay or sequence validation")
             }
+            Self::AncestorSync { path, source } => write!(f, "AncestorSync: cannot sync store ancestor {}: {source}", path.display()),
             Self::Io(error) => write!(f, "local store I/O failed: {error}"),
             Self::RecordLimitExceeded { max_records } => write!(
                 f,
@@ -62,7 +98,8 @@ impl core::error::Error for LocalError {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::InvalidRecord(error) | Self::History(error) => Some(error),
-            Self::Io(error) => Some(error),
+            Self::Io(error) | Self::AncestorSync { source: error, .. } => Some(error),
+            Self::CounterWidth(error) => Some(error),
             _ => None,
         }
     }
@@ -87,6 +124,7 @@ pub struct LocalReplica<C: Crdt> {
     state: C,
     log: EventLog<C::Delta>,
     last_sequence: u64,
+    peer_writer_ahead: bool,
 }
 
 // A private tentative insertion. Only version metadata (bounded by configured
@@ -135,13 +173,96 @@ impl<C: Crdt> Drop for LocalReplica<C> {
     }
 }
 
+// Without a fence, existing directories may be leftovers from interrupted mkdir.
+// No persistent provenance identifies a safe stopping ancestor, so sync the
+// resolved and traversed parent chains through / before creating the fence.
+fn prepare_durable_root(root: &Path, config: WriterConfig) -> Result<(), LocalError> {
+    if root
+        .join(format!("writer-{}.fence", config.writer))
+        .try_exists()?
+    {
+        return Ok(());
+    }
+    create_durable_root(root)
+}
+fn create_durable_root(root: &Path) -> Result<(), LocalError> {
+    create_durable_root_with(root, |parent| File::open(parent)?.sync_all())
+}
+
+fn create_durable_root_with(
+    root: &Path,
+    sync_parent: impl FnMut(&Path) -> io::Result<()>,
+) -> Result<(), LocalError> {
+    create_durable_root_using(root, |directory| fs::create_dir(directory), sync_parent)
+}
+
+fn create_durable_root_using(
+    root: &Path,
+    mut create: impl FnMut(&Path) -> io::Result<()>,
+    mut sync_parent: impl FnMut(&Path) -> io::Result<()>,
+) -> Result<(), LocalError> {
+    let root = std::path::absolute(root)?;
+    let mut missing = Vec::new();
+    let mut ancestor = root.as_path();
+    loop {
+        match fs::metadata(ancestor) {
+            Ok(metadata) if metadata.is_dir() => break,
+            Ok(_) => return Err(io::Error::from(io::ErrorKind::NotADirectory).into()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                missing.push(ancestor.to_path_buf());
+                ancestor = ancestor
+                    .parent()
+                    .ok_or_else(|| io::Error::other("no ancestor"))?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    for directory in missing.iter().rev() {
+        match create(directory) {
+            Ok(()) => {}
+            // A concurrent creator may have installed this directory after the walk.
+            Err(error)
+                if error.kind() == io::ErrorKind::AlreadyExists
+                    && fs::metadata(directory)?.is_dir() => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let resolved = root.canonicalize()?;
+    let mut parents: Vec<_> = resolved
+        .ancestors()
+        .skip(1)
+        .map(Path::to_path_buf)
+        .collect();
+    // Keep entries needed to traverse symlinks or cancelled `..` components
+    // durable too, even if an interrupted earlier call created them.
+    for parent in root.ancestors().skip(1) {
+        let parent = parent
+            .canonicalize()
+            .map_err(|source| LocalError::AncestorSync {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        if !parents.contains(&parent) {
+            parents.push(parent);
+        }
+    }
+    parents.sort_by_key(|parent| core::cmp::Reverse(parent.components().count()));
+    for parent in parents {
+        sync_parent(&parent).map_err(|source| LocalError::AncestorSync {
+            path: parent,
+            source,
+        })?;
+    }
+    Ok(())
+}
+
 impl<C: Crdt> LocalReplica<C>
 where
     C::Delta: OwnedDelta + Clone + PartialEq,
 {
     fn fresh(root: &Path, config: WriterConfig, state: C) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
-        fs::create_dir_all(root)?;
+        prepare_durable_root(root, config)?;
         let mut fence = OpenOptions::new()
             .read(true)
             .write(true)
@@ -184,6 +305,7 @@ where
             log: EventLog::for_crdt(&state),
             state,
             last_sequence: 0,
+            peer_writer_ahead: false,
         })
     }
 
@@ -263,6 +385,9 @@ where
         local: bool,
         commit: impl FnOnce(&EventLog<C::Delta>, u64) -> Result<(), LocalError>,
     ) -> Result<Admission, LocalError> {
+        if local && self.peer_writer_ahead {
+            return Err(LocalError::PeerWriterAhead);
+        }
         // Preserve lease and ownership precedence, then surface the carrier cause
         // for a received OR-Set sequence-zero add or remove.
         if !local
@@ -286,14 +411,24 @@ where
         ) {
             return Err(LocalError::Refused);
         }
+        // Peer history cannot allocate IDs in this writer's space. A backup
+        // may have lost locally issued IDs, so stop this open writer as well.
+        if !local
+            && record.id.replica == self.config.writer
+            && record.id.sequence > self.last_sequence
+        {
+            self.peer_writer_ahead = true;
+            return Err(LocalError::PeerWriterAhead);
+        }
         let outcome = self.log.admission(&self.state, &record);
         if outcome != Admission::Accepted {
+            self.log.raise_on_collision(outcome, record);
             return Ok(outcome);
         }
         let candidate = PendingInsertion::new(&mut self.log, record.id);
         let outcome = candidate.log.insert_record(&self.state, record.clone());
-        let sequence = if record.id.replica == self.config.writer {
-            self.last_sequence.max(record.id.sequence)
+        let sequence = if local {
+            record.id.sequence
         } else {
             self.last_sequence
         };
@@ -339,6 +474,9 @@ where
         ticket: WriteTicket,
         delta: C::Delta,
     ) -> Result<Record<C::Delta>, LocalError> {
+        if self.peer_writer_ahead {
+            return Err(LocalError::PeerWriterAhead);
+        }
         let sequence = next_sequence(self.last_sequence).ok_or(LocalError::Exhausted)?;
         let record = Record {
             id: RecordId {
@@ -358,7 +496,11 @@ impl LocalReplica<GCounter> {
     pub fn counter(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
         let n = usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?;
-        Self::fresh(root, config, GCounter::new(n))
+        Self::fresh(
+            root,
+            config,
+            GCounter::try_new(n).map_err(LocalError::CounterWidth)?,
+        )
     }
     pub fn bump(
         &mut self,
@@ -383,6 +525,9 @@ impl LocalReplica<OrSet<String, u64>> {
         ticket: WriteTicket,
         element: String,
     ) -> Result<Record<OrSetDelta<String, u64>>, LocalError> {
+        if self.peer_writer_ahead {
+            return Err(LocalError::PeerWriterAhead);
+        }
         let sequence = next_sequence(self.last_sequence).ok_or(LocalError::Exhausted)?;
         let token = allocate_token(self.config.writers, self.config.writer, sequence)
             .ok_or(LocalError::Exhausted)?;
@@ -658,7 +803,7 @@ where
     C::Delta: OwnedDelta + Clone + PartialEq + WireEncode + WireSchema,
 {
     fn fresh(root: &Path, config: WriterConfig, state: C) -> Result<Self, LocalError> {
-        fs::create_dir_all(root)?;
+        prepare_durable_root(root, config)?;
         let root = root.canonicalize()?;
         // Never overwrite a history whose fence is missing, in either format.
         let path = journal::path(&root, config.writer);
@@ -777,6 +922,9 @@ where
         ticket: WriteTicket,
         delta: C::Delta,
     ) -> Result<Record<C::Delta>, LocalError> {
+        if self.inner.peer_writer_ahead {
+            return Err(LocalError::PeerWriterAhead);
+        }
         let sequence = next_sequence(self.inner.last_sequence).ok_or(LocalError::Exhausted)?;
         let record = Record {
             id: RecordId {
@@ -956,6 +1104,7 @@ where
             log: EventLog::for_crdt(&state),
             state,
             last_sequence: 0,
+            peer_writer_ahead: false,
         };
         // Compose packet A's corpus-bound ownedStep with M1 admission/replay.
         // This candidate is private until every record and allocation check passes.
@@ -1079,7 +1228,12 @@ impl DurableReplica<GCounter> {
     ) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
         let n = usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?;
-        Self::restart_with_limits(root, config, GCounter::new(n), limits)
+        Self::restart_with_limits(
+            root,
+            config,
+            GCounter::try_new(n).map_err(LocalError::CounterWidth)?,
+            limits,
+        )
     }
     /// Reacquire the writer, read its committed writer count, then run checked replay.
     /// The root must already contain a durable counter store for this writer.
@@ -1126,7 +1280,13 @@ impl DurableReplica<GCounter> {
             return Err(LocalError::Configuration);
         }
         let n = usize::try_from(writers).map_err(|_| LocalError::Configuration)?;
-        Self::restart_locked(&root, fence, config, GCounter::new(n), limits)
+        Self::restart_locked(
+            &root,
+            fence,
+            config,
+            GCounter::try_new(n).map_err(LocalError::CounterWidth)?,
+            limits,
+        )
     }
     /// Explicitly move a counter store written before the append log
     /// (`writer-<id>.transaction`) to the append log (`writer-<id>.journal`),
@@ -1146,7 +1306,11 @@ impl DurableReplica<GCounter> {
     pub fn counter(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
         let n = usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?;
-        Self::fresh(root, config, GCounter::new(n))
+        Self::fresh(
+            root,
+            config,
+            GCounter::try_new(n).map_err(LocalError::CounterWidth)?,
+        )
     }
     pub fn bump(
         &mut self,
@@ -1217,6 +1381,9 @@ impl DurableReplica<OrSet<String, u64>> {
         ticket: WriteTicket,
         element: String,
     ) -> Result<Record<OrSetDelta<String, u64>>, LocalError> {
+        if self.inner.peer_writer_ahead {
+            return Err(LocalError::PeerWriterAhead);
+        }
         let sequence = next_sequence(self.inner.last_sequence).ok_or(LocalError::Exhausted)?;
         let token = allocate_token(
             self.inner.config.writers,
@@ -1475,8 +1642,146 @@ mod durable_tests {
             SERIAL.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(&root).unwrap();
-        root
+        root.canonicalize().unwrap()
     }
+    #[test]
+    fn fresh_root_syncs_exact_created_parents() {
+        let existing = root();
+        let nested = existing.join("ancestor/store");
+        let mut synced = Vec::new();
+        create_durable_root_with(&nested, |parent| {
+            synced.push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        let expected: Vec<_> = nested
+            .canonicalize()
+            .unwrap()
+            .ancestors()
+            .skip(1)
+            .map(Path::to_path_buf)
+            .collect();
+        assert_eq!(synced, expected);
+        synced.clear();
+        create_durable_root_with(&nested, |parent| {
+            synced.push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(synced, expected);
+        let failed = existing.join("failed/store");
+        let error = create_durable_root_with(&failed, |_| {
+            Err(io::Error::other("injected parent sync failure"))
+        })
+        .unwrap_err();
+        assert!(
+            matches!(error, LocalError::AncestorSync { path, source } if path == failed.parent().unwrap() && source.to_string() == "injected parent sync failure")
+        );
+        assert!(failed.is_dir());
+    }
+    #[test]
+    fn fresh_root_syncs_lexical_symlink_parent() {
+        let base = root();
+        fs::create_dir(base.join("a")).unwrap();
+        fs::create_dir_all(base.join("b/real")).unwrap();
+        std::os::unix::fs::symlink(base.join("b/real"), base.join("a/link")).unwrap();
+        let store = base.join("a/link/store");
+        let mut synced = Vec::new();
+        create_durable_root_with(&store, |parent| {
+            synced.push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+
+        // Canonical chain: b/real, b, base, and every ancestor of base.
+        // Lexical chain adds a: it holds the link, but is not in the canonical chain.
+        let mut expected = vec![
+            base.join("b/real"),
+            base.join("b"),
+            base.join("a"),
+            base.clone(),
+        ];
+        expected.extend(base.ancestors().skip(1).map(Path::to_path_buf));
+        assert_eq!(synced, expected);
+        fs::remove_dir_all(base).unwrap();
+    }
+    #[test]
+    fn fresh_root_syncs_leftover_parent_chain() {
+        let existing = root();
+        let leftover = existing.join("interrupted/store");
+        // Simulate an earlier call dying after mkdir, without any parent fsync.
+        fs::create_dir_all(&leftover).unwrap();
+        let mut synced = Vec::new();
+        create_durable_root_with(&leftover, |parent| {
+            synced.push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        let expected: Vec<_> = leftover
+            .canonicalize()
+            .unwrap()
+            .ancestors()
+            .skip(1)
+            .map(Path::to_path_buf)
+            .collect();
+        assert_eq!(synced, expected);
+        assert_eq!(synced[0], existing.join("interrupted"));
+        assert_eq!(synced[1], existing);
+        let replica = DurableReplica::counter(&leftover, config()).unwrap();
+        assert!(leftover.join("writer-0.fence").is_file());
+        drop(replica);
+    }
+
+    #[test]
+    fn fresh_root_syncs_cancelled_traversal_parents() {
+        let existing = root();
+        let cancelled = existing.join("interrupted/child");
+        fs::create_dir_all(&cancelled).unwrap();
+        let store = existing.join("interrupted/child/../../store");
+        fs::create_dir(existing.join("store")).unwrap();
+        let mut synced = Vec::new();
+        create_durable_root_with(&store, |parent| {
+            synced.push(parent.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        assert!(synced.contains(&existing.join("interrupted")));
+        assert!(synced.contains(&existing));
+        assert_eq!(synced.last().unwrap(), Path::new("/"));
+        let replica = DurableReplica::counter(&store, config()).unwrap();
+        drop(replica);
+    }
+
+    #[test]
+    fn fresh_root_syncs_concurrent_creator_parents() {
+        let existing = root();
+        let nested = existing.join("concurrent/store");
+        let mut synced = Vec::new();
+        let mut races = 0;
+        create_durable_root_using(
+            &nested,
+            |directory| {
+                fs::create_dir(directory)?;
+                races += 1;
+                Err(io::Error::from(io::ErrorKind::AlreadyExists))
+            },
+            |parent| {
+                synced.push(parent.to_path_buf());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(races, 2);
+        let expected: Vec<_> = nested
+            .canonicalize()
+            .unwrap()
+            .ancestors()
+            .skip(1)
+            .map(Path::to_path_buf)
+            .collect();
+        assert_eq!(synced, expected);
+    }
+
     fn config() -> WriterConfig {
         WriterConfig {
             writers: 2,
@@ -1512,6 +1817,249 @@ mod durable_tests {
         } else {
             transaction_path(root, config())
         }
+    }
+    fn h1_record(sequence: u64) -> Record<GCounterDelta> {
+        Record {
+            id: RecordId {
+                replica: 0,
+                sequence,
+            },
+            delta: GCounterDelta {
+                replica: 0,
+                tally: 99,
+            },
+        }
+    }
+    #[test]
+    fn h1_event_log_unprotected_control() {
+        let mut state = GCounter::new(2);
+        let mut log = EventLog::for_crdt(&state);
+        assert_eq!(
+            log.insert_record(&state, h1_record(u64::MAX)),
+            Admission::Accepted
+        );
+        assert!(matches!(
+            log.append(
+                &mut state,
+                0,
+                GCounterDelta {
+                    replica: 0,
+                    tally: 100
+                }
+            ),
+            Err(crate::AppendError::SequenceExhausted)
+        ));
+    }
+    #[test]
+    fn h1_local_peer_sequence_refused() {
+        let mut r = LocalReplica::counter(&root(), config()).unwrap();
+        let honest = r.bump(r.ticket(), 1).unwrap();
+        assert_eq!(r.receive(r.ticket(), honest).unwrap(), Admission::Duplicate);
+        assert_eq!(r.bump(r.ticket(), 2).unwrap().id.sequence, 2);
+        let state = r.state().clone();
+        let log = r.log().clone();
+        let allocation = r.allocation_bytes();
+        let received = r.receive(r.ticket(), h1_record(u64::MAX));
+        let next = r.bump(r.ticket(), 3);
+        std::println!("H1.local receive={received:?} next={next:?}");
+        assert!(matches!(received, Err(LocalError::PeerWriterAhead)));
+        assert_eq!(r.state(), &state);
+        assert_eq!(r.log(), &log);
+        assert_eq!(r.allocation_bytes(), allocation);
+        assert!(matches!(
+            r.bump(r.ticket(), 3),
+            Err(LocalError::PeerWriterAhead)
+        ));
+    }
+    #[test]
+    fn h1_durable_peer_sequence_refused_after_restart() {
+        let root = root();
+        let mut r = DurableReplica::counter(&root, config()).unwrap();
+        let honest = r.bump(r.ticket(), 1).unwrap();
+        let path = store_file(&root);
+        let bytes = fs::read(&path).unwrap();
+        assert!(matches!(
+            r.receive(r.ticket(), h1_record(u64::MAX)),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        assert!(matches!(
+            r.bump(r.ticket(), 2),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        drop(r);
+        let mut r = DurableReplica::restart_counter(&root, config()).unwrap();
+        // The stop is volatile: ordinary restart still continues at high-water + 1.
+        assert_eq!(r.bump(r.ticket(), 2).unwrap().id.sequence, 2);
+        assert_eq!(r.receive(r.ticket(), honest).unwrap(), Admission::Duplicate);
+        let before = fs::read(&path).unwrap();
+        // Sync re-detects the same forged record and stops this new session.
+        assert!(matches!(
+            r.receive(r.ticket(), h1_record(u64::MAX)),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        assert!(matches!(
+            r.bump(r.ticket(), 3),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+    #[test]
+    fn h1_second_order_boundaries_and_complete_log_receive() {
+        for sequence in [2, u64::MAX] {
+            let root = root();
+            let mut r = DurableReplica::counter(&root, config()).unwrap();
+            let honest = r.bump(r.ticket(), 1).unwrap();
+            assert_eq!(
+                r.receive(r.ticket(), honest.clone()).unwrap(),
+                Admission::Duplicate
+            );
+            let path = store_file(&root);
+            let bytes = fs::read(&path).unwrap();
+            let state = r.state().clone();
+            let log = r.log().clone();
+            let allocation = r.allocation_bytes();
+            for _ in 0..2 {
+                assert!(matches!(
+                    r.receive(r.ticket(), h1_record(sequence)),
+                    Err(LocalError::PeerWriterAhead)
+                ));
+                assert_eq!(r.state(), &state);
+                assert_eq!(r.log(), &log);
+                assert_eq!(r.allocation_bytes(), allocation);
+                assert_eq!(fs::read(&path).unwrap(), bytes);
+            }
+            let ticket = r.renew(r.ticket()).unwrap();
+            assert!(matches!(
+                r.append(
+                    ticket,
+                    GCounterDelta {
+                        replica: 0,
+                        tally: 3
+                    }
+                ),
+                Err(LocalError::PeerWriterAhead)
+            ));
+            assert_eq!(r.receive(ticket, honest).unwrap(), Admission::Duplicate);
+            let remote = Record {
+                id: RecordId {
+                    replica: 1,
+                    sequence: u64::MAX,
+                },
+                delta: GCounterDelta {
+                    replica: 1,
+                    tally: 7,
+                },
+            };
+            assert_eq!(
+                r.receive(ticket, remote.clone()).unwrap(),
+                Admission::Accepted
+            );
+            assert_eq!(r.receive(ticket, remote).unwrap(), Admission::Duplicate);
+            assert_eq!(r.allocation_bytes(), allocation);
+            assert!(matches!(
+                r.bump(ticket, 3),
+                Err(LocalError::PeerWriterAhead)
+            ));
+        }
+        let mut r = LocalReplica::counter(&root(), config()).unwrap();
+        let mut incoming = EventLog::for_crdt(&GCounter::new(2));
+        assert_eq!(
+            incoming.insert_record(&GCounter::new(2), h1_record(u64::MAX)),
+            Admission::Accepted
+        );
+        // Local/DurableReplica expose single-record receive, not a batch merge.
+        // A complete transport log must decode then route every record to receive.
+        let decoded = EventLog::<GCounterDelta>::from_wire_bytes_for(
+            &incoming.to_wire_bytes().unwrap(),
+            r.state(),
+        )
+        .unwrap();
+        for record in decoded.records() {
+            assert!(matches!(
+                r.receive(r.ticket(), record.clone()),
+                Err(LocalError::PeerWriterAhead)
+            ));
+        }
+        assert!(matches!(
+            r.bump(r.ticket(), 1),
+            Err(LocalError::PeerWriterAhead)
+        ));
+    }
+    #[test]
+    fn h1_orset_local_actions_remain_stopped() {
+        let mut r = DurableReplica::utf8_set(&root(), config()).unwrap();
+        let element = String::from("honest");
+        r.add(r.ticket(), element.clone()).unwrap();
+        let ahead = Record {
+            id: RecordId {
+                replica: 0,
+                sequence: 2,
+            },
+            delta: OrSetDelta::Add {
+                element: String::from("lost"),
+                token: 4,
+            },
+        };
+        assert!(matches!(
+            r.receive(r.ticket(), ahead),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        assert!(matches!(
+            r.add(r.ticket(), String::from("next")),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        assert!(matches!(
+            r.remove(r.ticket(), &element),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        let mut r = LocalReplica::utf8_set(&root(), config()).unwrap();
+        let ahead = Record {
+            id: RecordId {
+                replica: 0,
+                sequence: 1,
+            },
+            delta: OrSetDelta::Add {
+                element: element.clone(),
+                token: 2,
+            },
+        };
+        assert!(matches!(
+            r.receive(r.ticket(), ahead),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        assert!(matches!(
+            r.add(r.ticket(), element.clone()),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        assert!(matches!(
+            r.remove(r.ticket(), &element),
+            Err(LocalError::PeerWriterAhead)
+        ));
+    }
+    #[test]
+    fn m3_restore_peer_return_never_reissues_id() {
+        let root = root();
+        let mut r = DurableReplica::counter(&root, config()).unwrap();
+        r.bump(r.ticket(), 1).unwrap();
+        let path = store_file(&root);
+        let backup = fs::read(&path).unwrap();
+        let lost = r.bump(r.ticket(), 2).unwrap();
+        drop(r);
+        fs::write(&path, &backup).unwrap();
+        let mut r = DurableReplica::restart_counter(&root, config()).unwrap();
+        assert!(matches!(
+            r.receive(r.ticket(), lost.clone()),
+            Err(LocalError::PeerWriterAhead)
+        ));
+        let before = fs::read(&path).unwrap();
+        assert!(
+            matches!(r.bump(r.ticket(), 3), Err(LocalError::PeerWriterAhead)),
+            "restored writer must stop before reissuing {:?}",
+            lost.id
+        );
+        assert_eq!(before, backup);
+        assert_eq!(fs::read(&path).unwrap(), backup);
     }
     #[test]
     fn durable_orset_zero_sequence_remove_refused_on_receive_and_restart() {
@@ -1745,6 +2293,111 @@ mod durable_tests {
         assert_eq!(pncounter.to_string(), expected);
     }
     #[test]
+    fn counter_width_constructor_boundaries() {
+        for writers in [0, 4096, 4097] {
+            let config = WriterConfig { writers, writer: 0 };
+            let local = LocalReplica::counter(&root(), config);
+            let durable_root = root();
+            let durable = DurableReplica::counter(&durable_root, config);
+            if writers == 4097 {
+                assert!(matches!(
+                    local,
+                    Err(LocalError::CounterWidth(
+                        crate::CoordinateError::ReplicaLimitExceeded {
+                            requested: 4097,
+                            maximum: 4096
+                        }
+                    ))
+                ));
+                assert!(matches!(durable, Err(LocalError::CounterWidth(_))));
+                assert!(matches!(
+                    DurableReplica::restart_counter(&durable_root, config),
+                    Err(LocalError::CounterWidth(_))
+                ));
+            } else if writers == 0 {
+                assert!(matches!(local, Err(LocalError::Configuration)));
+                assert!(matches!(durable, Err(LocalError::Configuration)));
+            } else {
+                assert_eq!(local.unwrap().state().len(), 4096);
+                drop(durable.unwrap());
+                assert_eq!(
+                    DurableReplica::restart_counter(&durable_root, config)
+                        .unwrap()
+                        .state()
+                        .len(),
+                    4096
+                );
+                assert_eq!(
+                    DurableReplica::restart_counter_from_store(&durable_root, 0)
+                        .unwrap()
+                        .state()
+                        .len(),
+                    4096
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn counter_width_restart_is_named_and_preserves_store() {
+        for writers in [4097, usize::MAX as u64] {
+            let root = root();
+            let config = WriterConfig { writers, writer: 0 };
+            // Match the pre-cap fresh log shape through the product encoder.
+            let log = EventLog::<GCounterDelta>::with_replica_count(writers as usize);
+            let mut transaction = [
+                writers.to_le_bytes(),
+                0u64.to_le_bytes(),
+                0u64.to_le_bytes(),
+            ]
+            .concat();
+            transaction.extend(log.to_wire_bytes().unwrap());
+            let fence = [
+                writers.to_le_bytes(),
+                0u64.to_le_bytes(),
+                1u64.to_le_bytes(),
+            ]
+            .concat();
+            fs::write(transaction_path(&root, config), &transaction).unwrap();
+            let fence_path = root.join("writer-0.fence");
+            fs::write(&fence_path, &fence).unwrap();
+            for _ in 0..2 {
+                let error = DurableReplica::restart_counter_from_store(&root, 0)
+                    .err()
+                    .unwrap();
+                assert!(
+                    matches!(error, LocalError::CounterWidth(crate::CoordinateError::ReplicaLimitExceeded { requested, maximum: 4096 }) if requested == writers as usize)
+                );
+                let message = error.to_string();
+                assert!(
+                    message.contains(&writers.to_string()) && message.contains("4096"),
+                    "{message}"
+                );
+                assert_eq!(
+                    fs::read(transaction_path(&root, config)).unwrap(),
+                    transaction
+                );
+                assert_eq!(fs::read(&fence_path).unwrap(), fence);
+            }
+            assert!(matches!(
+                DurableReplica::restart_counter(
+                    &root,
+                    WriterConfig {
+                        writers: 2,
+                        writer: 0
+                    }
+                ),
+                Err(LocalError::Configuration)
+            ));
+            assert_eq!(
+                fs::read(transaction_path(&root, config)).unwrap(),
+                transaction
+            );
+            assert_eq!(fs::read(&fence_path).unwrap(), fence);
+        }
+    }
+
+    #[test]
     fn restart_counter_from_store_replays_without_writer_count() {
         let root = root();
         let mut replica = DurableReplica::counter(&root, config()).unwrap();
@@ -1845,6 +2498,40 @@ mod durable_tests {
         assert_eq!(replica.state().state(), &[5, 7]);
     }
     #[test]
+    fn fresh_root_second_order() {
+        let parent = root();
+        for name in ["empty", "stray", "symlink"] {
+            let target = parent.join(format!("target-{name}"));
+            fs::create_dir(&target).unwrap();
+            if name == "stray" {
+                fs::write(target.join("stray"), b"keep").unwrap();
+            }
+            let store = if name == "symlink" {
+                let link = parent.join("link");
+                std::os::unix::fs::symlink(&target, &link).unwrap();
+                link
+            } else {
+                target.clone()
+            };
+            std::eprintln!("ROOT-PROBE fresh {}", store.display());
+            let replica = DurableReplica::counter(&store, config()).unwrap();
+            drop(replica);
+            std::eprintln!("ROOT-PROBE reopen {}", store.display());
+            let mut replica = DurableReplica::restart_counter(&store, config()).unwrap();
+            let ticket = replica.ticket();
+            replica.bump(ticket, 1).unwrap();
+            drop(replica);
+            std::eprintln!("ROOT-PROBE restart {}", store.display());
+            let replica = DurableReplica::restart_counter(&store, config()).unwrap();
+            assert_eq!(replica.state().value(), 1);
+            drop(replica);
+            if name == "stray" {
+                assert_eq!(fs::read(target.join("stray")).unwrap(), b"keep");
+            }
+        }
+    }
+
+    #[test]
     fn fresh_durable_counter_creates_missing_root() {
         let store = root().join("fresh-counter");
         assert!(!store.exists());
@@ -1935,6 +2622,44 @@ mod durable_tests {
             DurableReplica::counter(&live_root, config()),
             Err(LocalError::RecoveryRequired)
         ));
+    }
+    #[test]
+    fn fresh_ancestor_sync_refusal_and_retry() {
+        use std::os::unix::fs::PermissionsExt;
+        if std::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .unwrap()
+            .stdout
+            == b"0\n"
+        {
+            std::eprintln!("SKIP: root bypasses execute-only ancestor permissions");
+            return;
+        }
+        let ancestor = root().join("execute-only");
+        let writable = ancestor.join("writable");
+        fs::create_dir_all(&writable).unwrap();
+        let ancestor = ancestor.canonicalize().unwrap();
+        let store = ancestor.join("writable/store");
+        fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o111)).unwrap();
+        std::eprintln!("ANCESTOR-PROBE refusal {}", ancestor.display());
+        let result = DurableReplica::counter(&store, config());
+        fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o755)).unwrap();
+        let error = result
+            .err()
+            .expect("execute-only ancestor must refuse creation");
+        assert!(error.to_string().contains(&ancestor.display().to_string()));
+        assert!(error.to_string().contains("Permission denied"));
+        assert!(matches!(error, LocalError::AncestorSync { path, source }
+            if path == ancestor && source.kind() == io::ErrorKind::PermissionDenied));
+        assert!(store.is_dir());
+        assert!(!store.join("writer-0.fence").exists());
+        std::eprintln!("ANCESTOR-PROBE retry {}", store.display());
+        let replica = DurableReplica::counter(&store, config()).unwrap();
+        assert!(store.join("writer-0.fence").exists());
+        drop(replica);
+        std::eprintln!("ANCESTOR-PROBE reopen {}", store.display());
+        drop(DurableReplica::restart_counter(&store, config()).unwrap());
     }
     #[test]
     fn fresh_durable_read_only_parent() {
@@ -2505,7 +3230,7 @@ mod durable_tests {
         assert_eq!(r.last_sequence, 128);
         assert_eq!(r.state().0, 128);
         assert_eq!(
-            r.admit_committed(r.ticket(), record(129, 129), false, |log, sequence| {
+            r.admit_committed(r.ticket(), record(129, 129), true, |log, sequence| {
                 assert_eq!(log.records().len(), 129);
                 assert_eq!(sequence, 129);
                 Ok(())
@@ -2516,7 +3241,7 @@ mod durable_tests {
         assert_eq!(clones.get(), 1, "accepted writes must not clone history");
         let before = r.log.version().clone();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = r.admit_committed(r.ticket(), record(130, 130), false, |_, _| {
+            let _ = r.admit_committed(r.ticket(), record(130, 130), true, |_, _| {
                 panic!("commit unwind")
             });
         }));

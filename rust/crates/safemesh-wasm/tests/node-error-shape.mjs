@@ -72,19 +72,28 @@ function caughtError(operation) {
 
 const ownershipErrors = [];
 for (const [name, coordinate] of [["out-of-range", 2], ["not-owned", 0]]) {
-  const author = new wasm.SafeMeshGCounterReplica(1n, 2);
-  const valid = author.appendBump(1, 5n);
-  const invalid = Uint8Array.from(valid);
-  new DataView(invalid.buffer).setBigUint64(22, BigInt(coordinate), true);
-  const log = replaceRecordInLog(author.logBytes(), valid, invalid);
-  const receiver = new wasm.SafeMeshGCounterReplica(0n, 2);
-  const singleError = caughtError(() => receiver.mergeRecordBytes(invalid));
-  const logError = caughtError(() => receiver.mergeLogBytes(log));
-  console.log(`WASM ${name}: single=${JSON.stringify(singleError)}, log=${JSON.stringify(logError)}`);
-  ownershipErrors.push({ name, singleError, logError });
-  author.free();
-  receiver.free();
+  for (const [kind, make, append] of [
+    ["G-Counter", id => new wasm.SafeMeshGCounterReplica(id, 2), r => r.appendBump(1, 5n)],
+    ["PN-Counter", id => new wasm.SafeMeshPnCounterReplica(id, 2), r => r.appendInc(1, 5n)],
+  ]) {
+    const author = make(1n);
+    const valid = append(author);
+    const invalid = Uint8Array.from(valid);
+    new DataView(invalid.buffer).setBigUint64(22, BigInt(coordinate), true);
+    const log = replaceRecordInLog(author.logBytes(), valid, invalid);
+    const receiver = make(0n);
+    const singleError = caughtError(() => receiver.mergeRecordBytes(invalid));
+    const logError = caughtError(() => receiver.mergeLogBytes(log));
+    // The complete-log counter refusal keeps its historical message and code.
+    assertSafeMeshError(() => receiver.mergeLogBytes(log), 2,
+      "counter coordinate out of range or not owned by record author");
+    console.log(`WASM ${kind} ${name}: single=${JSON.stringify(singleError)}, log=${JSON.stringify(logError)}`);
+    ownershipErrors.push({ name: `${kind} ${name}`, singleError, logError });
+    author.free();
+    receiver.free();
+  }
 }
+console.log("COUNTER_OWNERSHIP_TEXT_CASES=4");
 {
   const author = new wasm.SafeMeshGCounterReplica(1n, 2);
   const first = author.appendBump(1, 5n);
@@ -499,7 +508,8 @@ assert.deepEqual(capacityFailures, []);
 }
 
 // LWW authorship applies to both record and complete-log admission.
-for (const foreign of [1n, 99n, 2n ** 32n, 2n ** 64n - 1n]) {
+const lwwOwnershipFailures = [];
+for (const foreign of [9n, 1n, 99n, 2n ** 32n, 2n ** 64n - 1n]) {
   for (const kind of ["register", "map-set", "map-remove"]) {
     const make = () => kind === "register"
       ? new wasm.SafeMeshLwwRegisterReplica(0n)
@@ -526,7 +536,10 @@ for (const foreign of [1n, 99n, 2n ** 32n, 2n ** 64n - 1n]) {
     const before = receiver.logBytes();
     const beforeState = snapshot(receiver);
     assertSafeMeshError(() => receiver.mergeRecordBytes(invalid), 1, "writer replica does not match record author");
-    caughtError(() => receiver.mergeLogBytes(replaceRecordInLog(author.logBytes(), valid, invalid)));
+    try {
+      assertSafeMeshError(() => receiver.mergeLogBytes(replaceRecordInLog(author.logBytes(), valid, invalid)),
+        2, "writer replica does not match record author");
+    } catch (error) { lwwOwnershipFailures.push(`${kind} writer ${foreign}: ${error.message}`); }
     assert.deepEqual(receiver.logBytes(), before);
     assert.deepEqual(snapshot(receiver), beforeState);
     assert.equal(receiver.versionFor(0n), 0n);
@@ -536,4 +549,6 @@ for (const foreign of [1n, 99n, 2n ** 32n, 2n ** 64n - 1n]) {
     receiver.free();
   }
 }
+console.log(`LWW_OWNERSHIP_TEXT_CASES=15 FAILURES=${lwwOwnershipFailures.length}`);
+assert.deepEqual(lwwOwnershipFailures, []);
 console.log("LWW_FOREIGN_WRITER_REFUSED=true");

@@ -101,6 +101,7 @@ const docs = join(root, 'docs');
 for (const name of ['assurance.mjs', 'check-assurance.mjs', 'astro.config.mjs']) {
   fs.copyFileSync(join(live, 'docs', name), join(docs, name));
 }
+for (const name of ['CLAIMS.md', 'README.md']) fs.copyFileSync(join(live, name), join(root, name));
 fs.symlinkSync(join(live, 'docs/node_modules'), join(docs, 'node_modules'), 'junction');
 fs.mkdirSync(out);
 console.log(`Regression artifacts: ${scratch}`);

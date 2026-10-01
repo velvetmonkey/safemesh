@@ -70,7 +70,7 @@ for reverse in [False, True]:
         left.merge(right)
         right.merge(left)
     assert left.live_entries() == right.live_entries() == [(1, 10), (1, 11), (4, 40)]
-    assert left.read_positions() == right.read_positions() == [1, 1, 4]
+    assert left.read_positions() == right.read_positions() == [1, 4]
     assert left.placed() == right.placed() == [(1, 10), (1, 11), (2, 20), (3, 30), (4, 40)]
     assert left.tombstones() == right.tombstones() == [2, 3]
     left.merge(left)
@@ -175,7 +175,7 @@ def retention_python_merge_log_bytes_all_5000():
 retention_python_merge_log_bytes_all_5000()
 
 # A refused foreign writer must neither consume a sequence nor poison delivery.
-for foreign in (1, 99, 2**32, 2**64 - 1):
+for foreign in (9, 1, 99, 2**32, 2**64 - 1):
     for kind in ("register", "map-set", "map-remove"):
         cls = sm.LwwRegisterReplica if kind == "register" else sm.LwwMapReplica
         author, receiver = cls(0), cls(2)
@@ -205,6 +205,18 @@ for foreign in (1, 99, 2**32, 2**64 - 1):
             assert str(error) == "writer replica does not match record author", str(error)
         else:
             raise AssertionError("foreign record accepted")
+        # Recompute the frame CRC after replacing a runtime-generated record.
+        import zlib
+        frame = bytearray(author.log_bytes())
+        position = frame.index(valid)
+        frame[position:position + len(valid)] = invalid
+        frame[-4:] = zlib.crc32(frame[1:-4]).to_bytes(4, "little")
+        try:
+            receiver.merge_log_bytes(bytes(frame))
+        except ValueError as error:
+            assert str(error) == "writer replica does not match record author", str(error)
+        else:
+            raise AssertionError("foreign complete log accepted")
         assert receiver.version_for(0) == 0
         assert receiver.merge_record_bytes(valid) == "accepted"
-print("LWW_FOREIGN_APPEND_RECOVERY_CASES=12")
+print("LWW_FOREIGN_APPEND_RECOVERY_CASES=15")

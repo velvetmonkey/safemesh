@@ -122,6 +122,8 @@ Runtime tested: the Rust, Node/WASM, and installed Python demo programs below ch
 | Laws harness (`--features laws`) | **Reusable tests** — checks merge laws and drop/dup/reorder convergence scenarios for any type implementing the SafeMesh traits; supplemental to the Lean-oracle diff |
 | User-defined types | **Tested, not proven** — users can implement the same merge contract and run the laws harness, but SafeMesh does not prove arbitrary application code |
 
+The EventLog CRC detects accidental damage; it is not a MAC and does not stop a deliberate forger.
+
 One proof, two bodies: the Lean development IS the semantics; the Rust crate is a second body of the same object, held to the first by differential conformance rather than by trust.
 
 ## Architecture

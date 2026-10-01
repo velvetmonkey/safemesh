@@ -1,6 +1,6 @@
 # Node persistence adapter proposal
 
-Status: design only. This branch changes no public API, binding, signed payload, or peer wire format. The proposed storage envelope is local data, with a versioned decoder; it needs no signed or wire change. If a later implementation changes either signed or peer wire bytes, Ben must rule on that change first.
+Status: Managed handles for the G-Counter (PR 255) and allocated UTF-8 OR-Set (PR 276) exist on main. The proposed storage envelope is local data, with a versioned decoder; it needs no signed or wire change. If a later implementation changes either signed or peer wire bytes, Ben must rule on that change first.
 
 ## Evidence and ceremony on main
 

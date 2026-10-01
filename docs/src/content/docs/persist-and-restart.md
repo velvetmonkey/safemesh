@@ -3,6 +3,8 @@ title: Persist and restart — main (unreleased)
 description: Add SafeMesh to a Rust or TypeScript program, save an edit, restart and sync a second replica.
 ---
 
+Restoring a store file from a backup requires opening it with a new writer identity before it writes, because reopening under the old identity clears the in-memory write stop and the restore is not detected until a peer returns an own-ID record above the durable high-water.
+
 **v0 scope:** G-Counter and OR-Set are the **v0 focus** types, within the [language-path limits](/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
 
 
@@ -541,6 +543,10 @@ An append cut short by a crash never reached its sync, so it was never
 acknowledged; restart truncates it and reports its offset and size through
 [`torn_tail`](/safemesh/reference/rust/safemesh_crdt/local/struct.DurableReplica.html#method.torn_tail)
 ([`append_log_torn_tail_is_truncated_and_reported`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
+Restart also truncates a final journal entry that fails its length or checksum
+test and reports the discarded bytes through `torn_tail()`. SafeMesh does not
+claim that an acknowledged final record survives later damage to its bytes.
+Such damage is discarded as a torn tail and is not refused.
 A damaged record followed by other records is not a torn tail: restart refuses
 it as `History(IntegrityMismatch)` and leaves the journal unchanged
 ([`append_log_damage_before_the_tail_is_refused`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).

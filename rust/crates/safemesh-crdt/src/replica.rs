@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! In-memory coordination, without filesystem durability or writer identity.
 use crate::{
-    Admission, AppendError, CollectionLimits, Crdt, DecodeError, DecodeLimits, EventLog, Record,
-    VersionVector, WireDecode, WireEncode, WireError, WireSchema,
+    Admission, AppendError, CollectionLimits, CollisionVerdict, Crdt, DecodeError, DecodeLimits,
+    EventLog, Record, RecordCollision, RecordId, VersionVector, WireDecode, WireEncode, WireError,
+    WireSchema,
 };
 use alloc::vec::Vec;
 
@@ -15,6 +16,9 @@ pub enum ReplicaError {
     LogDecode(DecodeError),
     LogEncode(WireError),
     Append(AppendError),
+    /// A collision report was refused whole; no alarm changed.
+    ReportDecode(DecodeError),
+    ReportEncode(WireError),
 }
 impl core::fmt::Display for ReplicaError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -26,6 +30,14 @@ impl core::fmt::Display for ReplicaError {
                 write!(f, "RecordLimitExceeded: {max_records}")
             }
             Self::Append(e) => e.fmt(f),
+            Self::ReportDecode(DecodeError::Wire(e)) => {
+                write!(f, "failed to decode collision report: {e}")
+            }
+            Self::ReportDecode(DecodeError::RecordLimitExceeded { max_records }) => write!(
+                f,
+                "failed to decode collision report: RecordLimitExceeded: {max_records}"
+            ),
+            Self::ReportEncode(e) => write!(f, "failed to encode collision report: {e}"),
         }
     }
 }
@@ -35,8 +47,10 @@ impl core::error::Error for ReplicaError {
             Self::RecordDecode(e) | Self::LogEncode(e) | Self::LogDecode(DecodeError::Wire(e)) => {
                 Some(e)
             }
+            Self::ReportDecode(DecodeError::Wire(e)) | Self::ReportEncode(e) => Some(e),
             Self::Append(e) => Some(e),
-            Self::LogDecode(DecodeError::RecordLimitExceeded { .. }) => None,
+            Self::LogDecode(DecodeError::RecordLimitExceeded { .. })
+            | Self::ReportDecode(DecodeError::RecordLimitExceeded { .. }) => None,
         }
     }
 }
@@ -66,6 +80,8 @@ impl<C: Crdt> Replica<C> {
     {
         self.log.since(peer)
     }
+    /// A Collision verdict also raises the collision alarm; see
+    /// [`Self::collisions`] and [`Self::collision_report_bytes`].
     pub fn admit(&mut self, record: Record<C::Delta>) -> Admission
     where
         C::Delta: Clone + PartialEq,
@@ -151,5 +167,39 @@ impl<C: Crdt> Replica<C> {
             state.apply_delta(record.delta.clone());
         }
         Ok(Self { state, log })
+    }
+
+    /// Held record IDs a peer holds with a different payload, raised when a
+    /// peer's offer collided here or a peer's report named one. In memory
+    /// only; [`Self::restore`] starts with none.
+    pub fn collisions(&self) -> Vec<RecordCollision<C::Delta>>
+    where
+        C::Delta: Clone,
+    {
+        self.log.collisions()
+    }
+    /// The collision report to send back to a peer after merging its batch,
+    /// or `None` when no alarm is raised here.
+    pub fn collision_report_bytes(&self) -> Result<Option<Vec<u8>>, ReplicaError>
+    where
+        C::Delta: Clone + WireEncode + WireSchema,
+    {
+        self.log
+            .collision_report_bytes()
+            .map_err(ReplicaError::ReportEncode)
+    }
+    /// Merge a peer's collision report; one verdict per entry, in order.
+    /// Only the alarm can change: never the records, version or state.
+    pub fn merge_collision_report_bytes(
+        &mut self,
+        bytes: &[u8],
+        limits: DecodeLimits,
+    ) -> Result<Vec<(RecordId, CollisionVerdict)>, ReplicaError>
+    where
+        C::Delta: PartialEq + WireDecode + WireSchema,
+    {
+        self.log
+            .merge_collision_report_bytes(bytes, limits)
+            .map_err(ReplicaError::ReportDecode)
     }
 }

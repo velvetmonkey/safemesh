@@ -491,7 +491,7 @@ mod tests {
                     .as_nanos()
             ));
         fs::create_dir_all(&root).unwrap();
-        for name in ["source-a", "source-b", "receiver"] {
+        for name in ["source-a", "source-b"] {
             fs::create_dir(root.join(name)).unwrap();
         }
         let mut source_a = Replica::utf8_set(
@@ -535,19 +535,13 @@ mod tests {
                 observation("reorder-review", "Pass", vec!["reorder-a", "reorder-b"]),
             )
             .unwrap();
-        let receiver = Replica::utf8_set(
-            &root.join("receiver"),
-            WriterConfig {
-                writers: 2,
-                writer: 1,
-            },
-        )
-        .unwrap();
-        let mut service = Service::open(receiver, 1, &root.join("receiver")).unwrap();
+        // Receive on the existing writer, retaining its own durable high-water.
+        let mut service = Service::open(source_b, 1, &root.join("source-b")).unwrap();
         service
             .accept(&[Entry::of(&review).unwrap()], false)
             .unwrap();
-        assert_eq!(records(&service.replica).unwrap().len(), 1);
+        assert_eq!(records(&service.replica).unwrap().len(), 2);
+        assert!(!records(&service.replica).unwrap().contains_key("reorder-a"));
         service
             .accept(&[Entry::of(&b).unwrap(), Entry::of(&a).unwrap()], false)
             .unwrap();

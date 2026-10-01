@@ -83,6 +83,8 @@ assert admissions == ["duplicate"]
 print(left.value(), right.value())
 ```
 
+The collision alarm is raised in memory by `EventLog`, `Replica` and the Python and WASM replica bindings. `LocalReplica` and `DurableReplica` also record the alarm on `Admission::Collision`, and their logs produce a collision report. The C FFI has no collision-report surface. The alarm is in memory only; restoring an encoded log drops it, as does restarting a durable replica.
+
 `merge_record_bytes` returns one `"accepted"`, `"duplicate"`, or `"collision"`
 verdict for its record, and `merge_log_bytes` returns one per input record, in
 order. Neither raises for a duplicate or a collision, and neither changes state
@@ -195,7 +197,7 @@ the stored history and never creates a fresh writer when a check fails. It does
 not detect a stale snapshot that is consistent with itself, and it does no disk
 I/O.
 
-At most one allocated handle per author may be live in one Python process.
+The allocated registry permits one live handle per author within each Python process.
 A second `create_allocated` or `import_identity` for a live author raises
 `author already has a live allocated writer`. The claim is released when the
 handle is deallocated. WASM enforces the same rule per WASM instance. Neither
@@ -208,12 +210,11 @@ the second one as `"collision"`. Cross-process exclusion is the caller's job.
 - Python uses snake_case method names where WASM uses camelCase.
 
 - Record-decode and allocated-writer refusal texts match WASM; Python raises
-  `ValueError` without WASM's numeric `SafeMeshError` code. Invalid record
-  admission differs: for example, a sequence-0 OR-Set remove raises
-  `ValueError("invalid record")` in Python, while WASM names the reason
-  (`ZeroSequenceRemove`). For a log containing that record, Python prefixes
-  the core reason with `failed to decode event log: `; WASM returns the core
-  reason alone. The append refusal on an allocated replica retains
+  `ValueError` without WASM's numeric `SafeMeshError` code. On the single-record
+  path, a sequence-0 OR-Set add or remove raises `ValueError` with the core
+  `ZeroSequenceAdd` or `ZeroSequenceRemove` reason. For a log containing that
+  record, Python prefixes the core reason with `failed to decode event log: `;
+  WASM returns the core reason alone. The append refusal on an allocated replica retains
   the WASM method name: `allocated replica rejects caller-supplied tokens; use
   appendAllocatedAdd`.
 - Integer arguments go through the same checks as the other Python classes: a
@@ -270,8 +271,9 @@ returns an exact signed Python integer even outside the 64-bit range.
 
 `Rga` uses caller-supplied positions and values, both unsigned 64-bit integers.
 `placed()` returns all positioned values, `tombstones()` returns deleted
-positions, and `read_positions()` projects the sorted live entries. Distinct
-values at the same position remain distinct entries. Deleting a position hides
+positions, and `read_positions()` returns the sorted, duplicate-free live
+positions, matching Lean `read`. Distinct values at the same position remain
+available through `live_entries()`. Deleting a position hides
 all its values, including later arrivals. This wrapper does not allocate
 positions or implement text editing.
 

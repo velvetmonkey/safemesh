@@ -11,7 +11,7 @@ def raises(kind, call, message=None):
     except kind as error:
         if message is not None:
             assert str(error) == message, (str(error), message)
-        return
+        return error
     raise AssertionError(('expected exception', kind))
 
 
@@ -59,7 +59,94 @@ for position in range(len(log)):
     bad = bytearray(log)
     bad[position] ^= 0x01
     raises(ValueError, lambda: reader.merge_log_bytes(bytes(bad)))
-    assert reader.elements() == [] and reader.version_for(1) == 0
+assert reader.elements() == [] and reader.version_for(1) == 0
+
+# A refused sequence-0 record has the same cause as the checked log path.
+# The following valid merge proves the refusal did not change the reader.
+import struct
+import zlib
+def check_sequence_zero(kind):
+    writer = sm.StringOrSetReplica(41)
+    good = writer.append_add('sequence check', 411)
+    if kind == 'remove':
+        good = writer.append_remove_observed('sequence check')
+    invalid = bytearray(good)
+    struct.pack_into('<Q', invalid, 9, 0)
+    frame = bytearray(writer.log_bytes())
+    position = frame.index(good)
+    frame[position:position + len(good)] = invalid
+    frame[-4:] = zlib.crc32(frame[1:-4]).to_bytes(4, 'little')
+    reader = sm.StringOrSetReplica(42)
+    before = (reader.log_bytes(), reader.elements(), reader.add_entries(),
+              reader.tombstones(), reader.version_for(41))
+    single_error = raises(ValueError, lambda: reader.merge_record_bytes(bytes(invalid)))
+    assert (reader.log_bytes(), reader.elements(), reader.add_entries(),
+            reader.tombstones(), reader.version_for(41)) == before
+    log_error = raises(ValueError, lambda: reader.merge_log_bytes(bytes(frame)))
+    prefix = 'failed to decode event log: '
+    assert str(log_error).startswith(prefix)
+    assert str(single_error) == str(log_error)[len(prefix):]
+    assert (reader.log_bytes(), reader.elements(), reader.add_entries(),
+            reader.tombstones(), reader.version_for(41)) == before
+    assert reader.merge_record_bytes(good) == 'accepted'
+    assert reader.version_for(41) == (1 if kind == 'add' else 0)
+    assert reader.elements() == (['sequence check'] if kind == 'add' else [])
+
+check_sequence_zero('add')
+check_sequence_zero('remove')
+
+# An allocated reader checks the same core cause before allocation. A refused
+# record must not affect its next allocated write or a saved identity.
+def check_allocated_sequence_zero(kind, author):
+    writers = 9200
+    source = sm.StringOrSetReplica(9090)
+    good = source.append_add('allocated sequence check', 9100)
+    if kind == 'remove':
+        good = source.append_remove_observed('allocated sequence check')
+    invalid = bytearray(good)
+    struct.pack_into('<Q', invalid, 9, 0)
+    frame = bytearray(source.log_bytes())
+    position = frame.index(good)
+    frame[position:position + len(good)] = invalid
+    frame[-4:] = zlib.crc32(frame[1:-4]).to_bytes(4, 'little')
+
+    reader = sm.StringOrSetReplica.create_allocated(writers, author)
+    before = (reader.log_bytes(), reader.elements(), reader.add_entries(),
+              reader.tombstones(), reader.version_for(9090))
+    single_error = raises(ValueError, lambda: reader.merge_record_bytes(bytes(invalid)))
+    assert (reader.log_bytes(), reader.elements(), reader.add_entries(),
+            reader.tombstones(), reader.version_for(9090)) == before
+    log_error = raises(ValueError, lambda: reader.merge_log_bytes(bytes(frame)))
+    prefix = 'failed to decode event log: '
+    assert str(log_error).startswith(prefix)
+    assert str(single_error) == str(log_error)[len(prefix):]
+    assert (reader.log_bytes(), reader.elements(), reader.add_entries(),
+            reader.tombstones(), reader.version_for(9090)) == before
+
+    next_record = reader.append_allocated_add('next allocated add')
+    assert sm.StringOrSetReplica.inspect_record_bytes(next_record).sequence() == 1
+    saved = reader.export_identity()
+    expected = (reader.elements(), reader.add_entries(), reader.tombstones(),
+                reader.version_for(author), reader.version_for(9090))
+    del reader
+    restored = sm.StringOrSetReplica.import_identity(saved)
+    assert (restored.elements(), restored.add_entries(), restored.tombstones(),
+            restored.version_for(author), restored.version_for(9090)) == expected
+    assert restored.elements() == ['next allocated add']
+    del restored
+
+check_allocated_sequence_zero('add', 9091)
+check_allocated_sequence_zero('remove', 9092)
+
+# The shared admission mapper still preserves an ownership refusal.
+writer = sm.LwwRegisterReplica(51)
+good = writer.append_set(1, 51, 7)
+wrong_author = bytearray(good)
+struct.pack_into('<Q', wrong_author, 1, 52)
+reader = sm.LwwRegisterReplica(53)
+raises(ValueError, lambda: reader.merge_record_bytes(bytes(wrong_author)),
+       'writer replica does not match record author')
+assert reader.merge_record_bytes(good) == 'accepted'
 
 # C4: core token semantics, including a reused token across elements.
 replica = sm.StringOrSetReplica(1)
@@ -154,6 +241,43 @@ raises(ValueError, lambda: peer.merge_record_bytes(add),
        'allocation/history consistency: token mismatch')
 assert peer.elements() == ['radio', 'water']
 del restored, peer
+
+# Public lifecycle: claims depend only on author, and last-reference drop on
+# another thread releases the process-wide claim for both creation and import.
+import threading
+import queue
+
+owner = sm.StringOrSetReplica.create_allocated(7010, 7000)
+identity = owner.export_identity()
+for writers in [7010, 7011]:
+    raises(ValueError, lambda: sm.StringOrSetReplica.create_allocated(writers, 7000),
+           'author already has a live allocated writer')
+raises(ValueError, lambda: sm.StringOrSetReplica.import_identity(identity),
+       'author already has a live allocated writer')
+other = sm.StringOrSetReplica.create_allocated(7010, 7001)
+assert other.append_allocated_add('peer')
+
+handoff = queue.Queue()
+handoff.put(owner)
+del owner
+
+def drop_on_worker():
+    last_reference = handoff.get()
+    del last_reference
+
+worker = threading.Thread(target=drop_on_worker)
+worker.start()
+worker.join()
+assert handoff.empty()
+replacement = sm.StringOrSetReplica.create_allocated(7010, 7000)
+raises(ValueError, lambda: sm.StringOrSetReplica.import_identity(identity),
+       'author already has a live allocated writer')
+del replacement
+restored = sm.StringOrSetReplica.import_identity(identity)
+raises(ValueError, lambda: sm.StringOrSetReplica.create_allocated(7010, 7000),
+       'author already has a live allocated writer')
+assert restored.append_allocated_add('restored')
+del restored, other
 
 # REPLICA_DIFFERENTIAL
 # Frozen from untouched product main 6cfcee7; never regenerate from the migration.
@@ -540,4 +664,10 @@ expected = [['g.valid',
    [0, 0, 0, 0, 0, 0]]]]
 assert len(actual) == len(expected)
 for got, want in zip(actual, expected):
+    if got[0] == 's.invalid.record':
+        assert got[1][:2] == want[1][:2]
+        log_cause = next(row[1][2] for row in actual if row[0] == 's.invalid.batch')
+        assert got[1][2] == log_cause[len('failed to decode event log: '):]
+        assert got[2] == want[2]
+        continue
     assert got == want, ('differential mismatch', got[0], got, want)
