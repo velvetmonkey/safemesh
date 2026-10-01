@@ -933,6 +933,8 @@ mod py_enable_wins_flag_replica_python {
             )
         }
 
+        // This class keeps its own admission copy by the 2026-10-01 ruling (P2 step 4 tight, OR-1 = A).
+        // A shared Replica admission fix does not reach this copy; apply it here by hand.
         /// Return one core admission verdict for every decoded input record.
         #[pyo3(signature = (bytes, *, max_records = None))]
         pub fn merge_log_bytes(
@@ -1118,6 +1120,8 @@ mod py_lww_map_replica_python {
             )
         }
 
+        // This class keeps its own admission copy by the 2026-10-01 ruling (P2 step 4 tight, OR-1 = A).
+        // A shared Replica admission fix does not reach this copy; apply it here by hand.
         /// Return one core admission verdict for every decoded input record.
         #[pyo3(signature = (bytes, *, max_records = None))]
         pub fn merge_log_bytes(
@@ -1282,6 +1286,8 @@ mod py_lww_register_replica_python {
             )
         }
 
+        // This class keeps its own admission copy by the 2026-10-01 ruling (P2 step 4 tight, OR-1 = A).
+        // A shared Replica admission fix does not reach this copy; apply it here by hand.
         /// Return one core admission verdict for every decoded input record.
         #[pyo3(signature = (bytes, *, max_records = None))]
         pub fn merge_log_bytes(
