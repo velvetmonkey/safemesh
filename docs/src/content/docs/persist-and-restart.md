@@ -379,7 +379,8 @@ It demonstrates an **ordinary, single-writer restart**, with no crash-safe commi
 or writer fencing. The application owns storage and exclusive author assignment;
 never clone a writer or resume an old backup as a live writer. Missing or invalid
 identity data stops the program; do not fall back to `createAllocated()`.
-Rust's durable adapter is not exported by this binding. The separate file writes
+Rust's durable adapter is not exported by this binding. This low-level Node
+example does not use the binding's managed handles. Its separate file writes
 are not an atomic transaction, and `writeFileSync` is not a crash-safe commit.
 The [full storage and refusal contract](/safemesh/using-safemesh/#wasm--typescript)
 also applies. The legacy caller-token API is an alternative for applications
@@ -389,6 +390,40 @@ The fixture passes an empty `Uint8Array` to `mergeRecordBytes`, catches the real
 `SafeMeshError: failed to decode record: unexpected end of wire input`, and
 asserts no log mutation. Reject the malformed input and check your record
 framing. Every WASM handle is freed in `finally`. Read the [complete TypeScript source and project configuration](/safemesh/using-safemesh/#wasm--typescript).
+
+## Managed handles
+
+The Node binding exports `SafeMeshManagedGCounter` for a G-Counter and
+`SafeMeshManagedStringOrSet` for an allocated UTF-8 OR-Set. Both handles take a
+caller-supplied `SafeMeshStore` when they open. The application supplies the Store.
+See the [binding source](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/src/lib.rs#L4790-L4815)
+and the [generated Node declarations](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/bindings/safemesh_wasm.d.ts#L350-L390).
+The [counter test](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/tests/node-managed-counter.mjs)
+and [set test](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/tests/node-managed-orset.mjs)
+open the two handles with Stores.
+
+An edit becomes visible through a handle only after the Store confirms the commit.
+After a failed or unclear commit, that handle refuses more writes until it is
+closed and restarted from the Store. A restart with a different writer is refused.
+These behaviors are in the [counter publish and open methods](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/src/lib.rs#L4944-L4985)
+and [set publish and open methods](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/src/lib.rs#L5062-L5150).
+The [counter test](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/tests/node-managed-counter.mjs#L65-L112)
+and [set test](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/tests/node-managed-orset.mjs#L40-L75)
+check failed commits and invisible edits. Both tests also check wrong-writer
+restart refusal.
+
+[`examples/node-filesystem-store.mjs`](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/examples/node-filesystem-store.mjs)
+is an example Store. It is not a packaged, supported Store. The
+[package script](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/scripts/package-wasm.sh)
+packs only the generated WASM output. The binding's
+[Store interface](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/bindings/safemesh_wasm.d.ts#L4-L9)
+and the [filesystem test](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/tests/node-managed-counter.mjs#L174-L190)
+show how the example is supplied to a handle. The set test measured recovery
+after `SIGKILL` between edits
+([source](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/tests/node-managed-orset.mjs#L153-L167)).
+Power loss and a crash between rename and directory fsync were not injected.
+The [example Store source](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/examples/node-filesystem-store.mjs#L1-L14)
+names the latter limit. These are test limits, not durability claims.
 
 <a id="wire-compatibility-and-upgrades"></a>
 
@@ -573,8 +608,8 @@ records, outside the supported size
 SafeMesh deletes no record to get under the limit; keep a refused store, and
 restart it without the budget only if you accept costs beyond those measured
 ([`restart_budget_opens_supported_size_and_refuses_one_more`](https://github.com/velvetmonkey/safemesh/blob/0db39d63d076a6e6d85ff2712355ffadac05be20/rust/crates/safemesh-crdt/src/local.rs)).
-Python and WASM expose no durable restart, so this budget has no binding
-surface; their log loaders already take `max_records`
+The Python and WASM bindings do not expose this Rust record budget. Their
+low-level log loaders already take `max_records`
 ([Python binding tests](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-python/src/lib.rs), [WASM binding tests](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-wasm/src/lib.rs)).
 
 ### Not yet promised: compaction, pruning, snapshots
