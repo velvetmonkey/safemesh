@@ -396,6 +396,8 @@ framing. Every WASM handle is freed in `finally`. Read the [complete TypeScript 
 The Node binding exports `SafeMeshManagedGCounter` for a G-Counter and
 `SafeMeshManagedStringOrSet` for an allocated UTF-8 OR-Set. Both handles take a
 caller-supplied `SafeMeshStore` when they open. The application supplies the Store.
+The Rust `DurableReplica` alarm file described below is specific to that Rust
+store. It does not change the Node managed handle envelope or restart path.
 See the [binding source](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/src/lib.rs)
 and the [generated Node declarations](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/bindings/safemesh_wasm.d.ts).
 The [counter test](https://github.com/velvetmonkey/safemesh/blob/444bcce90e1595873ce09daa570d4a9345bdb931/rust/crates/safemesh-wasm/tests/node-managed-counter.mjs)
@@ -561,6 +563,12 @@ store that a restart budget refused still reopens with every record
 A fresh store keeps an append-only `writer-<id>.journal`, and each acknowledged
 edit appends only its own record after the existing bytes and syncs the file
 ([`append_log_writes_one_entry_per_record`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
+When the Rust durable replica raises a collision alarm, it writes the full
+collision report to `writer-<id>.alarms` with file and directory sync before
+returning. Restart loads that report after replay. A store with no alarm has no
+alarm file. A damaged alarm file makes restart fail; the journal torn-tail rule
+does not apply to it. An older program ignores the added file and loses the
+alarm on restart. A plain encoded EventLog still does not store an alarm.
 An append therefore writes the same bytes at any history size: 58 bytes for a
 G-Counter record and 68 for a UTF-8 OR-Set add, from 1,000 to 1,000,000 records
 ([benchmark results](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/evidence/retention/results.md)).

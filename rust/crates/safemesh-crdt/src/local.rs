@@ -376,7 +376,7 @@ where
         record: Record<C::Delta>,
         local: bool,
     ) -> Result<Admission, LocalError> {
-        self.admit_committed(ticket, record, local, |_, _| Ok(()))
+        self.admit_committed(ticket, record, local, |_, _| Ok(()), |_| Ok(()))
     }
     fn admit_committed(
         &mut self,
@@ -384,6 +384,7 @@ where
         record: Record<C::Delta>,
         local: bool,
         commit: impl FnOnce(&EventLog<C::Delta>, u64) -> Result<(), LocalError>,
+        save_alarm: impl FnOnce(&EventLog<C::Delta>) -> Result<(), LocalError>,
     ) -> Result<Admission, LocalError> {
         if local && self.peer_writer_ahead {
             return Err(LocalError::PeerWriterAhead);
@@ -422,7 +423,13 @@ where
         }
         let outcome = self.log.admission(&self.state, &record);
         if outcome != Admission::Accepted {
+            let prior = self.log.collisions.len();
             self.log.raise_on_collision(outcome, record);
+            if self.log.collisions.len() != prior {
+                self.held = false;
+                save_alarm(&self.log)?;
+                self.held = true;
+            }
             return Ok(outcome);
         }
         let candidate = PendingInsertion::new(&mut self.log, record.id);
@@ -742,6 +749,7 @@ pub const SUPPORTED_MAX_RECORDS: usize = 100_000;
 pub struct DurableReplica<C: Crdt> {
     inner: LocalReplica<C>,
     store: Store,
+    root: PathBuf,
     torn_tail: Option<TornTail>,
 }
 
@@ -822,6 +830,7 @@ where
         inner.held = true;
         Ok(Self {
             inner,
+            root,
             store: Store::Journal {
                 file,
                 len: header.len() as u64,
@@ -900,12 +909,24 @@ where
     ) -> Result<Admission, LocalError> {
         let store = &mut self.store;
         let config = self.inner.config;
-        let outcome =
-            self.inner
-                .admit_committed(ticket, record, local, |log, sequence| match store {
-                    Store::Transaction(path) => Self::commit(path, config, log, sequence),
-                    Store::Journal { file, len } => Self::append_entry(file, len, log, sequence),
-                })?;
+        let alarm_path = self.root.join(format!("writer-{}.alarms", config.writer));
+        let outcome = self.inner.admit_committed(
+            ticket,
+            record,
+            local,
+            |log, sequence| match store {
+                Store::Transaction(path) => Self::commit(path, config, log, sequence),
+                Store::Journal { file, len } => Self::append_entry(file, len, log, sequence),
+            },
+            |log| {
+                let bytes = log
+                    .collision_report_bytes()
+                    .map_err(encode_error)?
+                    .ok_or(LocalError::InvalidHistory)?;
+                persistence::replace(&alarm_path, &bytes)?;
+                Ok(())
+            },
+        )?;
         #[cfg(test)]
         persistence::checkpoint(7)?;
         Ok(outcome)
@@ -1121,6 +1142,24 @@ where
                 return Err(LocalError::InvalidHistory);
             }
         }
+        // The alarm file is a complete collision-report frame. A damaged
+        // frame is refused; it is never treated as a journal torn tail.
+        let alarm_path = root.join(format!("writer-{}.alarms", config.writer));
+        match fs::read(alarm_path) {
+            Ok(bytes) => {
+                let report =
+                    crate::CollisionReport::<C::Delta>::from_wire_bytes_with_limits(&bytes, limits)
+                        .map_err(decode_error)?;
+                for (id, verdict) in inner.log.merge_collision_report(report) {
+                    if verdict != crate::CollisionVerdict::Recorded {
+                        let _ = id;
+                        return Err(LocalError::InvalidHistory);
+                    }
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
         // Only a restart that validated every complete record drops the torn
         // tail, so the next entry is written where the last complete one ends.
         if let (Some(tail), Store::Journal { file, .. }) = (torn_tail, &store) {
@@ -1131,6 +1170,7 @@ where
         inner.renew(inner.ticket())?;
         Ok(Self {
             inner,
+            root: root.to_path_buf(),
             store,
             torn_tail,
         })
