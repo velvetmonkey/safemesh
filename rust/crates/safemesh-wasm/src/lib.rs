@@ -288,7 +288,9 @@ fn admission_name(admission: safemesh_crdt::Admission) -> String {
 fn record_verdict(admission: safemesh_crdt::Admission) -> Result<String, BindingError> {
     match admission {
         safemesh_crdt::Admission::Invalid(
-            error @ (WireError::ZeroSequenceAdd { .. } | WireError::ZeroSequenceRemove { .. }),
+            error @ (WireError::ZeroSequenceAdd { .. }
+            | WireError::ZeroSequenceRemove { .. }
+            | WireError::ZeroSequenceRecord { .. }),
         ) => Err(binding_error(1, error.to_string())),
         safemesh_crdt::Admission::Invalid(WireError::OwnershipViolation) => Err(binding_error(
             1,
@@ -418,8 +420,9 @@ macro_rules! record_exchange_methods {
 
             /// The records a peer at `peerVersion` is missing, as one log batch
             /// for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
-            /// as `versionVector` returns it; sequence-zero records are always
-            /// included. The budgets are `mergeLogBytes`'s, in the same places,
+            /// as `versionVector` returns it; checked loaders refuse sequence-zero
+            /// records. The wire format still carries their acknowledgement list.
+            /// The budgets are `mergeLogBytes`'s, in the same places,
             /// and a batch over them throws the error that merge would throw.
             #[wasm_bindgen(js_name = sinceLogBytes)]
             #[allow(non_snake_case)]
@@ -1649,7 +1652,8 @@ fn event_log_decode_error(error: safemesh_crdt::WireError) -> BindingError {
             safemesh_crdt::WireError::MissingShape => "event log missing shape".to_string(),
             // Same text as the single-record path: it names the record and a recovery step.
             error @ (safemesh_crdt::WireError::ZeroSequenceAdd { .. }
-            | safemesh_crdt::WireError::ZeroSequenceRemove { .. }) => error.to_string(),
+            | safemesh_crdt::WireError::ZeroSequenceRemove { .. }
+            | safemesh_crdt::WireError::ZeroSequenceRecord { .. }) => error.to_string(),
             other => format!("failed to decode event log: {other}"),
         },
     )

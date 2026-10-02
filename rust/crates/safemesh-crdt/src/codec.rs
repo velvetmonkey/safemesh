@@ -40,6 +40,11 @@ pub(super) const TAG_LWW_MAP_U64: u8 = 0x72;
 #[non_exhaustive]
 pub enum WireError {
     OwnershipViolation,
+    /// A sequence-0 record for a carrier without a more specific zero error.
+    ZeroSequenceRecord {
+        replica: u64,
+        kind: &'static str,
+    },
     /// An OR-Set add record at sequence 0. An add mints a token at its record
     /// ID, and the Lean ownership rule allocates tokens only at positive
     /// sequences (`RecordKernel.allocateToken`, `RecordKernel.permitted`).
@@ -97,6 +102,12 @@ impl core::fmt::Display for WireError {
             Self::OwnershipViolation => {
                 f.write_str("record violates replica ownership or coordinate bounds")
             }
+            Self::ZeroSequenceRecord { replica, kind } => write!(
+                f,
+                "{kind} record (replica {replica}, sequence 0) refused: record sequences start at 1. \
+                 Recovery: remove this record from any stored log, issue the edit again from replica {replica} \
+                 at a positive sequence, and write the log again"
+            ),
             Self::ZeroSequenceAdd { replica } => write!(
                 f,
                 "OR-Set add record (replica {replica}, sequence 0) refused: add sequences start at 1. \
