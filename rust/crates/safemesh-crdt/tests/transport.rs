@@ -232,7 +232,14 @@ fn version_exchange_public_api_round_trip() {
             };
             assert_eq!(
                 source.insert_record(&safemesh_crdt::GSet::new(), record.clone()),
-                Admission::Accepted
+                if sequence == 0 {
+                    Admission::Invalid(safemesh_crdt::WireError::ZeroSequenceRecord {
+                        replica,
+                        kind: "G-Set",
+                    })
+                } else {
+                    Admission::Accepted
+                }
             );
             if sequence <= 2 && (replica != 7 || sequence != 0) {
                 held.observe(record.id);
@@ -242,7 +249,7 @@ fn version_exchange_public_api_round_trip() {
     let received = rebuild(held.entries(), held.zero_replicas());
     // First assertion makes a missing reconstruction fail on returned records.
     assert_eq!(source.since(&received), source.since(&held));
-    assert_eq!(source.since(&received).len(), 7);
+    assert_eq!(source.since(&received).len(), 6);
     assert_eq!(received, held);
     for replica in [0, 7, 8, u64::MAX] {
         assert_eq!(received.get(replica), held.get(replica));
