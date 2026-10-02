@@ -149,6 +149,7 @@ A version vector tracks a contiguous prefix for each writer: if one sequence
 number never arrives, `since()` keeps offering every later record from that writer
 on every exchange. This is the designed behaviour; deliver the missing record
 to advance the prefix.
+See [the resend cost and batch limit](/safemesh/limits/#a-missing-record-increases-resend-cost).
 
 For an in-process transport loop, `anti_entropy(transport, from, to,
 local_log, &mut remote_replica)` queues repair, admits available deliveries,
