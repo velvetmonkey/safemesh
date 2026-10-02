@@ -444,6 +444,27 @@ fn existing_counter_loader_refuses_foreign_coordinate_history() {
 }
 
 #[test]
+fn pn_counter_checked_loaders_refuse_sequence_zero() {
+    let state = PnCounter::new(2);
+    let bad = Record {
+        id: RecordId {
+            replica: 0,
+            sequence: 0,
+        },
+        delta: PnCounterDelta::Inc {
+            replica: 0,
+            tally: 7,
+        },
+    };
+    let mut bytes = Vec::new();
+    EventLog::encode_records(Some(2), &[bad], &mut bytes).unwrap();
+    let loaded = EventLog::<PnCounterDelta>::from_wire_bytes_for(&bytes, &state);
+    let records = EventLog::<PnCounterDelta>::records_from_wire_bytes_for(&bytes, &state);
+    assert_eq!(loaded, Err(safemesh_crdt::WireError::OwnershipViolation));
+    assert_eq!(records, Err(safemesh_crdt::WireError::OwnershipViolation));
+}
+
+#[test]
 fn pn_counter_loader_refuses_out_of_range_coordinate() {
     let state = PnCounter::new(2);
     let mut log = EventLog::for_crdt(&state);
