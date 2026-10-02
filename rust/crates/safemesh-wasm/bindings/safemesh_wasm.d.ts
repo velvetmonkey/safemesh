@@ -85,8 +85,9 @@ export class SafeMeshEnableWinsFlagReplica {
     /**
      * The records a peer at `peerVersion` is missing, as one log batch
      * for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
-     * as `versionVector` returns it; sequence-zero records are always
-     * included. The budgets are `mergeLogBytes`'s, in the same places,
+     * as `versionVector` returns it; checked loaders refuse sequence-zero
+     * records. The wire format still carries their acknowledgement list.
+     * The budgets are `mergeLogBytes`'s, in the same places,
      * and a batch over them throws the error that merge would throw.
      */
     sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;
@@ -164,8 +165,9 @@ export class SafeMeshGCounterReplica {
     /**
      * The records a peer at `peerVersion` is missing, as one log batch
      * for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
-     * as `versionVector` returns it; sequence-zero records are always
-     * included. The budgets are `mergeLogBytes`'s, in the same places,
+     * as `versionVector` returns it; checked loaders refuse sequence-zero
+     * records. The wire format still carries their acknowledgement list.
+     * The budgets are `mergeLogBytes`'s, in the same places,
      * and a batch over them throws the error that merge would throw.
      */
     sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;
@@ -256,8 +258,9 @@ export class SafeMeshLwwMapReplica {
     /**
      * The records a peer at `peerVersion` is missing, as one log batch
      * for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
-     * as `versionVector` returns it; sequence-zero records are always
-     * included. The budgets are `mergeLogBytes`'s, in the same places,
+     * as `versionVector` returns it; checked loaders refuse sequence-zero
+     * records. The wire format still carries their acknowledgement list.
+     * The budgets are `mergeLogBytes`'s, in the same places,
      * and a batch over them throws the error that merge would throw.
      */
     sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;
@@ -331,8 +334,9 @@ export class SafeMeshLwwRegisterReplica {
     /**
      * The records a peer at `peerVersion` is missing, as one log batch
      * for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
-     * as `versionVector` returns it; sequence-zero records are always
-     * included. The budgets are `mergeLogBytes`'s, in the same places,
+     * as `versionVector` returns it; checked loaders refuse sequence-zero
+     * records. The wire format still carries their acknowledgement list.
+     * The budgets are `mergeLogBytes`'s, in the same places,
      * and a batch over them throws the error that merge would throw.
      */
     sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;
@@ -462,8 +466,9 @@ export class SafeMeshPnCounterReplica {
     /**
      * The records a peer at `peerVersion` is missing, as one log batch
      * for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
-     * as `versionVector` returns it; sequence-zero records are always
-     * included. The budgets are `mergeLogBytes`'s, in the same places,
+     * as `versionVector` returns it; checked loaders refuse sequence-zero
+     * records. The wire format still carries their acknowledgement list.
+     * The budgets are `mergeLogBytes`'s, in the same places,
      * and a batch over them throws the error that merge would throw.
      */
     sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;
@@ -649,8 +654,9 @@ export class SafeMeshStringOrSetReplica {
     /**
      * The records a peer at `peerVersion` is missing, as one log batch
      * for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
-     * as `versionVector` returns it; sequence-zero records are always
-     * included. The budgets are `mergeLogBytes`'s, in the same places,
+     * as `versionVector` returns it; checked loaders refuse sequence-zero
+     * records. The wire format still carries their acknowledgement list.
+     * The budgets are `mergeLogBytes`'s, in the same places,
      * and a batch over them throws the error that merge would throw.
      */
     sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;

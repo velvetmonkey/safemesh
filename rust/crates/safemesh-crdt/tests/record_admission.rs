@@ -534,26 +534,48 @@ fn seqzero_admission_since_population() {
                 }
                 let r = make(sequence, 5);
                 let first = log.insert_record(&safemesh_crdt::GSet::new(), r.clone());
-                if first == Admission::Accepted {
-                    accepted.push(r.clone());
+                if sequence == 0 {
+                    let invalid =
+                        Admission::Invalid(safemesh_crdt::WireError::ZeroSequenceRecord {
+                            replica: author,
+                            kind: "G-Set",
+                        });
+                    assert_eq!(first, invalid);
+                    assert_eq!(
+                        log.admit_with(&mut safemesh_crdt::GSet::new(), r.clone(), |_, _| panic!(
+                            "zero applied"
+                        )),
+                        invalid
+                    );
+                    assert_eq!(
+                        log.admit_with(
+                            &mut safemesh_crdt::GSet::new(),
+                            make(sequence, 99),
+                            |_, _| panic!("zero applied")
+                        ),
+                        invalid
+                    );
                 } else {
-                    assert_eq!(first, Admission::Duplicate);
+                    if first == Admission::Accepted {
+                        accepted.push(r.clone());
+                    } else {
+                        assert_eq!(first, Admission::Duplicate);
+                    }
+                    assert_eq!(
+                        log.admit_with(&mut safemesh_crdt::GSet::new(), r.clone(), |_, _| panic!(
+                            "duplicate applied"
+                        )),
+                        Admission::Duplicate
+                    );
+                    assert_eq!(
+                        log.admit_with(
+                            &mut safemesh_crdt::GSet::new(),
+                            make(sequence, 99),
+                            |_, _| panic!("collision applied")
+                        ),
+                        Admission::Collision
+                    );
                 }
-                assert_eq!(
-                    log.admit_with(&mut safemesh_crdt::GSet::new(), r.clone(), |_, _| panic!(
-                        "duplicate applied"
-                    )),
-                    Admission::Duplicate
-                );
-                let refused = make(sequence, 99);
-                assert_eq!(
-                    log.admit_with(
-                        &mut safemesh_crdt::GSet::new(),
-                        refused.clone(),
-                        |_, _| panic!("collision applied")
-                    ),
-                    Admission::Collision
-                );
                 let all = log.since(&VersionVector::new());
                 missing += accepted.iter().filter(|r| !all.contains(r)).count();
                 refused_returned += all.iter().filter(|r| !accepted.contains(r)).count();
@@ -598,108 +620,200 @@ fn seqzero_admission_since_population() {
 }
 
 #[test]
-fn seqzero_two_replica_exchange_and_persisted_replay() {
-    use safemesh_crdt::{queue_anti_entropy, InMemoryTransport, TransportAdapter, VersionVector};
-    use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
-    // Sequence zero remains legal for a carrier whose Lean model has no sequence
-    // rule (here an LWW register). A counter record or an OR-Set add at zero is refused.
-    fn zero_record(sequence: u64, tally: u64) -> Record<safemesh_crdt::LwwRegisterDelta<u64>> {
-        Record {
+fn seqzero_lww_register_refuses_admission() {
+    use safemesh_crdt::{LwwRegister, LwwRegisterDelta, WireError};
+    let record = Record {
+        id: RecordId {
+            replica: 1,
+            sequence: 0,
+        },
+        delta: LwwRegisterDelta {
+            timestamp: 7,
+            replica: 1,
+            value: 7u64,
+        },
+    };
+    let error = WireError::ZeroSequenceRecord {
+        replica: 1,
+        kind: "LWW register",
+    };
+    let mut state = LwwRegister::new();
+    let mut log = EventLog::new();
+    assert_eq!(
+        log.admit_with(&mut state, record.clone(), |_, _| panic!("zero applied")),
+        Admission::Invalid(error)
+    );
+    assert_eq!(
+        log.insert_record(&state, record.clone()),
+        Admission::Invalid(error)
+    );
+    assert!(log.records().is_empty());
+}
+
+#[test]
+fn seqzero_lww_register_refuses_checked_load() {
+    use safemesh_crdt::{LwwRegister, LwwRegisterDelta, WireError};
+    let record = Record {
+        id: RecordId {
+            replica: 1,
+            sequence: 0,
+        },
+        delta: LwwRegisterDelta {
+            timestamp: 7,
+            replica: 1,
+            value: 7u64,
+        },
+    };
+    let error = WireError::ZeroSequenceRecord {
+        replica: 1,
+        kind: "LWW register",
+    };
+    let state = LwwRegister::new();
+    let mut bytes = Vec::new();
+    EventLog::<LwwRegisterDelta<u64>>::encode_records(None, &[record], &mut bytes).unwrap();
+    assert_eq!(
+        EventLog::<LwwRegisterDelta<u64>>::from_wire_bytes_for(&bytes, &state),
+        Err(error)
+    );
+    let bytes = include_bytes!("fixtures/old-zero.bin");
+    assert_eq!(
+        EventLog::<GCounterDelta>::from_wire_bytes_for(bytes, &GCounter::new(2)),
+        Err(WireError::OwnershipViolation)
+    );
+}
+
+#[test]
+fn seqzero_gset_refuses_admission_and_checked_load() {
+    use safemesh_crdt::{GSet, WireCursor, WireError, WireSchema};
+    use std::borrow::Cow;
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct Element(u64);
+    impl WireSchema for Element {
+        fn wire_schema() -> Cow<'static, [u8]> {
+            Cow::Borrowed(b"test/smq4seq0-gset-element/v1")
+        }
+    }
+    impl WireEncode for Element {
+        fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+            out.extend_from_slice(&self.0.to_le_bytes());
+            Ok(())
+        }
+    }
+    impl WireDecode for Element {
+        fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+            Ok(Self(cursor.read_u64()?))
+        }
+    }
+    let state = GSet::<Element>::new();
+    let record = Record {
+        id: RecordId {
+            replica: 1,
+            sequence: 0,
+        },
+        delta: Element(7),
+    };
+    let error = WireError::ZeroSequenceRecord {
+        replica: 1,
+        kind: "G-Set",
+    };
+    let mut log = EventLog::new();
+    assert_eq!(
+        log.insert_record(&state, record.clone()),
+        Admission::Invalid(error)
+    );
+    let mut live = state.clone();
+    assert_eq!(
+        log.admit_with(&mut live, record.clone(), |_, _| panic!("zero applied")),
+        Admission::Invalid(error)
+    );
+    let mut bytes = Vec::new();
+    EventLog::<Element>::encode_records(None, &[record], &mut bytes).unwrap();
+    assert_eq!(
+        EventLog::<Element>::from_wire_bytes_for(&bytes, &state),
+        Err(error)
+    );
+    assert_eq!(
+        EventLog::<Element>::records_from_wire_bytes_for(&bytes, &state),
+        Err(error)
+    );
+}
+
+#[test]
+fn seqzero_other_carriers_refuse_admission_and_checked_load() {
+    use safemesh_crdt::{
+        EnableWinsFlag, EnableWinsFlagDelta, LwwMap, LwwMapDelta, Rga, RgaDelta, WireError,
+        WireSchema,
+    };
+    use std::fmt::Debug;
+    fn check<C, D>(state: C, delta: D, kind: &'static str)
+    where
+        C: Crdt<Delta = D> + Clone,
+        D: WireEncode + WireDecode + WireSchema + Clone + PartialEq + Debug,
+    {
+        let record = Record {
             id: RecordId {
                 replica: 1,
-                sequence,
+                sequence: 0,
             },
-            delta: safemesh_crdt::LwwRegisterDelta {
-                timestamp: tally,
-                replica: 1,
-                value: tally,
-            },
-        }
-    }
-    let mut source = EventLog::new();
-    let mut source_state = safemesh_crdt::LwwRegister::new();
-    // A zero record has an effect that later positive records do not subsume.
-    for r in [zero_record(0, 7), zero_record(2, 5), zero_record(1, 3)] {
+            delta,
+        };
+        let error = WireError::ZeroSequenceRecord { replica: 1, kind };
+        let mut log = EventLog::new();
+        let mut live = state.clone();
         assert_eq!(
-            source.admit_with(&mut source_state, r, |state, d| state
-                .apply_delta(d.clone())),
-            Admission::Accepted
+            log.admit_with(&mut live, record.clone(), |_, _| panic!("zero applied")),
+            Admission::Invalid(error),
+            "{kind} admission"
+        );
+        assert_eq!(
+            log.insert_record(&state, record.clone()),
+            Admission::Invalid(error),
+            "{kind} insertion"
+        );
+        assert!(log.records().is_empty());
+        let mut bytes = Vec::new();
+        EventLog::<D>::encode_records(None, &[record], &mut bytes).unwrap();
+        assert_eq!(
+            EventLog::<D>::from_wire_bytes_for(&bytes, &state).unwrap_err(),
+            error,
+            "{kind} checked load"
+        );
+        assert_eq!(
+            EventLog::<D>::records_from_wire_bytes_for(&bytes, &state).unwrap_err(),
+            error,
+            "{kind} checked records load"
         );
     }
-    let bytes = source.to_wire_bytes().unwrap();
-    let restored = EventLog::<safemesh_crdt::LwwRegisterDelta<u64>>::from_wire_bytes_for(
-        &bytes,
-        &source_state,
-    )
-    .unwrap();
-    assert_eq!(restored, source);
-    assert_eq!(restored.since(&VersionVector::new()), source.records());
-    {
-        let bytes = include_bytes!("fixtures/old-zero.bin");
-        assert_eq!(
-            EventLog::<GCounterDelta>::from_wire_bytes_for(bytes, &GCounter::new(2)),
-            Err(safemesh_crdt::WireError::OwnershipViolation)
-        );
-        let old = EventLog::<GCounterDelta>::from_wire_bytes(bytes).unwrap();
-        let mut replay = GCounter::new(2);
-        for r in old.records() {
-            replay.apply_delta(r.delta.clone());
-        }
-        assert_eq!(replay.value(), 7);
-        assert_eq!(old.since(&VersionVector::new()), vec![record(0, 7)]);
-        println!("OLDER BUILD persisted zero: read=7 returned=1");
-    }
-    let mut peer = EventLog::new();
-    let mut peer_state = safemesh_crdt::LwwRegister::new();
-    let mut transport = InMemoryTransport::new();
-    transport.subscribe(0);
-    transport.subscribe(1);
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let mut sender = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    let (mut receiver, _) = listener.accept().unwrap();
-    for round in 0..2 {
-        queue_anti_entropy(&mut transport, 0, 1, &restored, peer.version()).unwrap();
-        let envelopes = transport.drain(1);
-        assert_eq!(envelopes.len(), if round == 0 { 1 } else { 0 });
-        assert_eq!(
-            envelopes.iter().map(|e| e.records.len()).sum::<usize>(),
-            if round == 0 { 3 } else { 0 }
-        );
-        for envelope in envelopes {
-            for r in envelope.records {
-                let bytes = r.to_wire_bytes().unwrap();
-                sender.write_all(&bytes).unwrap();
-                let mut received = vec![0; bytes.len()];
-                receiver.read_exact(&mut received).unwrap();
-                let r = Record::<safemesh_crdt::LwwRegisterDelta<u64>>::from_wire_bytes(&received)
-                    .unwrap();
-                assert_eq!(
-                    peer.admit_with(&mut peer_state, r, |state, d| state.apply_delta(d.clone())),
-                    if round == 0 {
-                        Admission::Accepted
-                    } else {
-                        Admission::Duplicate
-                    }
-                );
-            }
-        }
-        assert_eq!(peer_state, source_state);
-        assert_eq!(peer.records(), source.records());
-        assert_eq!(peer.version(), source.version());
-    }
-    println!(
-        "TWO REPLICA EXCHANGE CONVERGES true tcp_rounds=2 value={:?}",
-        peer_state.value()
+    check(
+        Rga::<u64, u64>::new(),
+        RgaDelta::Insert {
+            position: 1,
+            value: 7,
+        },
+        "RGA",
+    );
+    check(
+        EnableWinsFlag::<u64>::new(),
+        EnableWinsFlagDelta::Enable { token: 1 },
+        "Enable-wins flag",
+    );
+    check(
+        LwwMap::<u64, u64>::new(),
+        LwwMapDelta::Set {
+            key: 1,
+            timestamp: 1,
+            replica: 1,
+            value: 7,
+        },
+        "LWW map",
     );
 }
 
 #[test]
 fn seqzero_converged_replicas_quiesce_at_scale() {
     use safemesh_crdt::{queue_anti_entropy, InMemoryTransport, TransportAdapter, VersionVector};
-    // Sequence-zero acknowledgement is a version-vector property, so this uses
-    // an LWW register payload, whose carrier has no sequence rule. OR-Set adds
-    // at sequence 0 are refused (`raw_orset_refuses_sequence_zero_add_on_every_path`).
+    // Positive records still converge while the version-vector wire format
+    // retains its independent sequence-zero acknowledgement list.
     let payload = |replica, sequence| safemesh_crdt::LwwRegisterDelta {
         timestamp: sequence,
         replica,
@@ -709,8 +823,21 @@ fn seqzero_converged_replicas_quiesce_at_scale() {
         let mut left = EventLog::new();
         let mut right = EventLog::new();
         for replica in 0..authors {
-            // Admit zero AFTER positives: a positive prefix must not imply zero.
-            let sequences = if positives { vec![1, 2, 0] } else { vec![0] };
+            let zero = Record {
+                id: RecordId {
+                    replica,
+                    sequence: 0,
+                },
+                delta: payload(replica, 0),
+            };
+            assert_eq!(
+                left.insert_record(&safemesh_crdt::LwwRegister::new(), zero),
+                Admission::Invalid(safemesh_crdt::WireError::ZeroSequenceRecord {
+                    replica,
+                    kind: "LWW register"
+                })
+            );
+            let sequences = if positives { vec![1, 2] } else { vec![1] };
             for sequence in sequences {
                 let r = Record {
                     id: RecordId { replica, sequence },
@@ -814,7 +941,7 @@ fn seqzero_acknowledgment_is_independent_of_positive_prefix() {
     assert_eq!(version, snapshot);
     let mut log = EventLog::new();
     for replica in [42, 43] {
-        for sequence in 0..=4 {
+        for sequence in 1..=4 {
             assert_eq!(
                 log.insert_record(
                     &safemesh_crdt::GSet::new(),
@@ -826,6 +953,22 @@ fn seqzero_acknowledgment_is_independent_of_positive_prefix() {
                 Admission::Accepted
             );
         }
+        assert_eq!(
+            log.insert_record(
+                &safemesh_crdt::GSet::new(),
+                Record {
+                    id: RecordId {
+                        replica,
+                        sequence: 0
+                    },
+                    delta: 7u64
+                }
+            ),
+            Admission::Invalid(safemesh_crdt::WireError::ZeroSequenceRecord {
+                replica,
+                kind: "G-Set"
+            })
+        );
     }
     let ids: Vec<_> = log.since(&version).iter().map(|r| r.id).collect();
     let expected: Vec<_> = log
@@ -837,7 +980,7 @@ fn seqzero_acknowledgment_is_independent_of_positive_prefix() {
     assert_eq!(ids, expected);
 }
 
-/// The six non-counter types accept every decodable record. A record that
+/// The six non-counter types accept every positive-sequence decodable record. A record that
 /// replay leaves the current carrier unchanged is one the CRDT subsumes (a
 /// losing LWW write, a duplicate add, a tombstone already held) or the lattice
 /// bottom (a remove naming no tokens); the same record applied to a FRESH
@@ -1212,7 +1355,7 @@ fn gset_accepts_absorbed_record() {
         safemesh_crdt::GSet::new(),
         safemesh_crdt::GSet::new(),
         7u64,
-        true,
+        false,
     );
 }
 
@@ -1238,7 +1381,7 @@ fn rga_accepts_absorbed_record() {
             position: 1u64,
             value: 7u64,
         },
-        true,
+        false,
     );
 }
 
@@ -1248,7 +1391,7 @@ fn flag_accepts_absorbed_record() {
         safemesh_crdt::EnableWinsFlag::new(),
         safemesh_crdt::EnableWinsFlag::new(),
         safemesh_crdt::EnableWinsFlagDelta::Enable { token: 1u64 },
-        true,
+        false,
     );
 }
 
@@ -1262,7 +1405,7 @@ fn register_accepts_absorbed_record() {
             replica: 0,
             value: 7u64,
         },
-        true,
+        false,
     );
 }
 
@@ -1277,7 +1420,7 @@ fn map_accepts_absorbed_record() {
             replica: 0,
             value: 7u64,
         },
-        true,
+        false,
     );
 }
 

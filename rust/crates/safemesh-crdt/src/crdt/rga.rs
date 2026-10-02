@@ -102,12 +102,12 @@ impl<P: Ord + Clone, V: Ord + Clone> Mergeable for Rga<P, V> {
 impl<P: Ord + Clone, V: Ord + Clone> Crdt for Rga<P, V> {
     type Delta = RgaDelta<P, V>;
 
-    /// Accepts every record: an insert joins the placed set even at a
+    /// Accepts every positive-sequence record: an insert joins the placed set even at a
     /// tombstoned position, and a delete tombstones its position whether or not
     /// it was observed; a fresh sequence applies either. The records replay
     /// ignores (a duplicate insert, a repeated delete) are join idempotence.
-    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
-        Ok(())
+    fn validate_record(&self, id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
+        id.require_positive_sequence("RGA")
     }
 
     fn apply_delta(&mut self, delta: Self::Delta) {

@@ -136,6 +136,7 @@ impl<K: Ord + Clone, V: Ord + Clone> Crdt for LwwMap<K, V> {
     /// Sets and removes may only assign their author's dot. Losing operations
     /// with a matching author remain valid and are subsumed by the max-dot rule.
     fn validate_record(&self, id: RecordId, delta: &Self::Delta) -> Result<(), WireError> {
+        id.require_positive_sequence("LWW map")?;
         let replica = match delta {
             LwwMapDelta::Set { replica, .. } | LwwMapDelta::Remove { replica, .. } => *replica,
         };

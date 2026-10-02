@@ -35,8 +35,9 @@ Inside the SafeMesh checkout, you can instead run the checkout command below;
 check its byte length, decode it, then use `admit_with` to apply only an accepted
 record. A duplicate must not apply the edit again.
 
-The peer reports both its positive contiguous prefixes and its independent
-sequence-zero acknowledgements. Reconstruct its claim with
+The peer reports positive contiguous prefixes. The exchange format also retains
+its independent sequence-zero acknowledgement list, although all current writers
+start at sequence 1 and checked loaders refuse sequence-zero records. Reconstruct its claim with
 [`VersionVector::from_peer_prefixes_with_limits`](/safemesh/reference/rust/safemesh_crdt/struct.VersionVector.html#method.from_peer_prefixes_with_limits)
 and `VersionVectorLimits`: the opt-in author and zero-replica budgets are checked
 **before prefix validation and before either collection is cloned**. `None` is
@@ -170,7 +171,9 @@ Every WASM replica class with `logBytes` exposes the same selection:
 decoding payloads, `versionVector()` returns `[author, versionFor(author), ...]`,
 and `sinceLogBytes(peerVersion)` returns the core's `since` selection as one batch
 for the peer's `mergeLogBytes`, under the same optional budgets. The pair shape
-carries no sequence-zero acknowledgement, so such records are always resent.
+carries no sequence-zero acknowledgement. Current writers cannot create such
+records, and checked loaders refuse them. The separate acknowledgement list
+remains in the full exchange format for compatibility.
 The short example is `rust/crates/safemesh-wasm/examples/node-since-sync.mjs`.
 
 ## What the application owns
