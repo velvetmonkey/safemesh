@@ -3254,9 +3254,13 @@ mod durable_tests {
         clones.set(0);
         for (value, expected) in [(128, Admission::Duplicate), (999, Admission::Collision)] {
             assert_eq!(
-                r.admit_committed(r.ticket(), record(128, value), false, |_, _| {
-                    panic!("non-admission must not commit")
-                })
+                r.admit_committed(
+                    r.ticket(),
+                    record(128, value),
+                    false,
+                    |_, _| { panic!("non-admission must not commit") },
+                    |_| Ok(())
+                )
                 .unwrap(),
                 expected
             );
@@ -3270,20 +3274,30 @@ mod durable_tests {
         assert_eq!(r.last_sequence, 128);
         assert_eq!(r.state().0, 128);
         assert_eq!(
-            r.admit_committed(r.ticket(), record(129, 129), true, |log, sequence| {
-                assert_eq!(log.records().len(), 129);
-                assert_eq!(sequence, 129);
-                Ok(())
-            })
+            r.admit_committed(
+                r.ticket(),
+                record(129, 129),
+                true,
+                |log, sequence| {
+                    assert_eq!(log.records().len(), 129);
+                    assert_eq!(sequence, 129);
+                    Ok(())
+                },
+                |_| Ok(())
+            )
             .unwrap(),
             Admission::Accepted
         );
         assert_eq!(clones.get(), 1, "accepted writes must not clone history");
         let before = r.log.version().clone();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = r.admit_committed(r.ticket(), record(130, 130), true, |_, _| {
-                panic!("commit unwind")
-            });
+            let _ = r.admit_committed(
+                r.ticket(),
+                record(130, 130),
+                true,
+                |_, _| panic!("commit unwind"),
+                |_| Ok(()),
+            );
         }));
         assert!(result.is_err());
         assert_eq!(r.log.records().len(), 129);
@@ -4034,11 +4048,17 @@ mod durable_tests {
             let before = r.log().clone();
             let state = r.state().clone();
             assert!(matches!(
-                r.admit_committed(r.ticket(), remote(1), false, |log, sequence| {
-                    assert_eq!(log.version().get(1), prior.last().copied().unwrap_or(1));
-                    assert_eq!(sequence, 0);
-                    Err(LocalError::Io(io::Error::other("commit failed")))
-                }),
+                r.admit_committed(
+                    r.ticket(),
+                    remote(1),
+                    false,
+                    |log, sequence| {
+                        assert_eq!(log.version().get(1), prior.last().copied().unwrap_or(1));
+                        assert_eq!(sequence, 0);
+                        Err(LocalError::Io(io::Error::other("commit failed")))
+                    },
+                    |_| Ok(())
+                ),
                 Err(LocalError::Io(_))
             ));
             assert_eq!(r.log(), &before);
