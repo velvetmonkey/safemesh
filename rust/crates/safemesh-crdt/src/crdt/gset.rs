@@ -56,11 +56,11 @@ impl<T: Ord + Clone> Mergeable for GSet<T> {
 impl<T: Ord + Clone> Crdt for GSet<T> {
     type Delta = T;
 
-    /// Accepts every record: every `T` is in a G-Set's domain, and a fresh set
+    /// Accepts every positive-sequence record: every `T` is in a G-Set's domain, and a fresh set
     /// inserts it. The only record replay ignores is an element already present,
     /// and ignoring it is set idempotence (join with a member), not loss.
-    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
-        Ok(())
+    fn validate_record(&self, id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
+        id.require_positive_sequence("G-Set")
     }
 
     fn apply_delta(&mut self, delta: Self::Delta) {
