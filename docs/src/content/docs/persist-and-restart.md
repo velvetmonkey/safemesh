@@ -3,7 +3,7 @@ title: Persist and restart — main (unreleased)
 description: Add SafeMesh to a Rust or TypeScript program, save an edit, restart and sync a second replica.
 ---
 
-Restoring a store file from a backup requires opening it with a new writer identity before it writes, because reopening under the old identity clears the in-memory write stop and the restore is not detected until a peer returns an own-ID record above the durable high-water.
+Restoring a store directory from a backup requires opening it with a new writer identity before it writes. A new Rust durable store has an independent own-writer counter that refuses an older store at restart. A store made before this check may open under the old identity and detect the restore only when a peer returns an own-ID record above the durable high-water.
 
 **v0 scope:** G-Counter and OR-Set are the **v0 focus** types, within the [language-path limits](/safemesh/#v0-support). G-Set, PN-Counter, RGA/Text, LWW Register (`LwwRegister`), Enable-wins Flag (`EnableWinsFlag`) and LWW Map (`LwwMap`) are **experimental**, including their deltas and wrappers. Existing proof/test evidence is unchanged by release status.
 
@@ -580,8 +580,8 @@ The journal takes 58 bytes per G-Counter record and 68 per UTF-8 OR-Set add;
 the whole-history format takes about 42 and 52, the 42.0 MB and 52.0 MB it
 rewrote per append at 1,000,000 records
 ([benchmark results](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/evidence/retention/results.md)).
-A crash at any step of an append restarts to the history before or after that
-append, never a mix ([`durable_crash_boundaries`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
+A pre-protection store restarts to the history before or after an append crash,
+never a mix ([`durable_crash_boundaries`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
 An append cut short by a crash never reached its sync, so it was never
 acknowledged; restart truncates it and reports its offset and size through
 [`torn_tail`](/safemesh/reference/rust/safemesh_crdt/local/struct.DurableReplica.html#method.torn_tail)
@@ -589,10 +589,21 @@ acknowledged; restart truncates it and reports its offset and size through
 Restart also truncates a final journal entry that fails its length or checksum
 test and reports the discarded bytes through `torn_tail()`. SafeMesh does not
 claim that an acknowledged final record survives later damage to its bytes.
-Such damage is discarded as a torn tail and is not refused.
+Such damage is discarded as a torn tail in a pre-protection store. A protected
+store refuses if its own-writer sequence falls below the counter.
 A damaged record followed by other records is not a torn tail: restart refuses
 it as `History(IntegrityMismatch)` and leaves the journal unchanged
 ([`append_log_damage_before_the_tail_is_refused`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
+
+New Rust durable stores keep `writer-<id>.rollback` in the store directory and
+a small counter beside that directory. A restart with a store older than its
+own-writer counter refuses as `RecoveryRequired`; open the restored store with
+an unused writer ID. The counter is written and synced before each own-writer
+journal record. A crash between those writes makes an honest restart refuse.
+A missing counter with a marker also refuses. A store with neither file keeps
+its earlier restart behavior. A copy that also copies the counter still passes.
+A restore that loses only other writers' records can also pass because this
+counter measures only this writer's sequence. The check covers one machine.
 
 A store written before the append log keeps its whole-history
 `writer-<id>.transaction`: restart still opens it, each append still rewrites it
