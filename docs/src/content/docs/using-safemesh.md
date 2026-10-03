@@ -191,6 +191,10 @@ fn main() {
             }
             fs::remove_dir(dir).unwrap();
         }
+        // The independent writer counters live beside the store directories.
+        for entry in fs::read_dir(root).unwrap() {
+            fs::remove_file(entry.unwrap().path()).unwrap();
+        }
         fs::remove_dir(root).unwrap();
         println!("cleaned exercise stores");
     }
@@ -199,6 +203,10 @@ fn main() {
 <!-- /gold -->
 
 </details>
+
+The gold path removes the counter files beside its disposable store directories.
+If you delete a store directory for a real store, the counter remains in its
+parent; see [how to create a store after deletion](/safemesh/persist-and-restart/#if-you-delete-a-store-directory).
 
 The Linux durable adapter requires filesystem locks and file/directory sync.
 All instances for the same primitive and writer configuration must use the same

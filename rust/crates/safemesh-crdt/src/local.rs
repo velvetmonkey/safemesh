@@ -559,6 +559,8 @@ mod persistence;
 
 #[path = "journal.rs"]
 mod journal;
+#[path = "rollback.rs"]
+mod rollback;
 
 /// One writer's committed history. The suffix is the existing, unchanged log
 /// wire encoding; the 24-byte prefix is LocalReplica::allocation_bytes(). This
@@ -751,6 +753,7 @@ pub struct DurableReplica<C: Crdt> {
     store: Store,
     root: PathBuf,
     torn_tail: Option<TornTail>,
+    rollback: Option<rollback::Counter>,
 }
 
 enum Store {
@@ -827,6 +830,7 @@ where
         let header = journal::header(config, 0, &inner.log.to_wire_bytes().map_err(encode_error)?)?;
         persistence::replace(&path, &header)?;
         let file = OpenOptions::new().read(true).write(true).open(&path)?;
+        let rollback = rollback::Counter::create(&root, config)?;
         inner.held = true;
         Ok(Self {
             inner,
@@ -836,6 +840,7 @@ where
                 len: header.len() as u64,
             },
             torn_tail: None,
+            rollback: Some(rollback),
         })
     }
     fn commit(
@@ -908,15 +913,23 @@ where
         local: bool,
     ) -> Result<Admission, LocalError> {
         let store = &mut self.store;
+        let rollback = &mut self.rollback;
         let config = self.inner.config;
         let alarm_path = self.root.join(format!("writer-{}.alarms", config.writer));
         let outcome = self.inner.admit_committed(
             ticket,
             record,
             local,
-            |log, sequence| match store {
-                Store::Transaction(path) => Self::commit(path, config, log, sequence),
-                Store::Journal { file, len } => Self::append_entry(file, len, log, sequence),
+            |log, sequence| {
+                if local {
+                    if let Some(counter) = rollback {
+                        counter.advance(sequence)?;
+                    }
+                }
+                match store {
+                    Store::Transaction(path) => Self::commit(path, config, log, sequence),
+                    Store::Journal { file, len } => Self::append_entry(file, len, log, sequence),
+                }
             },
             |log| {
                 let bytes = log
@@ -1142,6 +1155,7 @@ where
                 return Err(LocalError::InvalidHistory);
             }
         }
+        let rollback = rollback::Counter::open(root, config, inner.last_sequence)?;
         // The alarm file is a complete collision-report frame. A damaged
         // frame is refused; it is never treated as a journal torn tail.
         let alarm_path = root.join(format!("writer-{}.alarms", config.writer));
@@ -1173,6 +1187,7 @@ where
             root: root.to_path_buf(),
             store,
             torn_tail,
+            rollback,
         })
     }
 
@@ -1828,6 +1843,15 @@ mod durable_tests {
             writer: 0,
         }
     }
+    // Recreate the pre-protection store layout for tests of its old restart
+    // behavior. The new protected-store cases have separate tamper tests.
+    fn pre_protection<C: Crdt>(replica: &mut DurableReplica<C>) {
+        let (marker, counter) =
+            rollback::paths(&replica.root, replica.inner.config.writer).unwrap();
+        fs::remove_file(marker).unwrap();
+        fs::remove_file(counter).unwrap();
+        replica.rollback = None;
+    }
     // An empty store in the format main wrote before the append log: the same
     // fence and a whole-history `writer-0.transaction` from the unchanged
     // `commit` that main's fresh constructors called, with no journal.
@@ -1843,6 +1867,9 @@ mod durable_tests {
             DurableReplica::<OrSet<String, u64>>::commit(&path, config(), &log, 0).unwrap();
         }
         fs::remove_file(journal::path(root, 0)).unwrap();
+        let (marker, counter) = rollback::paths(root, config().writer).unwrap();
+        fs::remove_file(marker).unwrap();
+        fs::remove_file(counter).unwrap();
     }
     fn legacy(kind: &str) -> PathBuf {
         let root = root();
@@ -2081,6 +2108,7 @@ mod durable_tests {
     fn m3_restore_peer_return_never_reissues_id() {
         let root = root();
         let mut r = DurableReplica::counter(&root, config()).unwrap();
+        pre_protection(&mut r);
         r.bump(r.ticket(), 1).unwrap();
         let path = store_file(&root);
         let backup = fs::read(&path).unwrap();
@@ -2727,6 +2755,7 @@ mod durable_tests {
     where
         C::Delta: OwnedDelta + Clone + PartialEq + WireEncode + WireSchema,
     {
+        pre_protection(&mut replica);
         for index in 0..records as u64 {
             edit(&mut replica.inner, index);
         }
@@ -2891,10 +2920,258 @@ mod durable_tests {
     fn counter_journal(tallies: &[u64]) -> PathBuf {
         let root = root();
         let mut r = DurableReplica::counter(&root, config()).unwrap();
+        pre_protection(&mut r);
         for &tally in tallies {
             r.bump(r.ticket(), tally).unwrap();
         }
         root
+    }
+    fn store_copy(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        fs::read_dir(root)
+            .unwrap()
+            .map(|entry| {
+                let path = entry.unwrap().path();
+                let bytes = fs::read(&path).unwrap();
+                (path, bytes)
+            })
+            .collect()
+    }
+    fn restore_copy(copy: &[(PathBuf, Vec<u8>)]) {
+        for (path, bytes) in copy {
+            fs::write(path, bytes).unwrap();
+        }
+    }
+    fn protected_counter_path(root: &Path, writer: u64) -> PathBuf {
+        rollback::paths(root, writer).unwrap().1
+    }
+    #[test]
+    fn rollback_r1_store_only_restore_refuses() {
+        let root = root();
+        let mut r = DurableReplica::counter(&root, config()).unwrap();
+        r.bump(r.ticket(), 1).unwrap();
+        let copy = store_copy(&root);
+        r.bump(r.ticket(), 2).unwrap();
+        drop(r);
+        restore_copy(&copy);
+        assert!(matches!(
+            DurableReplica::restart_counter(&root, config()),
+            Err(LocalError::RecoveryRequired)
+        ));
+    }
+    #[test]
+    fn rollback_r2_new_writer_after_refusal() {
+        let root = root();
+        let mut old = DurableReplica::counter(&root, config()).unwrap();
+        old.bump(old.ticket(), 1).unwrap();
+        let copy = store_copy(&root);
+        old.bump(old.ticket(), 2).unwrap();
+        drop(old);
+        restore_copy(&copy);
+        assert!(matches!(
+            DurableReplica::restart_counter(&root, config()),
+            Err(LocalError::RecoveryRequired)
+        ));
+        let new_config = WriterConfig {
+            writers: 2,
+            writer: 1,
+        };
+        let mut new = DurableReplica::counter(&root, new_config).unwrap();
+        let record = new.bump(new.ticket(), 1).unwrap();
+        assert_eq!(record.id.replica, 1);
+    }
+    #[test]
+    fn rollback_r3_honest_restart_100_times() {
+        let root = root();
+        let mut r = DurableReplica::counter(&root, config()).unwrap();
+        r.bump(r.ticket(), 1).unwrap();
+        drop(r);
+        for _ in 0..100 {
+            let r = DurableReplica::restart_counter(&root, config()).unwrap();
+            assert_eq!(r.state().value(), 1);
+        }
+    }
+    #[test]
+    fn rollback_crash_child() {
+        let Ok(root) = std::env::var("SAFEMESH_ROLLBACK_CRASH_ROOT") else {
+            return;
+        };
+        let boundary = std::env::var("SAFEMESH_ROLLBACK_CRASH_BOUNDARY")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let mut r = DurableReplica::restart_counter(Path::new(&root), config()).unwrap();
+        fault(boundary, true);
+        r.bump(r.ticket(), 2).unwrap();
+        panic!("crash checkpoint did not exit");
+    }
+    #[test]
+    fn rollback_r4_crash_write_boundaries() {
+        for (boundary, refused, value) in [(19, false, 1), (20, true, 1), (14, false, 2)] {
+            let root = root();
+            let mut r = DurableReplica::counter(&root, config()).unwrap();
+            r.bump(r.ticket(), 1).unwrap();
+            drop(r);
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "local::durable_tests::rollback_crash_child"])
+                .env("SAFEMESH_ROLLBACK_CRASH_ROOT", &root)
+                .env("SAFEMESH_ROLLBACK_CRASH_BOUNDARY", boundary.to_string())
+                .output()
+                .unwrap();
+            let status = root.join("rollback-child.exit");
+            fs::write(&status, output.status.code().unwrap().to_string()).unwrap();
+            assert_eq!(fs::read_to_string(status).unwrap(), "77", "{output:?}");
+            if refused {
+                assert!(matches!(
+                    DurableReplica::restart_counter(&root, config()),
+                    Err(LocalError::RecoveryRequired)
+                ));
+                let new_config = WriterConfig {
+                    writers: 2,
+                    writer: 1,
+                };
+                assert!(DurableReplica::counter(&root, new_config).is_ok());
+            } else {
+                let r = DurableReplica::restart_counter(&root, config()).unwrap();
+                assert_eq!(r.state().value(), value);
+            }
+        }
+    }
+    #[test]
+    fn rollback_r5_deleted_counter_refuses() {
+        let root = root();
+        let mut r = DurableReplica::counter(&root, config()).unwrap();
+        r.bump(r.ticket(), 1).unwrap();
+        drop(r);
+        fs::remove_file(protected_counter_path(&root, 0)).unwrap();
+        assert!(matches!(
+            DurableReplica::restart_counter(&root, config()),
+            Err(LocalError::RecoveryRequired)
+        ));
+    }
+    #[test]
+    fn rollback_r6_counter_damage_refuses() {
+        let root = root();
+        let mut r = DurableReplica::counter(&root, config()).unwrap();
+        r.bump(r.ticket(), 1).unwrap();
+        drop(r);
+        let path = protected_counter_path(&root, 0);
+        let original = fs::read(&path).unwrap();
+        let mut flipped = original.clone();
+        flipped[40] ^= 1;
+        let mut trailing = original.clone();
+        trailing.push(0);
+        let mut impossible = original.clone();
+        impossible[40..48].copy_from_slice(&u64::MAX.to_le_bytes());
+        let checksum = crate::codec::frame_crc32(&impossible[..48]);
+        impossible[48..52].copy_from_slice(&checksum.to_le_bytes());
+        for bytes in [Vec::new(), flipped, trailing, impossible] {
+            fs::write(&path, bytes).unwrap();
+            assert!(matches!(
+                DurableReplica::restart_counter(&root, config()),
+                Err(LocalError::RecoveryRequired)
+            ));
+        }
+        fs::write(&path, original).unwrap();
+        assert!(DurableReplica::restart_counter(&root, config()).is_ok());
+    }
+    #[test]
+    fn rollback_counter_symlink_refuses_without_reading_target() {
+        let root = root();
+        drop(DurableReplica::counter(&root, config()).unwrap());
+        let path = protected_counter_path(&root, 0);
+        let victim = root.join("victim");
+        fs::write(&victim, b"keep").unwrap();
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&victim, &path).unwrap();
+        assert!(matches!(
+            DurableReplica::restart_counter(&root, config()),
+            Err(LocalError::RecoveryRequired)
+        ));
+        assert_eq!(fs::read(victim).unwrap(), b"keep");
+    }
+    #[test]
+    fn rollback_r7_limit_whole_machine_copy_passes() {
+        let root = root();
+        let mut r = DurableReplica::counter(&root, config()).unwrap();
+        r.bump(r.ticket(), 1).unwrap();
+        let copy = store_copy(&root);
+        let counter_path = protected_counter_path(&root, 0);
+        let counter = fs::read(&counter_path).unwrap();
+        r.bump(r.ticket(), 2).unwrap();
+        drop(r);
+        restore_copy(&copy);
+        fs::write(counter_path, counter).unwrap();
+        let r = DurableReplica::restart_counter(&root, config()).unwrap();
+        assert_eq!(r.state().value(), 1);
+    }
+    #[test]
+    fn rollback_r8_two_writers_two_counters() {
+        let root = root();
+        let other = WriterConfig {
+            writers: 2,
+            writer: 1,
+        };
+        let mut first = DurableReplica::counter(&root, config()).unwrap();
+        let mut second = DurableReplica::counter(&root, other).unwrap();
+        assert_ne!(
+            protected_counter_path(&root, 0),
+            protected_counter_path(&root, 1)
+        );
+        first.bump(first.ticket(), 1).unwrap();
+        second.bump(second.ticket(), 1).unwrap();
+        drop(first);
+        drop(second);
+        assert!(DurableReplica::restart_counter(&root, config()).is_ok());
+        assert!(DurableReplica::restart_counter(&root, other).is_ok());
+    }
+    #[test]
+    fn rollback_limit_other_writer_only_restore_passes() {
+        let root = root();
+        let other = WriterConfig {
+            writers: 2,
+            writer: 1,
+        };
+        let mut receiver = DurableReplica::counter(&root, config()).unwrap();
+        let mut sender = DurableReplica::counter(&root, other).unwrap();
+        let first = sender.bump(sender.ticket(), 1).unwrap();
+        receiver.receive(receiver.ticket(), first).unwrap();
+        let copy = store_copy(&root);
+        let second = sender.bump(sender.ticket(), 2).unwrap();
+        receiver.receive(receiver.ticket(), second).unwrap();
+        drop(receiver);
+        drop(sender);
+        restore_copy(&copy);
+        let receiver = DurableReplica::restart_counter(&root, config()).unwrap();
+        assert_eq!(receiver.state().state()[1], 1);
+    }
+    #[test]
+    fn rollback_check_precedes_saved_collision_alarm() {
+        let root = root();
+        let mut r = DurableReplica::counter(&root, config()).unwrap();
+        r.bump(r.ticket(), 1).unwrap();
+        let conflict = Record {
+            id: RecordId {
+                replica: 0,
+                sequence: 1,
+            },
+            delta: GCounterDelta {
+                replica: 0,
+                tally: 9,
+            },
+        };
+        assert_eq!(
+            r.receive(r.ticket(), conflict).unwrap(),
+            Admission::Collision
+        );
+        assert!(root.join("writer-0.alarms").exists());
+        let copy = store_copy(&root);
+        r.bump(r.ticket(), 2).unwrap();
+        drop(r);
+        restore_copy(&copy);
+        assert!(matches!(
+            DurableReplica::restart_counter(&root, config()),
+            Err(LocalError::RecoveryRequired)
+        ));
     }
     fn restart_state(root: &Path) -> Result<(Vec<u64>, Option<TornTail>), LocalError> {
         let r = DurableReplica::restart_counter(root, config())?;
@@ -3333,6 +3610,9 @@ mod durable_tests {
             } else {
                 DurableReplica::counter(root, config()).unwrap()
             };
+            if !legacy {
+                pre_protection(&mut r);
+            }
             r.bump(r.ticket(), 5).unwrap();
             old = read(root);
             fault(boundary, true);
@@ -3344,6 +3624,9 @@ mod durable_tests {
             } else {
                 DurableReplica::utf8_set(root, config()).unwrap()
             };
+            if !legacy {
+                pre_protection(&mut r);
+            }
             r.add(r.ticket(), "café☕".into()).unwrap();
             old = read(root);
             fault(boundary, true);
