@@ -81,7 +81,7 @@ impl Counter {
             _ => return Err(LocalError::RecoveryRequired),
         };
         if marker.len() != 40
-            || &marker[..24] != &identity_bytes(MARKER_MAGIC, config, &[0; 16])[..24]
+            || marker[..24] != identity_bytes(MARKER_MAGIC, config, &[0; 16])[..24]
         {
             return Err(LocalError::RecoveryRequired);
         }

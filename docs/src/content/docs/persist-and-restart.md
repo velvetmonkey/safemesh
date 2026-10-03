@@ -97,7 +97,8 @@ cleaned exercise stores
 
 `DurableReplica::counter` / `utf8_set` create the stores. Each successful edit
 appends and syncs its own record; `restart_counter` / `restart_utf8_set` validate and
-replay the existing store while reacquiring the writer. For an existing counter,
+replay the existing store while reacquiring the writer. Each accepted write of the
+local writer adds one counter file sync and one directory sync. For an existing counter,
 `restart_counter_from_store(root, writer)` reads the committed count under that
 writer's lock and runs the same checked replay, while explicit `restart_counter`
 still rejects a mismatched count. Their collection budget

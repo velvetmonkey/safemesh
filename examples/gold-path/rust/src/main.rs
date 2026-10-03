@@ -124,6 +124,10 @@ fn main() {
             }
             fs::remove_dir(dir).unwrap();
         }
+        // The independent writer counters live beside the store directories.
+        for entry in fs::read_dir(root).unwrap() {
+            fs::remove_file(entry.unwrap().path()).unwrap();
+        }
         fs::remove_dir(root).unwrap();
         println!("cleaned exercise stores");
     }
