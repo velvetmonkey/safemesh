@@ -52,6 +52,16 @@ a new process and cleans up that exercise's stores on success. A failed run leav
 them for inspection; use a fresh checkout to retry rather than erasing a real
 writer's fence/history. Build outputs remain for reuse.
 
+## Writer fences
+
+The Linux Rust durable store locks `writer-N.fence` for one writer. A second process with the same store and writer gets `Refused`. The lock is in [`LocalReplica::fresh` and `DurableReplica::lock_restart_fence` in `rust/crates/safemesh-crdt/src/local.rs`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/local.rs). The test `second_process_cannot_write_same_writer` in `rust/crates/safemesh-crdt/tests/writer_fence_process.rs` starts a second process, checks that it writes no bytes, and checks restart after the holder exits.
+
+A Node managed handle is fenced across processes when its caller supplies a Store with a lease. The [`FileSystemStore.open` method in the example Store](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-wasm/examples/node-filesystem-store.mjs) creates `lease.lock` exclusively and returns `LOCKED` if it exists. The test `node_writer_fence_two_process_and_killed_holder` in `rust/crates/safemesh-wasm/tests/node-writer-fence.mjs` checks both processes. It also kills the holder and checks that the lock file stays and open remains refused until a person removes it. The [example Store's opening comment](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-wasm/examples/node-filesystem-store.mjs) has no automatic stale-lock recovery.
+
+The [comment above `ALLOCATED_AUTHORS` in the older WASM replica constructors](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-wasm/src/lib.rs) says they do not fence across processes or tabs. The [comment above `STRING_ORSET_ALLOCATED_AUTHORS` in the Python binding registry](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-python/src/lib.rs) says it fences only one process.
+
+A copied or restored store at a separate root has no active lock file there, so either lock alone cannot identify the old writer. A new Rust durable store also has an independent own-writer counter: [`rollback::Counter::open`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/rollback.rs) returns `RecoveryRequired` on a missing or mismatched counter. A store made before this check can detect an old writer identity when it receives an own-writer record above its durable high-water and returns `PeerWriterAhead` (see the `Peer history cannot allocate IDs` comment in [`local.rs`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/local.rs)). SafeMesh does not give a restored store a new writer identity. Open it with a new identity before it writes.
+
 ## Rust gold path
 
 The complete application is in `examples/gold-path/rust/`. It already adds the
