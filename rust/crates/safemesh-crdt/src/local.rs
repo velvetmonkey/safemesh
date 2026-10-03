@@ -3144,6 +3144,35 @@ mod durable_tests {
         let receiver = DurableReplica::restart_counter(&root, config()).unwrap();
         assert_eq!(receiver.state().state()[1], 1);
     }
+    #[test]
+    fn rollback_check_precedes_saved_collision_alarm() {
+        let root = root();
+        let mut r = DurableReplica::counter(&root, config()).unwrap();
+        r.bump(r.ticket(), 1).unwrap();
+        let conflict = Record {
+            id: RecordId {
+                replica: 0,
+                sequence: 1,
+            },
+            delta: GCounterDelta {
+                replica: 0,
+                tally: 9,
+            },
+        };
+        assert_eq!(
+            r.receive(r.ticket(), conflict).unwrap(),
+            Admission::Collision
+        );
+        assert!(root.join("writer-0.alarms").exists());
+        let copy = store_copy(&root);
+        r.bump(r.ticket(), 2).unwrap();
+        drop(r);
+        restore_copy(&copy);
+        assert!(matches!(
+            DurableReplica::restart_counter(&root, config()),
+            Err(LocalError::RecoveryRequired)
+        ));
+    }
     fn restart_state(root: &Path) -> Result<(Vec<u64>, Option<TornTail>), LocalError> {
         let r = DurableReplica::restart_counter(root, config())?;
         Ok((r.state().state().to_vec(), r.torn_tail()))
