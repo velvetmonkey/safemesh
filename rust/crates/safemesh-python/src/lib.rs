@@ -105,7 +105,8 @@ fn event_log_decode_error(error: safemesh_crdt::WireError, counter_log: bool) ->
         }
         .to_owned(),
         cause @ (safemesh_crdt::WireError::ZeroSequenceAdd { .. }
-        | safemesh_crdt::WireError::ZeroSequenceRemove { .. }) => cause.to_string(),
+        | safemesh_crdt::WireError::ZeroSequenceRemove { .. }
+        | safemesh_crdt::WireError::ZeroSequenceRecord { .. }) => cause.to_string(),
         cause => format!("failed to decode event log: {cause}"),
     })
 }
@@ -294,9 +295,9 @@ fn admission_name(admission: safemesh_crdt::Admission) -> String {
 // duplicate or collision is a verdict, not an error. An invalid record raises.
 fn record_invalid_text(cause: WireError) -> String {
     match cause {
-        cause @ (WireError::ZeroSequenceAdd { .. } | WireError::ZeroSequenceRemove { .. }) => {
-            cause.to_string()
-        }
+        cause @ (WireError::ZeroSequenceAdd { .. }
+        | WireError::ZeroSequenceRemove { .. }
+        | WireError::ZeroSequenceRecord { .. }) => cause.to_string(),
         WireError::OwnershipViolation => "writer replica does not match record author".to_owned(),
         _ => "invalid record".to_owned(),
     }
@@ -933,6 +934,8 @@ mod py_enable_wins_flag_replica_python {
             )
         }
 
+        // This class keeps its own admission copy by the 2026-10-01 ruling (P2 step 4 tight, OR-1 = A).
+        // A shared Replica admission fix does not reach this copy; apply it here by hand.
         /// Return one core admission verdict for every decoded input record.
         #[pyo3(signature = (bytes, *, max_records = None))]
         pub fn merge_log_bytes(
@@ -1118,6 +1121,8 @@ mod py_lww_map_replica_python {
             )
         }
 
+        // This class keeps its own admission copy by the 2026-10-01 ruling (P2 step 4 tight, OR-1 = A).
+        // A shared Replica admission fix does not reach this copy; apply it here by hand.
         /// Return one core admission verdict for every decoded input record.
         #[pyo3(signature = (bytes, *, max_records = None))]
         pub fn merge_log_bytes(
@@ -1282,6 +1287,8 @@ mod py_lww_register_replica_python {
             )
         }
 
+        // This class keeps its own admission copy by the 2026-10-01 ruling (P2 step 4 tight, OR-1 = A).
+        // A shared Replica admission fix does not reach this copy; apply it here by hand.
         /// Return one core admission verdict for every decoded input record.
         #[pyo3(signature = (bytes, *, max_records = None))]
         pub fn merge_log_bytes(
@@ -1562,7 +1569,7 @@ impl PyStringOrSetRecord {
 /// operations in snake_case where WASM uses camelCase. The WASM lifecycle methods
 /// `free()` and `[Symbol.dispose]()` have no Python counterpart. Verdict strings
 /// match for the shared operations. Record-decode and allocated-writer refusal texts
-/// match WASM; Python raises `ValueError`. A sequence-0 OR-Set add or remove
+/// match WASM; Python raises `ValueError`. Every sequence-0 record is refused. An OR-Set add or remove
 /// raises `ValueError` with the core `ZeroSequenceAdd` or `ZeroSequenceRemove`
 /// reason on the single-record path. For a log containing that record,
 /// Python prefixes the core reason with `failed to decode event log: `;

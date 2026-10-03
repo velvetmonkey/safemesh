@@ -2,23 +2,21 @@
 
 Two independent Node processes use the npm package `safemesh-wasm` over loopback
 HTTP, with application-owned identity/log storage. Node 22, Rust's wasm32 target,
-wasm-pack and npm are needed. From the repository root, choose an absolute scratch
-directory outside the checkout (do not use `/tmp` on the lane estate):
+wasm-pack and npm are needed. From the repository root, create one writable
+scratch directory outside the checkout:
 
 ```sh
-export PATH=/home/monkey/bin:/home/monkey/.cargo/bin:$PATH
-export CHECKLIST_SCRATCH=/home/monkey/scratch/smp3wasmjourney/tmp
+export CHECKLIST_SCRATCH="$(mktemp -d)"
 export TMPDIR="$CHECKLIST_SCRATCH"
-export CARGO_TARGET_DIR=/home/monkey/scratch/smp3wasmjourney/target
-export SAFEMESH_CONSUMER=/home/monkey/scratch/smp3wasmjourney/consumer
-mkdir -p "$TMPDIR" "$SAFEMESH_CONSUMER"
-./scripts/package-wasm.sh nodejs /home/monkey/scratch/smp3wasmjourney/pkg-node
-(cd "$SAFEMESH_CONSUMER" && npm init -y && npm install ../pkg-node/safemesh-wasm-0.1.0.tgz)
-/home/monkey/bin/suiterun -- node demos/wasm-checklist/journey.mjs
+export CARGO_TARGET_DIR="$CHECKLIST_SCRATCH/target"
+export SAFEMESH_CONSUMER="$CHECKLIST_SCRATCH/consumer"
+mkdir -p "$SAFEMESH_CONSUMER"
+./scripts/package-wasm.sh nodejs "$CHECKLIST_SCRATCH/pkg-node"
+(cd "$SAFEMESH_CONSUMER" && npm init -y && npm install "$CHECKLIST_SCRATCH/pkg-node/safemesh-wasm-0.1.0.tgz")
+node demos/wasm-checklist/journey.mjs
 ```
 
-Outside the lane estate, use your own writable absolute paths and run `node`
-directly if `suiterun` is unavailable. No package is published by these commands.
+No package is published by these commands.
 The app resolves the package by name from the consumer's `package.json`; it never
 imports repository bindings. To run one app independently:
 
@@ -58,8 +56,8 @@ an observation, not a failure. This journey is not a CI gate.
 Planted known-bad modes keep the same oracle and must fail it by name:
 
 ```sh
-/home/monkey/bin/suiterun -- node demos/wasm-checklist/journey.mjs --plant drop-one-record
-/home/monkey/bin/suiterun -- node demos/wasm-checklist/journey.mjs --plant extra-record
+node demos/wasm-checklist/journey.mjs --plant drop-one-record
+node demos/wasm-checklist/journey.mjs --plant extra-record
 ```
 
 `--plant drop-one-record` withholds exactly one record from one app's delivery.
@@ -70,9 +68,9 @@ record is `accepted` by the other side rather than ignored or compared by count.
 Physical tamper modes each use a disposable store copy after SIGKILL:
 
 ```sh
-CHECKLIST_TAMPER=delete-log /home/monkey/bin/suiterun -- node demos/wasm-checklist/journey.mjs
-CHECKLIST_TAMPER=fresh-identity /home/monkey/bin/suiterun -- node demos/wasm-checklist/journey.mjs
-CHECKLIST_TAMPER=corrupt-log /home/monkey/bin/suiterun -- node demos/wasm-checklist/journey.mjs
+CHECKLIST_TAMPER=delete-log node demos/wasm-checklist/journey.mjs
+CHECKLIST_TAMPER=fresh-identity node demos/wasm-checklist/journey.mjs
+CHECKLIST_TAMPER=corrupt-log node demos/wasm-checklist/journey.mjs
 ```
 
 Expected failures: `RESTART_LOG_MISSING`, `RESTART_IDENTITY_CONTINUITY`, and

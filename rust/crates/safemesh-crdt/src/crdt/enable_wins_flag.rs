@@ -87,12 +87,12 @@ impl<K: Ord + Clone> Mergeable for EnableWinsFlag<K> {
 impl<K: Ord + Clone> Crdt for EnableWinsFlag<K> {
     type Delta = EnableWinsFlagDelta<K>;
 
-    /// Accepts every record, by the same argument as [`crate::OrSet`]: an enable joins
+    /// Accepts every positive-sequence record, by the same argument as [`crate::OrSet`]: an enable joins
     /// the enable set even when its token is tombstoned, a disable tombstones the
     /// tokens it names whether observed or not, and a disable naming no tokens is
     /// the lattice bottom. Every decodable record applies on a fresh flag.
-    fn validate_record(&self, _id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
-        Ok(())
+    fn validate_record(&self, id: RecordId, _delta: &Self::Delta) -> Result<(), WireError> {
+        id.require_positive_sequence("Enable-wins flag")
     }
 
     fn apply_delta(&mut self, delta: Self::Delta) {

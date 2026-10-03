@@ -91,6 +91,7 @@ impl<V: Ord + Clone> Crdt for LwwRegister<V> {
     /// A record may only assign its author's dot. Losing assignments with a
     /// matching author remain valid and are subsumed by the total-order rule.
     fn validate_record(&self, id: RecordId, delta: &Self::Delta) -> Result<(), WireError> {
+        id.require_positive_sequence("LWW register")?;
         if delta.replica != id.replica {
             return Err(WireError::OwnershipViolation);
         }

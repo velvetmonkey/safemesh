@@ -212,12 +212,19 @@ mod frame_tests {
                     };
                     assert_eq!(
                         log.insert_record(&GSet::<u64>::new(), r.clone()),
-                        Admission::Accepted
+                        if sequence == 0 {
+                            Admission::Invalid(WireError::ZeroSequenceRecord {
+                                replica: author,
+                                kind: "G-Set",
+                            })
+                        } else {
+                            Admission::Accepted
+                        }
                     );
                     let mut version = VersionVector::new();
                     // Exercise saturated prefixes without allocating 2^64 records.
                     version.set(author, prefix);
-                    let expected = if sequence == 0 || sequence > prefix {
+                    let expected = if sequence > 0 && sequence > prefix {
                         vec![r]
                     } else {
                         vec![]
@@ -689,7 +696,14 @@ mod version_vector_tests {
                                 delta: sequence
                             }
                         ),
-                        Admission::Accepted
+                        if sequence == 0 {
+                            Admission::Invalid(WireError::ZeroSequenceRecord {
+                                replica,
+                                kind: "G-Set",
+                            })
+                        } else {
+                            Admission::Accepted
+                        }
                     );
                 }
             }
@@ -770,13 +784,20 @@ mod version_vector_tests {
         ] {
             assert_eq!(
                 local.insert_record(&GSet::<u64>::new(), Record { id, delta: 7u64 }),
-                Admission::Accepted
+                if id.sequence == 0 {
+                    Admission::Invalid(WireError::ZeroSequenceRecord {
+                        replica: id.replica,
+                        kind: "G-Set",
+                    })
+                } else {
+                    Admission::Accepted
+                }
             );
         }
         let peer =
             VersionVector::from_peer_prefixes(&BTreeMap::from([(1, 2)]), &BTreeSet::from([2]))
                 .unwrap();
-        assert_eq!(local.since(&peer).len(), 4);
+        assert_eq!(local.since(&peer).len(), 3);
 
         let malicious =
             VersionVector::from_peer_prefixes(&BTreeMap::from([(1, u64::MAX)]), &BTreeSet::new())
@@ -786,7 +807,7 @@ mod version_vector_tests {
         transport.subscribe(2);
         queue_anti_entropy(&mut transport, 1, 2, &local, &malicious).unwrap();
         assert_eq!(transport.pending_len(), 1);
-        assert_eq!(transport.drain(2)[0].records.len(), 4);
+        assert_eq!(transport.drain(2)[0].records.len(), 2);
     }
 }
 

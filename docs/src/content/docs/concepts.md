@@ -14,7 +14,7 @@ A conflict-free replicated data type combines independently received state with 
 
 ## Replica
 
-A replica holds a local copy of state. Two replicas may temporarily differ because they have received different updates. A G-Counter has a fixed number of replica coordinates; each coordinate stores a tally. A record also has an identity consisting of a replica ID and a sequence number. Keep those record identities distinct from the application values being synchronized. [Evidence: `GCounter`, `RecordId`, and `EventLog` in the Rust core](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/lib.rs).
+A replica holds a local copy of state. Two replicas may temporarily differ because they have received different updates. A G-Counter has a fixed number of replica coordinates; each coordinate stores a tally. A record also has an identity consisting of a replica ID and a positive sequence number. All eight carriers refuse sequence 0 on admission and in each available checked log loader. Keep those record identities distinct from the application values being synchronized. [Evidence: `GCounter`, `RecordId`, and `EventLog` in the Rust core](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/src/lib.rs).
 
 ## Convergence
 
