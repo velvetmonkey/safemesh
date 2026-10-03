@@ -83,7 +83,7 @@ mod local_alarm {
     }
 
     #[test]
-    fn durable_counter_fork_raises_alarm_without_changing_store_and_restart_drops_it() {
+    fn durable_counter_fork_survives_restart_with_equal_report() {
         let root = root();
         let mut durable = DurableReplica::counter(&root, config()).unwrap();
         let ticket = durable.ticket();
@@ -108,6 +108,7 @@ mod local_alarm {
             }]
         );
         assert!(durable.log().collision_report_bytes().unwrap().is_some());
+        let report = durable.log().collision_report_bytes().unwrap();
         assert_eq!(
             std::fs::read(root.join("writer-0.journal")).unwrap(),
             before
@@ -134,9 +135,98 @@ mod local_alarm {
         let final_state = durable.state().clone();
         drop(durable);
         let restored = DurableReplica::restart_counter(&root, config()).unwrap();
-        assert!(restored.log().collisions().is_empty());
+        assert_eq!(restored.log().collision_report_bytes().unwrap(), report);
         assert_eq!(restored.state(), &final_state);
         assert_eq!(restored.state().state(), &[7, 43]);
+    }
+
+    #[test]
+    fn durable_store_without_alarm_restarts_without_alarm() {
+        let root = root();
+        let mut durable = DurableReplica::counter(&root, config()).unwrap();
+        let ticket = durable.ticket();
+        assert_eq!(
+            durable.receive(ticket, peer(5)).unwrap(),
+            Admission::Accepted
+        );
+        drop(durable);
+        let restored = DurableReplica::restart_counter(&root, config()).unwrap();
+        assert!(restored.log().collisions().is_empty());
+    }
+
+    #[test]
+    fn alarm_sigkill_child() {
+        let Ok(root) = std::env::var("SAFEMESH_ALARM_KILL_ROOT") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let mut durable = DurableReplica::counter(&root, config()).unwrap();
+        let ticket = durable.ticket();
+        assert_eq!(
+            durable.receive(ticket, peer(5)).unwrap(),
+            Admission::Accepted
+        );
+        assert_eq!(
+            durable.receive(ticket, peer(42)).unwrap(),
+            Admission::Collision
+        );
+        std::fs::write(root.join("alarm-returned"), b"ready").unwrap();
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+
+    #[test]
+    fn durable_alarm_survives_sigkill_after_return() {
+        let root = root();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "local_alarm::alarm_sigkill_child", "--nocapture"])
+            .env("SAFEMESH_ALARM_KILL_ROOT", &root)
+            .spawn()
+            .unwrap();
+        let marker = root.join("alarm-returned");
+        for _ in 0..500 {
+            if marker.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(marker.exists(), "child did not return from alarm call");
+        child.kill().unwrap();
+        assert!(!child.wait().unwrap().success());
+        let restored = DurableReplica::restart_counter(&root, config()).unwrap();
+        assert_eq!(
+            restored.log().collisions(),
+            vec![RecordCollision {
+                id: ID,
+                local: bump(5),
+                remote: bump(42)
+            }]
+        );
+    }
+
+    #[test]
+    fn damaged_alarm_file_is_refused() {
+        let root = root();
+        let mut durable = DurableReplica::counter(&root, config()).unwrap();
+        let ticket = durable.ticket();
+        assert_eq!(
+            durable.receive(ticket, peer(5)).unwrap(),
+            Admission::Accepted
+        );
+        assert_eq!(
+            durable.receive(ticket, peer(42)).unwrap(),
+            Admission::Collision
+        );
+        drop(durable);
+        let path = root.join("writer-0.alarms");
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[16] ^= 1;
+        std::fs::write(&path, bytes).unwrap();
+        assert!(matches!(
+            DurableReplica::restart_counter(&root, config()),
+            Err(LocalError::History(WireError::IntegrityMismatch))
+        ));
     }
 
     #[test]

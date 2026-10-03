@@ -14,8 +14,9 @@
 //! [`EventLog::merge_collision_report_bytes`] raises the same alarm on its side.
 //!
 //! The alarm never admits, applies or replaces a payload; it only names the
-//! fork. It lives in memory: it is not part of the encoded log, log equality or
-//! a restored replica. A report payload is decoded under the log's schema but
+//! fork. It is not part of the encoded log or log equality. A durable
+//! replica stores the alarm separately and reloads it on restart; a restored
+//! plain log drops it. A report payload is decoded under the log's schema but
 //! is not validated against a carrier, because it is never applied.
 
 use crate::{
@@ -209,7 +210,7 @@ impl<D: WireDecode + WireSchema> WireDecode for CollisionReport<D> {
 impl<D> EventLog<D> {
     /// Every held ID whose alarm is raised, in ID order, with the payload held
     /// here and the first differing payload a peer offered or reported.
-    /// Empty when no fork has been seen. The alarm is in memory only.
+    /// Empty when no fork has been seen. Durable replicas store it separately.
     pub fn collisions(&self) -> Vec<RecordCollision<D>>
     where
         D: Clone,
