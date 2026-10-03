@@ -204,6 +204,10 @@ fn main() {
 
 </details>
 
+The gold path removes the counter files beside its disposable store directories.
+If you delete a store directory for a real store, the counter remains in its
+parent; see [how to create a store after deletion](/safemesh/persist-and-restart/#if-you-delete-a-store-directory).
+
 The Linux durable adapter requires filesystem locks and file/directory sync.
 All instances for the same primitive and writer configuration must use the same
 store directory. Preserve the fence and journal (or older transaction) files of real stores; the

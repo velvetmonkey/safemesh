@@ -620,6 +620,23 @@ If a crash interrupts a migration after its journal is complete, both files
 remain; restart refuses them as `RecoveryRequired`, and repeating the migration
 completes it ([`interrupted_migration_is_refused_then_completed`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
 
+### If you delete a store directory
+
+The rollback counter file is in the parent of the store directory. Its name
+matches `.safemesh-<hash>-writer-<id>.counter`. Deleting the store directory
+leaves this file in place. A new store at the same path with the same writer ID
+returns `RecoveryRequired` from `DurableReplica::counter` or `utf8_set`.
+The refused create leaves a writer fence and journal in the new store directory.
+
+To reuse the old writer ID after you remove a store on purpose, clear that
+partial store, remove its counter file, and then create the store. Removing
+only the counter file after the refused create still returns `RecoveryRequired`.
+Only an operator who knows that the old store is gone on purpose may remove
+the counter file: it protects that writer against rollback. You can also keep
+the counter file and create with a new writer ID. A new writer ID can create
+even if the refused create left the old writer's fence and journal in the
+store directory.
+
 ### Supported size
 
 The supported history is **100,000 records per writer store**, exported as
