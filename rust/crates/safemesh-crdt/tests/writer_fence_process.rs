@@ -2,7 +2,31 @@
 
 use safemesh_crdt::local::{DurableReplica, LocalError};
 use safemesh_crdt::ownership::WriterConfig;
-use std::{env, fs, path::Path, process::Command};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+struct TestDirectory(PathBuf);
+
+impl Drop for TestDirectory {
+    fn drop(&mut self) {
+        if let Err(error) = fs::remove_dir_all(&self.0) {
+            if std::thread::panicking() {
+                eprintln!(
+                    "failed to remove test directory {}: {error}",
+                    self.0.display()
+                );
+            } else {
+                panic!(
+                    "failed to remove test directory {}: {error}",
+                    self.0.display()
+                );
+            }
+        }
+    }
+}
 
 fn config() -> WriterConfig {
     WriterConfig {
@@ -37,7 +61,11 @@ fn second_process_cannot_write_same_writer() {
         return;
     }
     let root = env::temp_dir().join(format!("rust-writer-fence-{}", std::process::id()));
+    if root.exists() {
+        fs::remove_dir_all(&root).unwrap();
+    }
     fs::create_dir(&root).unwrap();
+    let _directory = TestDirectory(root.clone());
     let store = root.join("store");
     let holder = DurableReplica::counter(&store, config()).unwrap();
     let before = contents(&store);
@@ -61,5 +89,4 @@ fn second_process_cannot_write_same_writer() {
     drop(holder);
     let restarted = DurableReplica::restart_counter(&store, config()).unwrap();
     drop(restarted);
-    fs::remove_dir_all(root).unwrap();
 }
