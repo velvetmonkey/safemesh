@@ -634,7 +634,8 @@ interrupted before its sync) by truncating the file, and reports it through
 Restart also truncates a final journal entry that fails its length or checksum
 test and reports it through `torn_tail()`. SafeMesh does not claim that an
 acknowledged final record survives later damage to its bytes. Such damage is
-discarded as a torn tail and is not refused.
+discarded as a torn tail and is not refused for a pre-protection append-log
+store; a protected store refuses if the lost entry carried own-writer progress.
 The fresh `counter` and `utf8_set` constructors still return `RecoveryRequired`
 for an existing store. This path does not claim general power-loss certification.
 
