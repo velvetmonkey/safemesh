@@ -446,6 +446,8 @@ Current `main` already refuses older EventLog frames, keeps a retained corpus of
 those frames, and runs named toolchain and platform jobs. This section is that
 policy. It is not a support window.
 
+The compatibility baseline is the first tagged release, `v0.1.0`: later releases must read its retained files or ship a checked migration. `release_wire_bytes_read_and_refuse` reads all retained tagged wire encodings and checks unknown tags, short headers, and trailing bytes; `release_store_files_restart_to_documented_state` restarts both retained store layouts, and `store_refusals_are_named` checks store damage. Tagged wire frames and magic-bearing store files refuse headers they do not know. The unversioned transaction and fence wrappers check configuration but cannot identify a compatible-looking future wrapper, and journal restart can treat a future tail as interrupted-append debris; these gaps remain for a later format ruling.
+
 ### Newer SafeMesh, older log
 
 A current EventLog loader refuses a log written with tag `0x02` or with unshaped
