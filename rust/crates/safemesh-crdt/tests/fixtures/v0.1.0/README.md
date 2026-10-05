@@ -44,7 +44,10 @@ All wire values are also declared in `wire_cases`; `release_wire_bytes_read_and_
 
 From the repository root, set a fresh private scratch directory outside the checkout and run:
 
+This block requires Git and the Rust 1.96.1 toolchain pinned by `rust-toolchain.toml`; an older system Cargo cannot read this lock file.
+
 ```sh
+set -e
 original="$PWD"
 scratch="${SMQ3_SCRATCH:?set a fresh private scratch directory}"
 git worktree add --detach "$scratch/tag-repro" v0.1.0
@@ -52,7 +55,13 @@ cp rust/crates/safemesh-crdt/tests/v010_compat.rs "$scratch/tag-repro/rust/crate
 mkdir -p "$scratch/tmp" "$scratch/reproduced"
 cd "$scratch/tag-repro"
 TMPDIR="$scratch/tmp" CARGO_TARGET_DIR="$scratch/tag-repro-target" SMQ3_GENERATE="$scratch/reproduced" cargo test --manifest-path rust/Cargo.toml -p safemesh-crdt --features local-writer --test v010_compat store::generate_v010 -- --ignored --exact
-for f in "$original"/rust/crates/safemesh-crdt/tests/fixtures/v0.1.0/*.bin; do cmp "$scratch/reproduced/$(basename "$f")" "$f"; done
+set -- "$original"/rust/crates/safemesh-crdt/tests/fixtures/v0.1.0/*.bin
+[ "$#" -eq 31 ] || { printf 'expected 31 committed fixtures, found %s\n' "$#" >&2; exit 1; }
+for f do
+    reproduced="$scratch/reproduced/$(basename "$f")"
+    [ -f "$reproduced" ] || { printf 'missing reproduced fixture: %s\n' "$reproduced" >&2; exit 1; }
+    cmp "$reproduced" "$f"
+done
 ```
 
 A changed byte needs a checked migration and a new release fixture set; do not refresh v0.1.0 bytes. The unversioned transaction and fence cannot identify a compatible-looking newer wrapper. A future journal tail can be treated as interrupted-append debris.
