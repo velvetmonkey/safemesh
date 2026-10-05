@@ -45,14 +45,13 @@ All wire values are also declared in `wire_cases`; `release_wire_bytes_read_and_
 From the repository root, set a fresh private scratch directory outside the checkout and run:
 
 ```sh
-export PATH=/home/monkey/bin:$PATH
 original="$PWD"
 scratch="${SMQ3_SCRATCH:?set a fresh private scratch directory}"
 git worktree add --detach "$scratch/tag-repro" v0.1.0
 cp rust/crates/safemesh-crdt/tests/v010_compat.rs "$scratch/tag-repro/rust/crates/safemesh-crdt/tests/v010_compat.rs"
 mkdir -p "$scratch/tmp" "$scratch/reproduced"
 cd "$scratch/tag-repro"
-TMPDIR="$scratch/tmp" CARGO_TARGET_DIR="$scratch/tag-repro-target" SMQ3_GENERATE="$scratch/reproduced" /home/monkey/bin/suiterun -- cargo test --manifest-path rust/Cargo.toml -p safemesh-crdt --features local-writer --test v010_compat store::generate_v010 -- --ignored --exact
+TMPDIR="$scratch/tmp" CARGO_TARGET_DIR="$scratch/tag-repro-target" SMQ3_GENERATE="$scratch/reproduced" cargo test --manifest-path rust/Cargo.toml -p safemesh-crdt --features local-writer --test v010_compat store::generate_v010 -- --ignored --exact
 for f in "$original"/rust/crates/safemesh-crdt/tests/fixtures/v0.1.0/*.bin; do cmp "$scratch/reproduced/$(basename "$f")" "$f"; done
 ```
 
