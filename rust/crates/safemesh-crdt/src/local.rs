@@ -2888,6 +2888,13 @@ mod durable_tests {
             DurableReplica::restart_counter_with_limits(&root, config(), budget(N)),
             N,
         );
+        let explicit = DurableReplica::restart_counter_with_limits(&root, config(), budget(N))
+            .err()
+            .unwrap();
+        assert_eq!(
+            explicit.to_string(),
+            format!("local history exceeds restart record budget: RecordLimitExceeded: {N}")
+        );
         assert_refused_by_name(
             DurableReplica::restart_counter_from_store_with_limits(&root, 0, budget(N)),
             N,
@@ -2898,6 +2905,10 @@ mod durable_tests {
             "refusal leaves the store untouched"
         );
         assert_refused_by_name(DurableReplica::restart_counter(&root, config()), N);
+        let default = DurableReplica::restart_counter(&root, config())
+            .err()
+            .unwrap();
+        assert_eq!(default.to_string(), format!("local history exceeds restart record budget: RecordLimitExceeded: {N}; pass DecodeLimits::UNLIMITED to reopen"));
         assert_refused_by_name(DurableReplica::restart_counter_from_store(&root, 0), N);
         // Explicit unlimited preserves access to older, oversized histories.
         let reopened = DurableReplica::restart_counter_with_limits(
