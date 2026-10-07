@@ -223,6 +223,9 @@ jobs:
       - name: Run full gate
         run: ./scripts/ci.sh
 
+      - name: Check current files with v0.1.0 decoder
+        run: bash ./scripts/check-older-decoder.sh
+
   python:
     runs-on: ubuntu-latest
     strategy:
