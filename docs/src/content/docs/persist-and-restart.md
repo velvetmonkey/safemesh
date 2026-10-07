@@ -489,8 +489,10 @@ Those files are last-writer commits on `main`, not release tags.
 
 ### Older SafeMesh, newer log
 
-See [Not yet promised](#not-yet-promised). Current `main` has no job that runs
-an older decoder against a current EventLog frame.
+The full gate runs `scripts/check-older-decoder.sh`: current writers generate
+25 wire values and six store files, and the decoder built from tagged `v0.1.0`
+reads them to the declared values. This samples current output; it does not
+promise that an older release will read every future format.
 
 ### Toolchains and platforms current main checks
 
@@ -545,8 +547,9 @@ Before a first release, the project does not promise:
   [`Cargo.toml`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/Cargo.toml)
   currently records `0.1.0` as an unpublished crate version; that number is not
   a versioning promise.
-- **That an older decoder can read a current EventLog frame.** Current `main`
-  has no job that runs an older decoder against a new file.
+- **That an older decoder can read every future EventLog frame.** The full gate
+  samples current output with the tagged `v0.1.0` decoder; a later format may
+  require that decoder to refuse cleanly instead.
 - **Maintainer support.** The root status matrix labels it UNKNOWN for all four
   surfaces
   ([README status](https://github.com/velvetmonkey/safemesh/blob/main/README.md#status)).
