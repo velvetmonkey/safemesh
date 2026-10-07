@@ -9,10 +9,10 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use super::{
-    read_tag, write_bytes, write_len, write_u64, write_u8, CollectionLimits, EnableWinsFlag,
-    EnableWinsFlagDelta, EventLog, GCounterDelta, GSet, LwwMap, LwwMapDelta, LwwRegister,
-    LwwRegisterDelta, OrSet, OrSetDelta, PnCounterDelta, Record, RecordId, Rga, RgaDelta,
-    VersionVector, VersionVectorLimitError, VersionVectorLimits, WireCursor, WireDecode,
+    read_tag, write_bytes, write_len, write_u64, write_u8, CollectionLimits, DecodeLimits,
+    EnableWinsFlag, EnableWinsFlagDelta, EventLog, GCounterDelta, GSet, LwwMap, LwwMapDelta,
+    LwwRegister, LwwRegisterDelta, OrSet, OrSetDelta, PnCounterDelta, Record, RecordId, Rga,
+    RgaDelta, VersionVector, VersionVectorLimitError, VersionVectorLimits, WireCursor, WireDecode,
     WireEncode, WireError, WireSchema, TAG_ENABLE_WINS_FLAG_DISABLE_U64,
     TAG_ENABLE_WINS_FLAG_ENABLE_U64, TAG_ENABLE_WINS_FLAG_U64, TAG_GCOUNTER_DELTA, TAG_GSET_U64,
     TAG_LWW_MAP_REMOVE_U64, TAG_LWW_MAP_SET_U64, TAG_LWW_MAP_U64, TAG_LWW_REGISTER_DELTA_U64,
@@ -613,9 +613,15 @@ impl<D: WireDecode + WireSchema + PartialEq> WireDecode for EventLog<D> {
         Self::decode_with(
             cursor,
             CollectionLimits::WIRE_DEFAULT,
-            None,
+            DecodeLimits::default().max_records,
             |_| {},
-            |_| Ok::<(), WireError>(()),
+            |index| {
+                let max_records = DecodeLimits::DEFAULT_MAX_RECORDS;
+                if index >= max_records {
+                    return Err(WireError::DefaultRecordLimitExceeded { max_records });
+                }
+                Ok(())
+            },
         )
     }
 
@@ -623,7 +629,19 @@ impl<D: WireDecode + WireSchema + PartialEq> WireDecode for EventLog<D> {
         cursor: &mut WireCursor<'_>,
         limits: CollectionLimits,
     ) -> Result<Self, WireError> {
-        Self::decode_wire_with_limits(cursor, limits, None)
+        Self::decode_with(
+            cursor,
+            limits,
+            DecodeLimits::default().max_records,
+            |_| {},
+            |index| {
+                let max_records = DecodeLimits::DEFAULT_MAX_RECORDS;
+                if index >= max_records {
+                    return Err(WireError::DefaultRecordLimitExceeded { max_records });
+                }
+                Ok(())
+            },
+        )
     }
 
     fn decode_wire_with_limits(

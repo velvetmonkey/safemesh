@@ -4,7 +4,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync, openSyn
 import { createServer } from 'node:http';
 // Resolution starts in the external npm consumer, never in the checkout.
 const require = createRequire(resolve(process.env.SAFEMESH_CONSUMER, 'package.json'));
-const { SafeMeshStringOrSetReplica: Set } = require('safemesh-wasm');
+const { SafeMeshStringOrSetReplica: Set, unlimitedRecords, defaultRecordLimit } = require('safemesh-wasm');
 const [dir, authorText] = process.argv.slice(2);
 const author = BigInt(authorText);
 mkdirSync(dir, { recursive: true });
@@ -26,8 +26,9 @@ function persist() {
 try {
   if (existsSync(identity)) {
     if (!existsSync(log)) throw Error('RESTART_LOG_MISSING');
+    // Reopen this process's own saved history even after a long run.
     replica = process.env.CHECKLIST_FRESH_IDENTITY === '1'
-      ? Set.createAllocated(2n, author) : Set.importIdentity(readFileSync(identity));
+      ? Set.createAllocated(2n, author) : Set.importIdentity(readFileSync(identity), unlimitedRecords());
     if (process.env.CHECKLIST_FRESH_IDENTITY !== '1' &&
         !Buffer.from(replica.logBytes()).equals(readFileSync(log))) throw Error('RESTART_LOG_MISMATCH');
   } else {
@@ -60,8 +61,9 @@ const server = createServer(async (req, res) => {
         ? replica.appendRemoveObserved(edit.item) : replica.appendAllocatedAdd(edit.item)));
       persist(); result = { records, state: state() };
     } else if (req.method === 'POST' && req.url === '/merge') {
+      // Peer supplied batches keep the ordinary record budget.
       const verdicts = body.records ? body.records.map(r => replica.mergeRecordBytes(Buffer.from(r, 'base64')))
-        : replica.mergeLogBytes(Buffer.from(body.log, 'base64'));
+        : replica.mergeLogBytes(Buffer.from(body.log, 'base64'), undefined, defaultRecordLimit());
       persist(); result = { verdicts };
     } else { res.writeHead(404); res.end(); return; }
     res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(result));

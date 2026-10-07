@@ -1,4 +1,4 @@
-import { SafeMeshGCounterReplica, SafeMeshStringOrSetReplica } from '../../../rust/crates/safemesh-wasm/pkg/safemesh_wasm'
+import { SafeMeshGCounterReplica, SafeMeshStringOrSetReplica, unlimitedRecords } from '../../../rust/crates/safemesh-wasm/pkg/safemesh_wasm'
 
 export type GCounterDelta = {
   kind: 'gcounter.bump'
@@ -698,10 +698,11 @@ function mergeRecordBytes(
 }
 
 function mergeLogBytes(
-  replica: { mergeLogBytes(bytes: Uint8Array): Array<'accepted' | 'duplicate' | 'collision'> },
+  replica: { mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number, maxRecords?: number): Array<'accepted' | 'duplicate' | 'collision'> },
   bytes: Uint8Array,
 ): void {
-  const admissions = replica.mergeLogBytes(bytes)
+  // Lab logs are generated locally; keep long running simulations readable.
+  const admissions = replica.mergeLogBytes(bytes, undefined, unlimitedRecords())
   if (admissions.includes('collision')) {
     throw new Error(`batch collision after admissions=${JSON.stringify(admissions)}`)
   }

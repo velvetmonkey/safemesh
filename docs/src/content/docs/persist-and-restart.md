@@ -678,7 +678,7 @@ and
 with `DecodeLimits { max_records: Some(SUPPORTED_MAX_RECORDS), max_collection_elements: None }`
 return
 [`LocalError::RecordLimitExceeded`](/safemesh/reference/rust/safemesh_crdt/local/enum.LocalError.html#variant.RecordLimitExceeded)
-`{ max_records: 100000 }` for a store of 100,001 records (Display: `local
+`{ max_records: 100000, default_limit: false }` for a store of 100,001 records (Display: `local
 history exceeds restart record budget: RecordLimitExceeded: 100000`)
 ([`restart_budget_opens_supported_size_and_refuses_one_more`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
 The check counts records from headers alone, a transaction frame's declared
@@ -689,15 +689,17 @@ times ([`restart_budget_opens_supported_size_and_refuses_one_more`](https://gith
 Counts are read before integrity checks, so a damaged count can be refused by
 budget; within budget, the full checked read reports the damage as a `History`
 error ([`restart_budget_refuses_before_reading_records`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs), [`restart_budget_counts_append_log_without_decoding`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
-The budget is opt-in: `restart_counter`, `restart_counter_from_store` and
-`restart_utf8_set` apply no record budget and still open a store above 100,000
-records, outside the supported size
-([`restart_budget_opens_supported_size_and_refuses_one_more`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
-SafeMesh deletes no record to get under the limit; keep a refused store, and
-restart it without the budget only if you accept costs beyond those measured
-([`restart_budget_opens_supported_size_and_refuses_one_more`](https://github.com/velvetmonkey/safemesh/blob/70b53a5658e68cccdda5823eb67d6d6fcc9a4462/rust/crates/safemesh-crdt/src/local.rs)).
-The Python and WASM bindings do not expose this Rust record budget. Their
-low-level log loaders already take `max_records`
+A stored history can consume resources for every record it contains.
+`restart_counter`, `restart_counter_from_store`, and `restart_utf8_set` now
+default to 100,000 records; a larger store returns `local history exceeds restart record budget: RecordLimitExceeded: 100000; pass DecodeLimits::UNLIMITED to reopen`
+before replay and remains unchanged. To reopen an older larger store, call the
+corresponding `_with_limits` method with `DecodeLimits::UNLIMITED`, accepting
+the unbounded record count and its resource cost. A caller supplied numeric
+`max_records` still applies exactly that budget. The cap counts records and is
+not a memory bound; payload bytes can still be large. SafeMesh deletes no
+record to get under the limit.
+The Python and WASM bindings expose their own record budgets and language-specific
+unlimited values. Their low-level log loaders take `max_records`
 ([Python binding tests](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-python/src/lib.rs), [WASM binding tests](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-wasm/src/lib.rs)).
 
 ### Not yet promised: compaction, pruning, snapshots

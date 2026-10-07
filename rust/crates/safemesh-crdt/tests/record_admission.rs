@@ -1,7 +1,127 @@
 use safemesh_crdt::{
-    Admission, AppendError, Crdt, EventLog, GCounter, GCounterDelta, PnCounter, PnCounterDelta,
-    Record, RecordId, Replica, ReplicaError, WireDecode, WireEncode,
+    Admission, AppendError, Crdt, DecodeError, DecodeLimits, EventLog, GCounter, GCounterDelta,
+    PnCounter, PnCounterDelta, Record, RecordId, Replica, ReplicaError, WireDecode, WireEncode,
+    WireError,
 };
+
+#[test]
+fn default_record_budget_is_atomic_and_unlimited_is_explicit() {
+    let n = DecodeLimits::DEFAULT_MAX_RECORDS;
+    let records: Vec<_> = (1..=n + 1).map(|i| record(i as u64, i as u64)).collect();
+    let mut over = Vec::new();
+    EventLog::encode_records(Some(2), &records, &mut over).unwrap();
+    let mut at = Vec::new();
+    EventLog::encode_records(Some(2), &records[..n], &mut at).unwrap();
+    let state = GCounter::new(2);
+    let mut replica = Replica::new(state.clone());
+    let before_state = replica.state().clone();
+    let before_log = replica.log().clone();
+    assert_eq!(
+        replica.merge_log_bytes(&over, DecodeLimits::default()),
+        Err(ReplicaError::LogDecode(DecodeError::RecordLimitExceeded {
+            max_records: n,
+        }))
+    );
+    assert_eq!(replica.state(), &before_state);
+    assert_eq!(replica.log(), &before_log);
+    assert_eq!(
+        EventLog::<GCounterDelta>::from_wire_bytes_for(&over, &state),
+        Err(WireError::DefaultRecordLimitExceeded { max_records: n })
+    );
+    assert_eq!(
+        EventLog::<GCounterDelta>::from_wire_bytes(&over),
+        Err(WireError::DefaultRecordLimitExceeded { max_records: n })
+    );
+    let refusal: WireError = EventLog::<GCounterDelta>::from_wire_bytes(&over).unwrap_err();
+    assert_eq!(
+        refusal.to_string(),
+        "RecordLimitExceeded: 100000; pass DecodeLimits::UNLIMITED to retry"
+    );
+    assert!(EventLog::<GCounterDelta>::from_wire_bytes(&at).is_ok());
+    assert!(
+        EventLog::<GCounterDelta>::from_wire_bytes_with_limits(&at, DecodeLimits::default())
+            .is_ok()
+    );
+    assert_eq!(
+        replica
+            .merge_log_bytes(&over, DecodeLimits::UNLIMITED)
+            .unwrap()
+            .len(),
+        n + 1
+    );
+    assert_eq!(
+        replica.merge_log_bytes(
+            &at,
+            DecodeLimits {
+                max_records: Some(5),
+                ..DecodeLimits::default()
+            }
+        ),
+        Err(ReplicaError::LogDecode(DecodeError::RecordLimitExceeded {
+            max_records: 5,
+        }))
+    );
+
+    macro_rules! check_limit {
+        ($loader:expr, $error:expr) => {{
+            let load = $loader;
+            assert_eq!(load(&over, DecodeLimits::default()).err(), Some($error(n)));
+            assert!(load(&at, DecodeLimits::default()).is_ok());
+            assert!(load(&over, DecodeLimits::UNLIMITED).is_ok());
+            assert_eq!(
+                load(
+                    &at,
+                    DecodeLimits {
+                        max_records: Some(5),
+                        ..DecodeLimits::default()
+                    }
+                )
+                .err(),
+                Some($error(5))
+            );
+        }};
+    }
+    check_limit!(
+        |bytes, limits| EventLog::<GCounterDelta>::from_wire_bytes_with_limits(bytes, limits),
+        |max_records| DecodeError::RecordLimitExceeded { max_records }
+    );
+    check_limit!(
+        |bytes, limits| EventLog::<GCounterDelta>::from_wire_bytes_for_with_limits(
+            bytes, &state, limits
+        ),
+        |max_records| DecodeError::RecordLimitExceeded { max_records }
+    );
+    check_limit!(
+        |bytes, limits| EventLog::<GCounterDelta>::records_from_wire_bytes_for_with_limits(
+            bytes, &state, limits
+        ),
+        |max_records| DecodeError::RecordLimitExceeded { max_records }
+    );
+    check_limit!(
+        |bytes, limits| EventLog::<GCounterDelta>::migrate_legacy_wire_bytes_for_with_limits(
+            bytes, &state, limits
+        ),
+        |max_records| DecodeError::RecordLimitExceeded { max_records }
+    );
+    check_limit!(
+        |bytes, limits| Replica::restore(state.clone(), bytes, limits),
+        |max_records| ReplicaError::LogDecode(DecodeError::RecordLimitExceeded { max_records })
+    );
+    check_limit!(
+        |bytes, limits| Replica::new(state.clone()).decode_log_bytes(bytes, limits),
+        |max_records| ReplicaError::LogDecode(DecodeError::RecordLimitExceeded { max_records })
+    );
+    assert_eq!(
+        EventLog::<GCounterDelta>::records_from_wire_bytes_for(&over, &state).err(),
+        Some(WireError::DefaultRecordLimitExceeded { max_records: n })
+    );
+    assert_eq!(
+        EventLog::<GCounterDelta>::migrate_legacy_wire_bytes_for(&over, &state).err(),
+        Some(WireError::DefaultRecordLimitExceeded { max_records: n })
+    );
+    assert!(EventLog::<GCounterDelta>::records_from_wire_bytes_for(&at, &state).is_ok());
+    assert!(EventLog::<GCounterDelta>::migrate_legacy_wire_bytes_for(&at, &state).is_ok());
+}
 
 fn record(sequence: u64, tally: u64) -> Record<GCounterDelta> {
     Record {

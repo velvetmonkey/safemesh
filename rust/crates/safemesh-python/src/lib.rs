@@ -32,6 +32,27 @@ fn collection_budget(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<usize>
     }
 }
 
+fn record_budget(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<usize>> {
+    match value {
+        None => Ok(DecodeLimits::default().max_records),
+        Some(value) if value.is_none() => Ok(DecodeLimits::default().max_records),
+        Some(value) if value.extract::<String>().ok().as_deref() == Some("unlimited") => Ok(None),
+        Some(value) => numeric(value).map(Some),
+    }
+}
+
+fn omitted_record_budget(value: Option<&Bound<'_, PyAny>>) -> bool {
+    value.is_none_or(Bound::is_none)
+}
+
+fn default_record_error(error: DecodeError, omitted: bool) -> DecodeError {
+    if omitted {
+        error.with_default_record_limit()
+    } else {
+        error
+    }
+}
+
 // Bound the domain before allocating any coordinates.
 fn numeric_replicas(value: &Bound<'_, PyAny>) -> PyResult<usize> {
     let replicas: usize = numeric(value)?;
@@ -225,19 +246,24 @@ fn collision_report_limits(
     max_collection_elements: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<DecodeLimits> {
     Ok(DecodeLimits {
-        max_records: collection_budget(max_records)?,
+        max_records: record_budget(max_records)?,
         max_collection_elements: collection_budget(max_collection_elements)?,
     })
 }
 
 fn collision_verdicts(
     verdicts: Result<Vec<(RecordId, CollisionVerdict)>, DecodeError>,
+    omitted: bool,
 ) -> PyResult<Vec<String>> {
     let verdicts = verdicts.map_err(|error| {
+        let error = default_record_error(error, omitted);
         pyo3::exceptions::PyValueError::new_err(match error {
             DecodeError::Wire(cause) => format!("failed to decode collision report: {cause}"),
             DecodeError::RecordLimitExceeded { max_records } => {
                 format!("failed to decode collision report: RecordLimitExceeded: {max_records}")
+            }
+            DecodeError::DefaultRecordLimitExceeded { max_records } => {
+                format!("failed to decode collision report: RecordLimitExceeded: {max_records}; pass sm.UNLIMITED as max_records to retry")
             }
         })
     })?;
@@ -270,12 +296,17 @@ fn replica_report_error(error: ReplicaError) -> DecodeError {
     }
 }
 
-fn bounded_event_log_decode_error(error: DecodeError, counter_log: bool) -> PyErr {
-    match error {
+fn bounded_event_log_decode_error(error: DecodeError, counter_log: bool, omitted: bool) -> PyErr {
+    match default_record_error(error, omitted) {
         DecodeError::Wire(error) => event_log_decode_error(error, counter_log),
         DecodeError::RecordLimitExceeded { max_records } => {
             pyo3::exceptions::PyValueError::new_err(format!(
                 "failed to decode event log: RecordLimitExceeded: {max_records}"
+            ))
+        }
+        DecodeError::DefaultRecordLimitExceeded { max_records } => {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "failed to decode event log: RecordLimitExceeded: {max_records}; pass sm.UNLIMITED as max_records to retry"
             ))
         }
     }
@@ -755,7 +786,8 @@ mod py_g_counter_replica_python {
             bytes: &[u8],
             max_records: Option<&Bound<'_, PyAny>>,
         ) -> PyResult<Vec<String>> {
-            let max_records = collection_budget(max_records)?;
+            let omitted = omitted_record_budget(max_records);
+            let max_records = record_budget(max_records)?;
             let limits = DecodeLimits {
                 max_records,
                 ..DecodeLimits::default()
@@ -763,7 +795,9 @@ mod py_g_counter_replica_python {
             let log = self
                 .replica
                 .decode_log_bytes(bytes, limits)
-                .map_err(|error| bounded_event_log_decode_error(replica_log_error(error), true))?;
+                .map_err(|error| {
+                    bounded_event_log_decode_error(replica_log_error(error), true, omitted)
+                })?;
             if log.iter().any(|r| {
                 safemesh_crdt::ownership::check_counter_record(
                     self.replica.state().len(),
@@ -830,6 +864,7 @@ mod py_g_counter_replica_python {
                 self.replica
                     .merge_collision_report_bytes(bytes, limits)
                     .map_err(replica_report_error),
+                omitted_record_budget(max_records),
             )
         }
 
@@ -943,7 +978,8 @@ mod py_enable_wins_flag_replica_python {
             bytes: &[u8],
             max_records: Option<&Bound<'_, PyAny>>,
         ) -> PyResult<Vec<String>> {
-            let max_records = collection_budget(max_records)?;
+            let omitted = omitted_record_budget(max_records);
+            let max_records = record_budget(max_records)?;
             let limits = DecodeLimits {
                 max_records,
                 ..DecodeLimits::default()
@@ -954,7 +990,7 @@ mod py_enable_wins_flag_replica_python {
                     &self.state,
                     limits,
                 )
-                .map_err(|error| bounded_event_log_decode_error(error, false))?;
+                .map_err(|error| bounded_event_log_decode_error(error, false, omitted))?;
             Ok(log
                 .iter()
                 .cloned()
@@ -1001,7 +1037,10 @@ mod py_enable_wins_flag_replica_python {
             max_collection_elements: Option<&Bound<'_, PyAny>>,
         ) -> PyResult<Vec<String>> {
             let limits = collision_report_limits(max_records, max_collection_elements)?;
-            collision_verdicts(self.log.merge_collision_report_bytes(bytes, limits))
+            collision_verdicts(
+                self.log.merge_collision_report_bytes(bytes, limits),
+                omitted_record_budget(max_records),
+            )
         }
 
         pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
@@ -1130,7 +1169,8 @@ mod py_lww_map_replica_python {
             bytes: &[u8],
             max_records: Option<&Bound<'_, PyAny>>,
         ) -> PyResult<Vec<String>> {
-            let max_records = collection_budget(max_records)?;
+            let omitted = omitted_record_budget(max_records);
+            let max_records = record_budget(max_records)?;
             let limits = DecodeLimits {
                 max_records,
                 ..DecodeLimits::default()
@@ -1140,7 +1180,7 @@ mod py_lww_map_replica_python {
                 &self.state,
                 limits,
             )
-            .map_err(|error| bounded_event_log_decode_error(error, false))?;
+            .map_err(|error| bounded_event_log_decode_error(error, false, omitted))?;
             Ok(log
                 .iter()
                 .cloned()
@@ -1187,7 +1227,10 @@ mod py_lww_map_replica_python {
             max_collection_elements: Option<&Bound<'_, PyAny>>,
         ) -> PyResult<Vec<String>> {
             let limits = collision_report_limits(max_records, max_collection_elements)?;
-            collision_verdicts(self.log.merge_collision_report_bytes(bytes, limits))
+            collision_verdicts(
+                self.log.merge_collision_report_bytes(bytes, limits),
+                omitted_record_budget(max_records),
+            )
         }
 
         pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
@@ -1296,7 +1339,8 @@ mod py_lww_register_replica_python {
             bytes: &[u8],
             max_records: Option<&Bound<'_, PyAny>>,
         ) -> PyResult<Vec<String>> {
-            let max_records = collection_budget(max_records)?;
+            let omitted = omitted_record_budget(max_records);
+            let max_records = record_budget(max_records)?;
             let limits = DecodeLimits {
                 max_records,
                 ..DecodeLimits::default()
@@ -1306,7 +1350,7 @@ mod py_lww_register_replica_python {
                 &self.state,
                 limits,
             )
-            .map_err(|error| bounded_event_log_decode_error(error, false))?;
+            .map_err(|error| bounded_event_log_decode_error(error, false, omitted))?;
             Ok(log
                 .iter()
                 .cloned()
@@ -1353,7 +1397,10 @@ mod py_lww_register_replica_python {
             max_collection_elements: Option<&Bound<'_, PyAny>>,
         ) -> PyResult<Vec<String>> {
             let limits = collision_report_limits(max_records, max_collection_elements)?;
-            collision_verdicts(self.log.merge_collision_report_bytes(bytes, limits))
+            collision_verdicts(
+                self.log.merge_collision_report_bytes(bytes, limits),
+                omitted_record_budget(max_records),
+            )
         }
 
         pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
@@ -1389,6 +1436,8 @@ mod py_lww_register_replica_python {
 
 #[pymodule]
 fn safemesh_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("UNLIMITED", "unlimited")?;
+    m.add("DEFAULT_MAX_RECORDS", DecodeLimits::DEFAULT_MAX_RECORDS)?;
     m.add_class::<PyGCounter>()?;
     m.add_class::<PyOrSet>()?;
     m.add_class::<PyStringOrSetReplica>()?;
@@ -1491,8 +1540,8 @@ fn string_orset_record_decode_error(error: WireError) -> String {
     }
 }
 
-fn string_orset_log_decode_error(error: DecodeError) -> String {
-    match error {
+fn string_orset_log_decode_error(error: DecodeError, omitted: bool) -> String {
+    match default_record_error(error, omitted) {
         DecodeError::Wire(WireError::CollectionElementLimitExceeded { max_elements }) => {
             format!("maxCollectionElements limit exceeded: {max_elements}")
         }
@@ -1505,6 +1554,9 @@ fn string_orset_log_decode_error(error: DecodeError) -> String {
         DecodeError::Wire(cause) => format!("failed to decode event log: {cause}"),
         DecodeError::RecordLimitExceeded { max_records } => {
             format!("failed to decode event log: RecordLimitExceeded: {max_records}")
+        }
+        DecodeError::DefaultRecordLimitExceeded { max_records } => {
+            format!("failed to decode event log: RecordLimitExceeded: {max_records}; pass sm.UNLIMITED as max_records to retry")
         }
     }
 }
@@ -1741,7 +1793,16 @@ impl PyStringOrSetReplica {
         Ok(bytes)
     }
 
+    #[cfg(test)]
     fn try_import_identity(bytes: &[u8]) -> Result<Self, String> {
+        Self::try_import_identity_with_limits(bytes, DecodeLimits::default(), true)
+    }
+
+    fn try_import_identity_with_limits(
+        bytes: &[u8],
+        limits: DecodeLimits,
+        omitted: bool,
+    ) -> Result<Self, String> {
         if bytes.len() < 29 || &bytes[..5] != b"SMOI\x01" {
             return Err("allocation/history consistency: invalid identity storage".to_owned());
         }
@@ -1752,9 +1813,8 @@ impl PyStringOrSetReplica {
         };
         let (writers, author, next) = (word(5), word(13), word(21));
         let mut candidate = Self::unallocated(author);
-        candidate.replica =
-            Replica::restore(OrSet::new(), &bytes[29..], DecodeLimits::default())
-                .map_err(|error| string_orset_log_decode_error(replica_log_error(error)))?;
+        candidate.replica = Replica::restore(OrSet::new(), &bytes[29..], limits)
+            .map_err(|error| string_orset_log_decode_error(replica_log_error(error), omitted))?;
         if candidate.checked_next(writers)? != next {
             return Err("allocation/history consistency: next sequence mismatch".to_owned());
         }
@@ -1822,11 +1882,22 @@ impl PyStringOrSetReplica {
         record_verdict_text(self.replica.admit(record))
     }
 
+    #[cfg(test)]
     fn try_merge_log_bytes(
         &mut self,
         bytes: &[u8],
         max_records: Option<usize>,
         max_collection_elements: Option<usize>,
+    ) -> Result<Vec<String>, String> {
+        self.try_merge_log_bytes_with_provenance(bytes, max_records, max_collection_elements, false)
+    }
+
+    fn try_merge_log_bytes_with_provenance(
+        &mut self,
+        bytes: &[u8],
+        max_records: Option<usize>,
+        max_collection_elements: Option<usize>,
+        omitted: bool,
     ) -> Result<Vec<String>, String> {
         let log = self
             .replica
@@ -1837,7 +1908,7 @@ impl PyStringOrSetReplica {
                     max_collection_elements,
                 },
             )
-            .map_err(|error| string_orset_log_decode_error(replica_log_error(error)))?;
+            .map_err(|error| string_orset_log_decode_error(replica_log_error(error), omitted))?;
         // Every record passes the ownership check before any is admitted.
         for record in &log {
             self.check_incoming(record)?;
@@ -1919,8 +1990,17 @@ mod py_string_or_set_replica_python {
         /// fresh writer. A self-consistent stale snapshot is not detected.
         /// There is no disk I/O.
         #[staticmethod]
-        pub fn import_identity(bytes: &[u8]) -> PyResult<Self> {
-            Self::try_import_identity(bytes).map_err(py_value_error)
+        #[pyo3(signature = (bytes, *, max_records = None))]
+        pub fn import_identity(
+            bytes: &[u8],
+            max_records: Option<&Bound<'_, PyAny>>,
+        ) -> PyResult<Self> {
+            let limits = DecodeLimits {
+                max_records: record_budget(max_records)?,
+                ..DecodeLimits::default()
+            };
+            Self::try_import_identity_with_limits(bytes, limits, omitted_record_budget(max_records))
+                .map_err(py_value_error)
         }
 
         /// Append an add record for `(element, token)` and return its wire bytes.
@@ -1975,10 +2055,16 @@ mod py_string_or_set_replica_python {
             max_records: Option<&Bound<'_, PyAny>>,
             max_collection_elements: Option<&Bound<'_, PyAny>>,
         ) -> PyResult<Vec<String>> {
-            let max_records = collection_budget(max_records)?;
+            let omitted = omitted_record_budget(max_records);
+            let max_records = record_budget(max_records)?;
             let max_collection_elements = collection_budget(max_collection_elements)?;
-            self.try_merge_log_bytes(bytes, max_records, max_collection_elements)
-                .map_err(py_value_error)
+            self.try_merge_log_bytes_with_provenance(
+                bytes,
+                max_records,
+                max_collection_elements,
+                omitted,
+            )
+            .map_err(py_value_error)
         }
 
         pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
@@ -2025,6 +2111,7 @@ mod py_string_or_set_replica_python {
                 self.replica
                     .merge_collision_report_bytes(bytes, limits)
                     .map_err(replica_report_error),
+                omitted_record_budget(max_records),
             )
         }
 
@@ -2706,6 +2793,21 @@ for make, append, read in [
         except ValueError: pass
         else: raise AssertionError('accepted trailing bytes')
         assert untouched.log_bytes()==before
+    large=occurrences(sender.log_bytes(), [0]*(sm.DEFAULT_MAX_RECORDS+1))
+    at=occurrences(sender.log_bytes(), [0]*sm.DEFAULT_MAX_RECORDS)
+    target=make(); before=target.log_bytes(); state_before=read(target)
+    try: target.merge_log_bytes(large)
+    except ValueError as error:
+        assert str(error) == f'failed to decode event log: RecordLimitExceeded: {sm.DEFAULT_MAX_RECORDS}; pass sm.UNLIMITED as max_records to retry'
+    else: raise AssertionError('omitted record budget accepted record 100001')
+    assert target.log_bytes()==before and read(target)==state_before
+    assert len(target.merge_log_bytes(at))==sm.DEFAULT_MAX_RECORDS
+    unlimited=make()
+    assert len(unlimited.merge_log_bytes(large, max_records=sm.UNLIMITED))==sm.DEFAULT_MAX_RECORDS+1
+    limited=make()
+    try: limited.merge_log_bytes(at, max_records=5)
+    except ValueError as error: assert str(error) == 'failed to decode event log: RecordLimitExceeded: 5'
+    else: raise AssertionError('caller budget was lost')
 "#, Some(&globals), None).unwrap();
         });
     }

@@ -99,13 +99,19 @@ let log = EventLog::<GSet<u64>>::from_wire_bytes_with_limits(
 assert_eq!(log.records().len(), 1);
 ```
 
-Python `merge_log_bytes(max_records=n)` and WASM `mergeLogBytes(bytes, undefined, n)`
-limit top-level input records before admission.
+An unchecked history can spend time and memory on every record it contains.
+Rust, Python, and WASM log loaders default to 100,000 record occurrences;
+record 100,001 returns `RecordLimitExceeded` before admission and leaves the
+destination unchanged. Pass `DecodeLimits::UNLIMITED`, Python
+`max_records=safemesh_python.UNLIMITED`, or WASM
+`mergeLogBytes(bytes, undefined, unlimitedRecords())` to restore the old
+unbounded record count, accepting its resource cost. Explicit caller budgets
+still apply: Python `max_records=n` or WASM `mergeLogBytes(bytes, undefined, n)`.
 Rust legacy migration accepts `migrate_legacy_wire_bytes_for_with_limits(bytes,
 state, DecodeLimits { max_records: Some(n), ..DecodeLimits::default() })`.
-WASM `SafeMeshStringOrSetReplica.importIdentity(bytes, n)` bounds the saved
-history before creating a live writer. Omitting either budget retains the
-previous unbounded behavior.
+WASM `SafeMeshStringOrSetReplica.importIdentity(bytes, n)` bounds saved history
+before creating a live writer. The cap counts records and is not a memory bound;
+bytes and payload complexity need a separate application policy.
 
 For a destination CRDT, use `EventLog::from_wire_bytes_for_with_limits`
 to validate its shape before replay. `None` for `max_collection_elements`

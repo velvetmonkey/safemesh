@@ -63,6 +63,7 @@ pub enum LocalError {
     /// from the frame header before any record is read; the store is unchanged.
     RecordLimitExceeded {
         max_records: usize,
+        default_limit: bool,
     },
 }
 
@@ -86,10 +87,10 @@ impl core::fmt::Display for LocalError {
             }
             Self::AncestorSync { path, source } => write!(f, "AncestorSync: cannot sync store ancestor {}: {source}", path.display()),
             Self::Io(error) => write!(f, "local store I/O failed: {error}"),
-            Self::RecordLimitExceeded { max_records } => write!(
-                f,
-                "local history exceeds restart record budget: RecordLimitExceeded: {max_records}"
-            ),
+            Self::RecordLimitExceeded { max_records, default_limit } => {
+                write!(f, "local history exceeds restart record budget: RecordLimitExceeded: {max_records}")?;
+                if *default_limit { f.write_str("; pass DecodeLimits::UNLIMITED to reopen") } else { Ok(()) }
+            }
         }
     }
 }
@@ -733,9 +734,9 @@ fn declared_journal_records<D: WireSchema>(
 /// retained forever and restart replays all of them, so restart time and memory
 /// grow with this size, as does the append cost of a store not yet migrated to
 /// the append log; `evidence/retention/results.md` records the benchmark that
-/// sets it. Pass it as [`DecodeLimits::max_records`](crate::DecodeLimits)
-/// to a `_with_limits` restart to refuse larger stores by name.
-pub const SUPPORTED_MAX_RECORDS: usize = 100_000;
+/// sets it. Ordinary restarts use this as their record cap; `_with_limits`
+/// accepts a caller budget or [`DecodeLimits::UNLIMITED`](crate::DecodeLimits).
+pub const SUPPORTED_MAX_RECORDS: usize = crate::DecodeLimits::DEFAULT_MAX_RECORDS;
 
 /// Additive durable API for Linux local filesystems. Fresh constructors create
 /// a missing root; the root must then remain in place. All writers use the same
@@ -978,7 +979,7 @@ where
     C::Delta: OwnedDelta + Clone + PartialEq + WireEncode + WireDecode + WireSchema,
 {
     fn restart(root: &Path, config: WriterConfig, state: C) -> Result<Self, LocalError> {
-        Self::restart_with_limits(root, config, state, crate::DecodeLimits::default())
+        Self::restart_with_limit_origin(root, config, state, crate::DecodeLimits::default(), true)
     }
 
     // `max_collection_elements: None` keeps the ordinary stored-byte budget below.
@@ -988,10 +989,20 @@ where
         state: C,
         limits: crate::DecodeLimits,
     ) -> Result<Self, LocalError> {
+        Self::restart_with_limit_origin(root, config, state, limits, false)
+    }
+
+    fn restart_with_limit_origin(
+        root: &Path,
+        config: WriterConfig,
+        state: C,
+        limits: crate::DecodeLimits,
+        default_limit: bool,
+    ) -> Result<Self, LocalError> {
         config.validate().map_err(|_| LocalError::Configuration)?;
         let root = root.canonicalize()?;
         let fence = Self::lock_restart_fence(&root, config.writer)?;
-        Self::restart_locked(&root, fence, config, state, limits)
+        Self::restart_locked(&root, fence, config, state, limits, default_limit)
     }
 
     fn lock_restart_fence(root: &Path, writer: u64) -> Result<RestartFence, LocalError> {
@@ -1021,6 +1032,7 @@ where
         config: WriterConfig,
         state: C,
         limits: crate::DecodeLimits,
+        default_limit: bool,
     ) -> Result<Self, LocalError> {
         let mut bytes = Vec::new();
         fence.file().read_to_end(&mut bytes)?;
@@ -1047,13 +1059,20 @@ where
                 Format::Journal => declared_journal_records::<C::Delta>(root, config, max_records)?,
             };
             if declared.is_some_and(|records| records > max_records) {
-                return Err(LocalError::RecordLimitExceeded { max_records });
+                return Err(LocalError::RecordLimitExceeded {
+                    max_records,
+                    default_limit,
+                });
             }
         }
         let decode_error = |error| match error {
             crate::DecodeError::Wire(error) => LocalError::History(error),
-            crate::DecodeError::RecordLimitExceeded { max_records } => {
-                LocalError::RecordLimitExceeded { max_records }
+            crate::DecodeError::RecordLimitExceeded { max_records }
+            | crate::DecodeError::DefaultRecordLimitExceeded { max_records } => {
+                LocalError::RecordLimitExceeded {
+                    max_records,
+                    default_limit,
+                }
             }
         };
         // The history's bytes are already in memory. Every wire collection
@@ -1102,7 +1121,10 @@ where
                 .map_err(decode_error)?;
                 if let Some(max_records) = max_records {
                     if log.records().len() + parsed.entries.len() > max_records {
-                        return Err(LocalError::RecordLimitExceeded { max_records });
+                        return Err(LocalError::RecordLimitExceeded {
+                            max_records,
+                            default_limit,
+                        });
                     }
                 }
                 let entries = parsed
@@ -1208,7 +1230,8 @@ where
             let bytes = fs::read(&path)?;
             let parsed = journal::parse(&bytes, config)?;
             let limits = crate::DecodeLimits {
-                max_records: None,
+                // Recovery comparison must inspect both complete stored histories.
+                max_records: crate::DecodeLimits::UNLIMITED.max_records,
                 max_collection_elements: Some(bytes.len().max(4096)),
             };
             let decode = |frame| {
@@ -1225,7 +1248,8 @@ where
             fs::remove_file(&transaction)?;
             File::open(&root)?.sync_all()?;
         }
-        let mut replica = Self::restart_locked(&root, fence, config, state, Default::default())?;
+        let mut replica =
+            Self::restart_locked(&root, fence, config, state, Default::default(), true)?;
         if let Store::Transaction(_) = replica.store {
             let header = journal::header(
                 config,
@@ -1269,7 +1293,13 @@ impl DurableReplica<GCounter> {
     /// Reacquire ownership, validate the committed history and replay fresh state.
     /// Any error returns no replica and grants no write ticket.
     pub fn restart_counter(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
-        Self::restart_counter_with_limits(root, config, crate::DecodeLimits::default())
+        config.validate().map_err(|_| LocalError::Configuration)?;
+        let n = usize::try_from(config.writers).map_err(|_| LocalError::Configuration)?;
+        Self::restart(
+            root,
+            config,
+            GCounter::try_new(n).map_err(LocalError::CounterWidth)?,
+        )
     }
     /// [`restart_counter`](Self::restart_counter) with a restart budget.
     /// `limits.max_records` refuses a history declaring more records with
@@ -1293,7 +1323,12 @@ impl DurableReplica<GCounter> {
     /// Reacquire the writer, read its committed writer count, then run checked replay.
     /// The root must already contain a durable counter store for this writer.
     pub fn restart_counter_from_store(root: &Path, writer: u64) -> Result<Self, LocalError> {
-        Self::restart_counter_from_store_with_limits(root, writer, crate::DecodeLimits::default())
+        Self::restart_counter_from_store_with_origin(
+            root,
+            writer,
+            crate::DecodeLimits::default(),
+            true,
+        )
     }
     /// [`restart_counter_from_store`](Self::restart_counter_from_store) with the
     /// restart budget of [`restart_counter_with_limits`](Self::restart_counter_with_limits).
@@ -1301,6 +1336,15 @@ impl DurableReplica<GCounter> {
         root: &Path,
         writer: u64,
         limits: crate::DecodeLimits,
+    ) -> Result<Self, LocalError> {
+        Self::restart_counter_from_store_with_origin(root, writer, limits, false)
+    }
+
+    fn restart_counter_from_store_with_origin(
+        root: &Path,
+        writer: u64,
+        limits: crate::DecodeLimits,
+        default_limit: bool,
     ) -> Result<Self, LocalError> {
         let root = root.canonicalize()?;
         let fence = Self::lock_restart_fence(&root, writer)?;
@@ -1341,6 +1385,7 @@ impl DurableReplica<GCounter> {
             config,
             GCounter::try_new(n).map_err(LocalError::CounterWidth)?,
             limits,
+            default_limit,
         )
     }
     /// Explicitly move a counter store written before the append log
@@ -1412,7 +1457,7 @@ impl DurableReplica<OrSet<String, u64>> {
             config,
             OrSet::new(),
             crate::DecodeLimits {
-                max_records: None,
+                max_records: crate::DecodeLimits::default().max_records,
                 max_collection_elements: Some(max_elements),
             },
         )
@@ -2804,13 +2849,17 @@ mod durable_tests {
         max_records: usize,
     ) {
         match result {
-            Err(error @ LocalError::RecordLimitExceeded { max_records: named }) => {
+            Err(
+                error @ LocalError::RecordLimitExceeded {
+                    max_records: named,
+                    default_limit,
+                },
+            ) => {
                 assert_eq!(named, max_records);
                 assert_eq!(
                     error.to_string(),
-                    format!(
-                        "local history exceeds restart record budget: RecordLimitExceeded: {max_records}"
-                    )
+                    format!("local history exceeds restart record budget: RecordLimitExceeded: {max_records}{}",
+                        if default_limit { "; pass DecodeLimits::UNLIMITED to reopen" } else { "" })
                 );
             }
             Err(other) => panic!("expected RecordLimitExceeded, got {other:?}"),
@@ -2839,6 +2888,13 @@ mod durable_tests {
             DurableReplica::restart_counter_with_limits(&root, config(), budget(N)),
             N,
         );
+        let explicit = DurableReplica::restart_counter_with_limits(&root, config(), budget(N))
+            .err()
+            .unwrap();
+        assert_eq!(
+            explicit.to_string(),
+            format!("local history exceeds restart record budget: RecordLimitExceeded: {N}")
+        );
         assert_refused_by_name(
             DurableReplica::restart_counter_from_store_with_limits(&root, 0, budget(N)),
             N,
@@ -2848,12 +2904,28 @@ mod durable_tests {
             before,
             "refusal leaves the store untouched"
         );
-        // Keep forever: the budget is the caller's; without it the store opens.
-        let reopened = DurableReplica::restart_counter(&root, config()).unwrap();
+        assert_refused_by_name(DurableReplica::restart_counter(&root, config()), N);
+        let default = DurableReplica::restart_counter(&root, config())
+            .err()
+            .unwrap();
+        assert_eq!(default.to_string(), format!("local history exceeds restart record budget: RecordLimitExceeded: {N}; pass DecodeLimits::UNLIMITED to reopen"));
+        assert_refused_by_name(DurableReplica::restart_counter_from_store(&root, 0), N);
+        // Explicit unlimited preserves access to older, oversized histories.
+        let reopened = DurableReplica::restart_counter_with_limits(
+            &root,
+            config(),
+            crate::DecodeLimits::UNLIMITED,
+        )
+        .unwrap();
         assert_eq!(reopened.log().records().len(), N + 1);
         assert_eq!(reopened.state().value(), N as u128 + 1);
         drop(reopened);
-        let reopened = DurableReplica::restart_counter_from_store(&root, 0).unwrap();
+        let reopened = DurableReplica::restart_counter_from_store_with_limits(
+            &root,
+            0,
+            crate::DecodeLimits::UNLIMITED,
+        )
+        .unwrap();
         assert_eq!(reopened.log().records().len(), N + 1);
 
         // UTF-8 OR-Set: the same boundary through one more durable add.
@@ -2877,8 +2949,38 @@ mod durable_tests {
             before,
             "refusal leaves the store untouched"
         );
-        let reopened = DurableReplica::restart_utf8_set(&root, config()).unwrap();
+        assert_refused_by_name(DurableReplica::restart_utf8_set(&root, config()), N);
+        // Explicit unlimited preserves access to this older, oversized set.
+        let reopened = DurableReplica::restart_utf8_set_with_limits(
+            &root,
+            config(),
+            crate::DecodeLimits::UNLIMITED,
+        )
+        .unwrap();
         assert_eq!(reopened.log().records().len(), N + 1);
+    }
+    #[test]
+    fn persisted_150000_record_history_requires_explicit_unlimited_on_restart() {
+        const N: usize = 150_000;
+        let root = self::root();
+        let fresh = DurableReplica::counter(&root, config()).unwrap();
+        drop(seeded(&root, fresh, N, |inner, index| {
+            inner.bump(inner.ticket(), index + 1).unwrap();
+        }));
+        let before = store_files(&root);
+        assert_refused_by_name(
+            DurableReplica::restart_counter(&root, config()),
+            crate::DecodeLimits::DEFAULT_MAX_RECORDS,
+        );
+        assert_eq!(store_files(&root), before);
+        let reopened = DurableReplica::restart_counter_with_limits(
+            &root,
+            config(),
+            crate::DecodeLimits::UNLIMITED,
+        )
+        .unwrap();
+        assert_eq!(reopened.log().records().len(), N);
+        assert_eq!(reopened.state().value(), N as u128);
     }
     #[test]
     fn restart_budget_refuses_before_reading_records() {

@@ -486,16 +486,16 @@ delta schema, and retains the saved arity; it does not apply records to a CRDT.
 The Python/WASM replica loaders and the `m2slice` persistence example use the
 destination-aware decoder.
 
-Rust callers can opt into `EventLog::from_wire_bytes_with_limits(bytes,
-DecodeLimits { max_records: Some(n) })`. The budget counts top-level record
-occurrences, including duplicates, and returns `DecodeError::RecordLimitExceeded`
-before decoding occurrence n+1; no partial log is returned. `DecodeLimits::default()`
-is unbounded and preserves existing output and wire errors (wrapped in
-`DecodeError::Wire`). Existing Rust loaders retain their signatures and behavior.
-This inert decoder checks the saved schema but does not validate a destination
-CRDT. The limit does not cap bytes, nested records, or payload collection entries;
-CRC verification still scans the whole frame.
-Python `merge_log_bytes` and WASM `mergeLogBytes` expose an optional record budget.
+Loading an unchecked history can spend time and memory on every record it contains.
+`DecodeLimits::default()` caps each log at 100,000 record occurrences, including
+duplicates; occurrence 100,001 returns `RecordLimitExceeded` before replay, with
+no partial state change. Pass `DecodeLimits::UNLIMITED` to accept larger logs as
+older releases did, accepting their unbounded record count and resource cost.
+An explicit `DecodeLimits { max_records: Some(n), ..DecodeLimits::default() }`
+still applies the caller's budget. This inert decoder checks the saved schema
+but does not validate a destination CRDT. The record cap is not a memory bound:
+it does not cap bytes or payload size; CRC verification still scans the frame.
+Python `merge_log_bytes` and WASM `mergeLogBytes` use the same default.
 
 `0x03` files written before the shape header return
 `WireError::LegacyEventLogFrame { found: LegacyFrame::Tag03Unshaped }`, not
@@ -546,7 +546,9 @@ For untrusted history, use `migrate_legacy_wire_bytes_for_with_limits(&old_bytes
 &state, DecodeLimits { max_records: Some(n), ..DecodeLimits::default() })`.
 The budget counts every input occurrence, including duplicates, and refuses
 before decoding record `n + 1`. It also applies when the input is already a
-current shaped frame. The original call remains unbounded.
+current shaped frame. The original call now uses the 100,000-record default;
+the `_with_limits` call accepts `DecodeLimits::UNLIMITED` when the caller
+explicitly accepts a larger history and its resource cost.
 
 Or from a checkout, without writing Rust:
 

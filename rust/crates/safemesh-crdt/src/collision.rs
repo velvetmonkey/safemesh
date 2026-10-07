@@ -188,7 +188,13 @@ impl<D: WireDecode + WireSchema> WireDecode for CollisionReport<D> {
         cursor: &mut WireCursor<'_>,
         limits: CollectionLimits,
     ) -> Result<Self, WireError> {
-        Self::decode_wire_with_limits(cursor, limits, None)
+        Self::decode_limited(
+            cursor,
+            limits,
+            DecodeLimits::default().max_records,
+            DecodeLimits::default().max_records,
+        )
+        .map_err(|error| WireError::from(error.with_default_record_limit()))
     }
 
     fn decode_wire_with_limits(
@@ -199,7 +205,8 @@ impl<D: WireDecode + WireSchema> WireDecode for CollisionReport<D> {
         Self::decode_limited(cursor, collections, max_records, max_records).map_err(|error| {
             match error {
                 DecodeError::Wire(error) => error,
-                DecodeError::RecordLimitExceeded { max_records } => {
+                DecodeError::RecordLimitExceeded { max_records }
+                | DecodeError::DefaultRecordLimitExceeded { max_records } => {
                     WireError::NestedRecordLimitExceeded { max_records }
                 }
             }

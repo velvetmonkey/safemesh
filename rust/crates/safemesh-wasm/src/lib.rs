@@ -176,16 +176,43 @@ fn record_decode_js_error(error: WireError) -> JsValue {
     }
 }
 
+/// Explicitly disable the default record ceiling for a log load.
+/// A frame cannot declare this many records, so this preserves the old
+/// behavior for every representable frame.
+pub const UNLIMITED_RECORDS: u32 = u32::MAX;
+
+#[wasm_bindgen(js_name = unlimitedRecords)]
+pub fn unlimited_records() -> u32 {
+    UNLIMITED_RECORDS
+}
+
+#[wasm_bindgen(js_name = defaultRecordLimit)]
+pub fn default_record_limit() -> u32 {
+    DecodeLimits::DEFAULT_MAX_RECORDS as u32
+}
+
 fn decode_limits(value: Option<u32>, max_records: Option<u32>) -> DecodeLimits {
     DecodeLimits {
         max_collection_elements: value.map(|value| value as usize),
-        max_records: max_records.map(|value| value as usize),
+        max_records: match max_records {
+            Some(value) if value == UNLIMITED_RECORDS => None,
+            Some(value) => Some(value as usize),
+            None => DecodeLimits::default().max_records,
+        },
+    }
+}
+
+fn default_record_error(error: DecodeError, omitted: bool) -> DecodeError {
+    if omitted {
+        error.with_default_record_limit()
+    } else {
+        error
     }
 }
 
 // Counter ownership covers coordinates; other carriers name the record writer.
-fn event_log_decode_js_error(error: DecodeError, counter_log: bool) -> JsValue {
-    match error {
+fn event_log_decode_js_error(error: DecodeError, counter_log: bool, omitted: bool) -> JsValue {
+    match default_record_error(error, omitted) {
         DecodeError::Wire(WireError::OwnershipViolation) => safe_mesh_error(
             2,
             if counter_log {
@@ -211,6 +238,10 @@ fn event_log_decode_js_error(error: DecodeError, counter_log: bool) -> JsValue {
         DecodeError::RecordLimitExceeded { max_records } => safe_mesh_error(
             1,
             &format!("failed to decode event log: RecordLimitExceeded: {max_records}"),
+        ),
+        DecodeError::DefaultRecordLimitExceeded { max_records } => safe_mesh_error(
+            1,
+            &format!("failed to decode event log: RecordLimitExceeded: {max_records}; pass unlimitedRecords() as maxRecords to retry"),
         ),
         DecodeError::Wire(cause) => {
             safe_mesh_error(1, &format!("failed to decode event log: {cause}"))
@@ -391,7 +422,7 @@ where
 
 fn since_js_error(error: ReplicaError, counter_log: bool) -> JsValue {
     match error {
-        ReplicaError::LogDecode(error) => event_log_decode_js_error(error, counter_log),
+        ReplicaError::LogDecode(error) => event_log_decode_js_error(error, counter_log, false),
         _ => safe_mesh_error(1, "failed to encode event log"),
     }
 }
@@ -529,8 +560,9 @@ fn record_collisions<D: Clone + WireEncode>(
 
 fn collision_verdicts(
     verdicts: Result<Vec<(RecordId, CollisionVerdict)>, DecodeError>,
+    omitted: bool,
 ) -> Result<Vec<String>, JsValue> {
-    let verdicts = verdicts.map_err(|error| match error {
+    let verdicts = verdicts.map_err(|error| match default_record_error(error, omitted) {
         DecodeError::Wire(WireError::CollectionElementLimitExceeded { max_elements }) => {
             safe_mesh_error(
                 3,
@@ -543,6 +575,10 @@ fn collision_verdicts(
         DecodeError::RecordLimitExceeded { max_records } => safe_mesh_error(
             1,
             &format!("failed to decode collision report: RecordLimitExceeded: {max_records}"),
+        ),
+        DecodeError::DefaultRecordLimitExceeded { max_records } => safe_mesh_error(
+            1,
+            &format!("failed to decode collision report: RecordLimitExceeded: {max_records}; pass unlimitedRecords() as maxRecords to retry"),
         ),
     })?;
     Ok(verdicts
@@ -604,7 +640,7 @@ macro_rules! collision_alarm_methods {
                 let $that = self;
                 let $bytes = bytes;
                 let $limits = decode_limits(max_collection_elements, maxRecords);
-                collision_verdicts($merge)
+                collision_verdicts($merge, maxRecords.is_none())
             }
         }
     };
@@ -1043,7 +1079,9 @@ impl SafeMeshGCounterReplica {
             .replica
             .decode_log_bytes(bytes, decode_limits(max_collection_elements, maxRecords))
             .map_err(|e| match e {
-                ReplicaError::LogDecode(e) => event_log_decode_js_error(e, true),
+                ReplicaError::LogDecode(e) => {
+                    event_log_decode_js_error(e, true, maxRecords.is_none())
+                }
                 _ => unreachable!(),
             })?;
         if log.iter().any(|r| {
@@ -1199,7 +1237,7 @@ impl SafeMeshEnableWinsFlagReplica {
             &self.state,
             decode_limits(max_collection_elements, maxRecords),
         )
-        .map_err(|error| event_log_decode_js_error(error, false))?;
+        .map_err(|error| event_log_decode_js_error(error, false, maxRecords.is_none()))?;
         Ok(log
             .iter()
             .cloned()
@@ -1342,7 +1380,7 @@ impl SafeMeshLwwMapReplica {
             &self.state,
             decode_limits(max_collection_elements, maxRecords),
         )
-        .map_err(|error| event_log_decode_js_error(error, false))?;
+        .map_err(|error| event_log_decode_js_error(error, false, maxRecords.is_none()))?;
         Ok(log
             .iter()
             .cloned()
@@ -1483,7 +1521,7 @@ impl SafeMeshLwwRegisterReplica {
             &self.state,
             decode_limits(max_collection_elements, maxRecords),
         )
-        .map_err(|error| event_log_decode_js_error(error, false))?;
+        .map_err(|error| event_log_decode_js_error(error, false, maxRecords.is_none()))?;
         Ok(log
             .iter()
             .cloned()
@@ -1659,12 +1697,16 @@ fn event_log_decode_error(error: safemesh_crdt::WireError) -> BindingError {
     )
 }
 
-fn bounded_event_log_decode_error(error: DecodeError) -> BindingError {
-    match error {
+fn bounded_event_log_decode_error(error: DecodeError, omitted: bool) -> BindingError {
+    match default_record_error(error, omitted) {
         DecodeError::Wire(error) => event_log_decode_error(error),
         DecodeError::RecordLimitExceeded { max_records } => binding_error(
             1,
             format!("failed to decode event log: RecordLimitExceeded: {max_records}"),
+        ),
+        DecodeError::DefaultRecordLimitExceeded { max_records } => binding_error(
+            1,
+            format!("failed to decode event log: RecordLimitExceeded: {max_records}; pass unlimitedRecords() as maxRecords to retry"),
         ),
     }
 }
@@ -1925,7 +1967,9 @@ impl SafeMeshStringOrSetReplica {
         candidate.replica =
             Replica::restore(OrSet::new(), &bytes[29..], decode_limits(None, max_records))
                 .map_err(|error| match error {
-                    ReplicaError::LogDecode(error) => bounded_event_log_decode_error(error),
+                    ReplicaError::LogDecode(error) => {
+                        bounded_event_log_decode_error(error, max_records.is_none())
+                    }
                     _ => unreachable!(),
                 })?;
         if candidate.checked_next(writers)? != next {
@@ -2008,7 +2052,9 @@ impl SafeMeshStringOrSetReplica {
             .replica
             .decode_log_bytes(bytes, decode_limits(max_collection_elements, max_records))
             .map_err(|error| match error {
-                ReplicaError::LogDecode(error) => bounded_event_log_decode_error(error),
+                ReplicaError::LogDecode(error) => {
+                    bounded_event_log_decode_error(error, max_records.is_none())
+                }
                 _ => unreachable!(),
             })?;
         for record in &log {
@@ -2707,7 +2753,7 @@ mod tests {
                     &self.state,
                     decode_limits(None, max_records),
                 )
-                .map_err(bounded_event_log_decode_error)?;
+                .map_err(|error| bounded_event_log_decode_error(error, max_records.is_none()))?;
             for record in &records {
                 self.check_incoming(record)?;
             }
@@ -4311,9 +4357,9 @@ mod tests {
         }
         let peer = peer_version(&version_pairs(behind.replica.log())).unwrap();
         assert_eq!(&peer, behind.replica.version());
-        let unbounded = DecodeLimits::default();
+        let defaults = DecodeLimits::default();
         let batch =
-            since_log_bytes(ahead.replica.state(), ahead.replica.log(), &peer, unbounded).unwrap();
+            since_log_bytes(ahead.replica.state(), ahead.replica.log(), &peer, defaults).unwrap();
         let mut expected = Vec::new();
         EventLog::encode_records(Some(2), &ahead.replica.since(&peer), &mut expected).unwrap();
         assert_eq!(batch, expected);
@@ -4330,7 +4376,7 @@ mod tests {
         );
         let three = DecodeLimits {
             max_records: Some(3),
-            ..unbounded
+            ..defaults
         };
         assert_eq!(
             since_log_bytes(ahead.replica.state(), ahead.replica.log(), &peer, three),
@@ -4531,7 +4577,7 @@ impl SafeMeshPnCounterReplica {
             &self.state,
             decode_limits(max_collection_elements, maxRecords),
         )
-        .map_err(|error| event_log_decode_js_error(error, true))?;
+        .map_err(|error| event_log_decode_js_error(error, true, maxRecords.is_none()))?;
         if log.iter().any(|r| {
             safemesh_crdt::ownership::check_counter_record(
                 self.state.p_state().len(),

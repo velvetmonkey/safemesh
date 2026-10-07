@@ -22,7 +22,7 @@ if (!packageDir || !logDir || !step) {
 }
 
 const require = createRequire(import.meta.url);
-const { SafeMeshGCounterReplica, SafeMeshStringOrSetReplica } = require(
+const { SafeMeshGCounterReplica, SafeMeshStringOrSetReplica, unlimitedRecords } = require(
   join(resolve(packageDir), "safemesh_wasm.js"),
 );
 
@@ -52,7 +52,8 @@ function save(side, replica) {
 }
 
 function mergeLog(replica, bytes) {
-  const admissions = replica.mergeLogBytes(bytes);
+  // This walkthrough reopens its own growing store and preserves prior large logs.
+  const admissions = replica.mergeLogBytes(bytes, undefined, unlimitedRecords());
   if (admissions.includes("collision")) {
     throw new Error(`batch collision after admissions=${JSON.stringify(admissions)}`);
   }
@@ -69,7 +70,8 @@ function load(side) {
     }
     try {
       if (kind === "set") {
-        replica.set = SafeMeshStringOrSetReplica.importIdentity(readFileSync(path));
+        // A saved identity is the same locally owned growing history.
+        replica.set = SafeMeshStringOrSetReplica.importIdentity(readFileSync(path), unlimitedRecords());
       } else {
         mergeLog(replica.counter, readFileSync(path));
       }

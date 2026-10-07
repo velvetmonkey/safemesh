@@ -29,6 +29,9 @@ impl core::fmt::Display for ReplicaError {
             Self::LogDecode(DecodeError::RecordLimitExceeded { max_records }) => {
                 write!(f, "RecordLimitExceeded: {max_records}")
             }
+            Self::LogDecode(DecodeError::DefaultRecordLimitExceeded { max_records }) => {
+                write!(f, "RecordLimitExceeded: {max_records}; pass DecodeLimits::UNLIMITED to reopen")
+            }
             Self::Append(e) => e.fmt(f),
             Self::ReportDecode(DecodeError::Wire(e)) => {
                 write!(f, "failed to decode collision report: {e}")
@@ -36,6 +39,10 @@ impl core::fmt::Display for ReplicaError {
             Self::ReportDecode(DecodeError::RecordLimitExceeded { max_records }) => write!(
                 f,
                 "failed to decode collision report: RecordLimitExceeded: {max_records}"
+            ),
+            Self::ReportDecode(DecodeError::DefaultRecordLimitExceeded { max_records }) => write!(
+                f,
+                "failed to decode collision report: RecordLimitExceeded: {max_records}; pass DecodeLimits::UNLIMITED to reopen"
             ),
             Self::ReportEncode(e) => write!(f, "failed to encode collision report: {e}"),
         }
@@ -50,7 +57,9 @@ impl core::error::Error for ReplicaError {
             Self::ReportDecode(DecodeError::Wire(e)) | Self::ReportEncode(e) => Some(e),
             Self::Append(e) => Some(e),
             Self::LogDecode(DecodeError::RecordLimitExceeded { .. })
-            | Self::ReportDecode(DecodeError::RecordLimitExceeded { .. }) => None,
+            | Self::ReportDecode(DecodeError::RecordLimitExceeded { .. })
+            | Self::LogDecode(DecodeError::DefaultRecordLimitExceeded { .. })
+            | Self::ReportDecode(DecodeError::DefaultRecordLimitExceeded { .. }) => None,
         }
     }
 }
