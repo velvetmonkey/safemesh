@@ -1835,7 +1835,6 @@ impl PyStringOrSetReplica {
                 DecodeLimits {
                     max_records,
                     max_collection_elements,
-                    ..DecodeLimits::default()
                 },
             )
             .map_err(|error| string_orset_log_decode_error(replica_log_error(error)))?;
