@@ -366,7 +366,10 @@ mod tests {
             "AncestorSync"
         );
         assert_eq!(
-            local_error_kind(&LocalError::RecordLimitExceeded { max_records: 1 }),
+            local_error_kind(&LocalError::RecordLimitExceeded {
+                max_records: 1,
+                default_limit: false
+            }),
             "storage",
             "RecordLimitExceeded"
         );
