@@ -51,7 +51,7 @@ fn collision_report_default_record_budget() {
     );
     assert_eq!(
         CollisionReport::<GCounterDelta>::from_wire_bytes(&over).err(),
-        Some(WireError::RecordLimitExceeded { max_records: n })
+        Some(WireError::DefaultRecordLimitExceeded { max_records: n })
     );
     assert!(CollisionReport::<GCounterDelta>::from_wire_bytes(&at).is_ok());
     assert!(

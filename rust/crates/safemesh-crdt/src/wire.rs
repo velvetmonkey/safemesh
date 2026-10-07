@@ -618,7 +618,7 @@ impl<D: WireDecode + WireSchema + PartialEq> WireDecode for EventLog<D> {
             |index| {
                 let max_records = DecodeLimits::DEFAULT_MAX_RECORDS;
                 if index >= max_records {
-                    return Err(WireError::RecordLimitExceeded { max_records });
+                    return Err(WireError::DefaultRecordLimitExceeded { max_records });
                 }
                 Ok(())
             },
@@ -637,7 +637,7 @@ impl<D: WireDecode + WireSchema + PartialEq> WireDecode for EventLog<D> {
             |index| {
                 let max_records = DecodeLimits::DEFAULT_MAX_RECORDS;
                 if index >= max_records {
-                    return Err(WireError::RecordLimitExceeded { max_records });
+                    return Err(WireError::DefaultRecordLimitExceeded { max_records });
                 }
                 Ok(())
             },

@@ -302,10 +302,15 @@ def repeated_history(count):
     return b'\x03' + checked + struct.pack('<I', zlib.crc32(checked))
 large = repeated_history(sm.DEFAULT_MAX_RECORDS + 1)
 at = repeated_history(sm.DEFAULT_MAX_RECORDS)
+six = repeated_history(6)
 receiver = sm.StringOrSetReplica(8001)
 before = (receiver.log_bytes(), receiver.elements())
 raises(ValueError, lambda: receiver.merge_log_bytes(large),
+       f'failed to decode event log: RecordLimitExceeded: {sm.DEFAULT_MAX_RECORDS}; pass sm.UNLIMITED as max_records to retry')
+raises(ValueError, lambda: receiver.merge_log_bytes(large, max_records=sm.DEFAULT_MAX_RECORDS),
        f'failed to decode event log: RecordLimitExceeded: {sm.DEFAULT_MAX_RECORDS}')
+raises(ValueError, lambda: receiver.merge_log_bytes(six, max_records=5),
+       'failed to decode event log: RecordLimitExceeded: 5')
 assert (receiver.log_bytes(), receiver.elements()) == before
 assert len(receiver.merge_log_bytes(at)) == sm.DEFAULT_MAX_RECORDS
 unlimited = sm.StringOrSetReplica(8002)
@@ -313,7 +318,9 @@ assert len(unlimited.merge_log_bytes(large, max_records=sm.UNLIMITED)) == sm.DEF
 identity = source.export_identity()[:29] + large
 del source
 raises(ValueError, lambda: sm.StringOrSetReplica.import_identity(identity),
-       f'failed to decode event log: RecordLimitExceeded: {sm.DEFAULT_MAX_RECORDS}')
+       f'failed to decode event log: RecordLimitExceeded: {sm.DEFAULT_MAX_RECORDS}; pass sm.UNLIMITED as max_records to retry')
+raises(ValueError, lambda: sm.StringOrSetReplica.import_identity(identity, max_records=5),
+       'failed to decode event log: RecordLimitExceeded: 5')
 reopened = sm.StringOrSetReplica.import_identity(identity, max_records=sm.UNLIMITED)
 assert reopened.elements() == ['large history']
 del reopened

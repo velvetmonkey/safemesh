@@ -26,11 +26,16 @@ fn default_record_budget_is_atomic_and_unlimited_is_explicit() {
     assert_eq!(replica.log(), &before_log);
     assert_eq!(
         EventLog::<GCounterDelta>::from_wire_bytes_for(&over, &state),
-        Err(WireError::RecordLimitExceeded { max_records: n })
+        Err(WireError::DefaultRecordLimitExceeded { max_records: n })
     );
     assert_eq!(
         EventLog::<GCounterDelta>::from_wire_bytes(&over),
-        Err(WireError::RecordLimitExceeded { max_records: n })
+        Err(WireError::DefaultRecordLimitExceeded { max_records: n })
+    );
+    let refusal: WireError = EventLog::<GCounterDelta>::from_wire_bytes(&over).unwrap_err();
+    assert_eq!(
+        refusal.to_string(),
+        "RecordLimitExceeded: 100000; pass DecodeLimits::UNLIMITED to retry"
     );
     assert!(EventLog::<GCounterDelta>::from_wire_bytes(&at).is_ok());
     assert!(
@@ -108,11 +113,11 @@ fn default_record_budget_is_atomic_and_unlimited_is_explicit() {
     );
     assert_eq!(
         EventLog::<GCounterDelta>::records_from_wire_bytes_for(&over, &state).err(),
-        Some(WireError::RecordLimitExceeded { max_records: n })
+        Some(WireError::DefaultRecordLimitExceeded { max_records: n })
     );
     assert_eq!(
         EventLog::<GCounterDelta>::migrate_legacy_wire_bytes_for(&over, &state).err(),
-        Some(WireError::RecordLimitExceeded { max_records: n })
+        Some(WireError::DefaultRecordLimitExceeded { max_records: n })
     );
     assert!(EventLog::<GCounterDelta>::records_from_wire_bytes_for(&at, &state).is_ok());
     assert!(EventLog::<GCounterDelta>::migrate_legacy_wire_bytes_for(&at, &state).is_ok());

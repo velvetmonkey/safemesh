@@ -96,6 +96,10 @@ pub enum WireError {
     RecordLimitExceeded {
         max_records: usize,
     },
+    /// An omitted limit reached the default record budget.
+    DefaultRecordLimitExceeded {
+        max_records: usize,
+    },
     NonCanonicalVersionVector,
 }
 
@@ -169,6 +173,9 @@ impl core::fmt::Display for WireError {
             }
             Self::RecordLimitExceeded { max_records } => {
                 write!(f, "RecordLimitExceeded: {max_records}")
+            }
+            Self::DefaultRecordLimitExceeded { max_records } => {
+                write!(f, "RecordLimitExceeded: {max_records}; pass DecodeLimits::UNLIMITED to retry")
             }
             Self::NonCanonicalVersionVector => f.write_str("noncanonical wire version vector"),
         }
@@ -251,6 +258,22 @@ pub enum DecodeError {
     RecordLimitExceeded {
         max_records: usize,
     },
+    /// The caller omitted the record budget; bindings may name their own escape.
+    DefaultRecordLimitExceeded {
+        max_records: usize,
+    },
+}
+
+impl DecodeError {
+    /// Preserve the refusal kind while recording that the caller used the default.
+    pub fn with_default_record_limit(self) -> Self {
+        match self {
+            Self::RecordLimitExceeded { max_records } => {
+                Self::DefaultRecordLimitExceeded { max_records }
+            }
+            other => other,
+        }
+    }
 }
 
 impl From<WireError> for DecodeError {
@@ -265,6 +288,9 @@ impl From<DecodeError> for WireError {
             DecodeError::Wire(error) => error,
             DecodeError::RecordLimitExceeded { max_records } => {
                 Self::RecordLimitExceeded { max_records }
+            }
+            DecodeError::DefaultRecordLimitExceeded { max_records } => {
+                Self::DefaultRecordLimitExceeded { max_records }
             }
         }
     }
@@ -397,7 +423,7 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
         state: &C,
     ) -> Result<Self, WireError> {
         let log = Self::from_wire_bytes_with_limits(bytes, DecodeLimits::default())
-            .map_err(WireError::from)?;
+            .map_err(|error| WireError::from(error.with_default_record_limit()))?;
         log.validate_for(state)?;
         Ok(log)
     }
@@ -425,7 +451,7 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
         D: Clone,
     {
         Self::records_from_wire_bytes_for_with_limits(bytes, state, DecodeLimits::default())
-            .map_err(WireError::from)
+            .map_err(|error| WireError::from(error.with_default_record_limit()))
     }
 
     /// Decode each occurrence with record and nested collection budgets, then
@@ -506,8 +532,9 @@ impl<D: WireDecode + WireEncode + WireSchema + PartialEq> EventLog<D> {
         {
             Ok(bytes) => Ok(bytes),
             Err(DecodeError::Wire(error)) => Err(error),
-            Err(DecodeError::RecordLimitExceeded { max_records }) => {
-                Err(WireError::RecordLimitExceeded { max_records })
+            Err(DecodeError::RecordLimitExceeded { max_records })
+            | Err(DecodeError::DefaultRecordLimitExceeded { max_records }) => {
+                Err(WireError::DefaultRecordLimitExceeded { max_records })
             }
         }
     }

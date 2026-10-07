@@ -21,6 +21,8 @@ const TRAILING_BYTES = "unexpected trailing bytes after wire value";
 const INVALID_TAG = "unexpected wire tag";
 
 const defaultLimit = wasm.defaultRecordLimit();
+const defaultCause = `RecordLimitExceeded: ${defaultLimit}; pass unlimitedRecords() as maxRecords to retry`;
+assert.equal(typeof wasm.unlimitedRecords, 'function');
 
 const replicas = [
   ["SafeMeshGCounterReplica", () => new wasm.SafeMeshGCounterReplica(1n, 2), (r) => r.appendBump(1, 5n)],
@@ -100,9 +102,11 @@ for (const [name, create, append] of replicas) {
   const source = create(); append(source);
   const at = repeatedLog(source.logBytes(), defaultLimit);
   const over = repeatedLog(source.logBytes(), defaultLimit + 1);
+  const six = repeatedLog(source.logBytes(), 6);
   source.free();
   const target = create(); const before = target.logBytes();
-  assert.equal(cause(() => target.mergeLogBytes(over), LOG_PREFIX), `RecordLimitExceeded: ${defaultLimit}`, name);
+  assert.equal(cause(() => target.mergeLogBytes(over), LOG_PREFIX), defaultCause, name);
+  assert.equal(cause(() => target.mergeLogBytes(over, undefined, defaultLimit), LOG_PREFIX), `RecordLimitExceeded: ${defaultLimit}`, name);
   assert.deepEqual(target.logBytes(), before, name);
   assert.equal(target.mergeLogBytes(at).length, defaultLimit, name);
   target.free();
@@ -110,7 +114,7 @@ for (const [name, create, append] of replicas) {
   assert.equal(unlimited.mergeLogBytes(over, undefined, wasm.unlimitedRecords()).length, defaultLimit + 1, name);
   unlimited.free();
   const limited = create();
-  assert.equal(cause(() => limited.mergeLogBytes(at, undefined, 5), LOG_PREFIX), 'RecordLimitExceeded: 5', name);
+  assert.equal(cause(() => limited.mergeLogBytes(six, undefined, 5), LOG_PREFIX), 'RecordLimitExceeded: 5', name);
   limited.free();
 }
 console.log('NODE_DEFAULT_RECORD_LIMIT=6 PASS');
@@ -122,15 +126,17 @@ console.log('NODE_DEFAULT_RECORD_LIMIT=6 PASS');
   const prefix = Buffer.from(author.exportIdentity()).subarray(0, 29);
   const at = Buffer.concat([prefix, repeatedLog(author.logBytes(), defaultLimit)]);
   const over = Buffer.concat([prefix, repeatedLog(author.logBytes(), defaultLimit + 1)]);
+  const six = Buffer.concat([prefix, repeatedLog(author.logBytes(), 6)]);
   author.free();
-  assert.equal(cause(() => SetReplica.importIdentity(over), LOG_PREFIX), `RecordLimitExceeded: ${defaultLimit}`);
+  assert.equal(cause(() => SetReplica.importIdentity(over), LOG_PREFIX), defaultCause);
+  assert.equal(cause(() => SetReplica.importIdentity(over, defaultLimit), LOG_PREFIX), `RecordLimitExceeded: ${defaultLimit}`);
   const restored = SetReplica.importIdentity(over, wasm.unlimitedRecords());
   assert.deepEqual(restored.elements(), ['large history']);
   restored.free();
   const exact = SetReplica.importIdentity(at);
   assert.deepEqual(exact.elements(), ['large history']);
   exact.free();
-  assert.equal(cause(() => SetReplica.importIdentity(at, 5), LOG_PREFIX), 'RecordLimitExceeded: 5');
+  assert.equal(cause(() => SetReplica.importIdentity(six, 5), LOG_PREFIX), 'RecordLimitExceeded: 5');
 }
 console.log('NODE_DEFAULT_IDENTITY_LIMIT=1 PASS');
 
