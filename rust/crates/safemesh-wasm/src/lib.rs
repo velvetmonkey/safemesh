@@ -5215,11 +5215,18 @@ impl SafeMeshManagedStringOrSet {
     }
 
     #[wasm_bindgen(js_name = mergeLogBytes, unchecked_return_type = "(\"accepted\" | \"duplicate\")[]")]
-    pub fn merge_log_bytes(&self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
+    #[allow(non_snake_case)]
+    pub fn merge_log_bytes(
+        &self,
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+        maxRecords: Option<u32>,
+    ) -> Result<Vec<String>, JsValue> {
         let mut inner = self.borrow(true)?;
         let mut candidate = Self::candidate(&inner)?;
         candidate.allocated_writers = Some(inner.writers);
-        let result = candidate.try_merge_log_bytes_with_limits(bytes, None, None);
+        let result =
+            candidate.try_merge_log_bytes_with_limits(bytes, max_collection_elements, maxRecords);
         candidate.allocated_writers = None;
         let verdicts = result.map_err(JsValue::from)?;
         if verdicts.iter().any(|v| v == "collision") {
@@ -5361,10 +5368,16 @@ impl SafeMeshManagedGCounter {
     }
 
     #[wasm_bindgen(js_name = mergeLogBytes, unchecked_return_type = "(\"accepted\" | \"duplicate\")[]")]
-    pub fn merge_log_bytes(&self, bytes: &[u8]) -> Result<Vec<String>, JsValue> {
+    #[allow(non_snake_case)]
+    pub fn merge_log_bytes(
+        &self,
+        bytes: &[u8],
+        max_collection_elements: Option<u32>,
+        maxRecords: Option<u32>,
+    ) -> Result<Vec<String>, JsValue> {
         let mut inner = self.borrow(true)?;
         let mut candidate = Self::candidate(&inner)?;
-        let verdicts = candidate.merge_log_bytes(bytes, None, None)?;
+        let verdicts = candidate.merge_log_bytes(bytes, max_collection_elements, maxRecords)?;
         if verdicts.iter().any(|v| v == "collision") {
             return Err(managed_error("COLLISION", "peer batch collision"));
         }

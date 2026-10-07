@@ -26,6 +26,7 @@ fn typescript_surface_lists_the_public_binding() {
     assert!(DTS.contains("export class SafeMeshLwwMapReplica"));
     assert!(DTS.contains("export class SafeMeshStringOrSetReplica"));
     assert!(DTS.contains("export class SafeMeshManagedStringOrSet"));
+    assert_eq!(DTS.matches("mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): (\"accepted\" | \"duplicate\")[];").count(), 2);
     assert!(DTS.contains("static open(store: SafeMeshStore, options: SafeMeshManagedStringOrSetOptions): SafeMeshManagedStringOrSet"));
     assert!(DTS.contains("export class SafeMeshStringOrSetAddEntry"));
     assert!(DTS.contains("export class SafeMeshStringOrSetRecord"));
