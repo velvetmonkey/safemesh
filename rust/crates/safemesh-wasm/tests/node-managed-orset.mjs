@@ -165,5 +165,21 @@ if (process.argv.includes('--child')) {
     recovered.close(); recovered.free();
     console.log('PRODUCT SIGKILL between adds recovered exactly committed set'); groups++;
   }
+  {
+    const source = fresh(new Store(), 1n), target = fresh(new Store());
+    source.appendAdd('budget-a'); source.appendAdd('budget-b');
+    const log = source.peerLogBytes(), before = target.peerLogBytes();
+    assert.throws(() => target.mergeLogBytes(log, undefined, 1), /RecordLimitExceeded/);
+    assert.deepEqual(target.peerLogBytes(), before);
+    assert.deepEqual(target.mergeLogBytes(log, undefined, 2), ['accepted', 'accepted']);
+    const accepted = target.peerLogBytes();
+    target.close(); target.free();
+    const unbounded = fresh(new Store());
+    assert.deepEqual(unbounded.mergeLogBytes(log), ['accepted', 'accepted']);
+    assert.deepEqual(unbounded.peerLogBytes(), accepted);
+    source.close(); unbounded.close();
+    source.free(); unbounded.free();
+    groups++;
+  }
   console.log(`MANAGED_ORSET_GROUPS=${groups}`);
 }

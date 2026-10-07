@@ -1503,7 +1503,9 @@ fn string_orset_log_decode_error(error: DecodeError) -> String {
         DecodeError::Wire(WireError::DeltaTypeMismatch) => "delta type mismatch".to_owned(),
         DecodeError::Wire(WireError::MissingShape) => "event log missing shape".to_owned(),
         DecodeError::Wire(cause) => format!("failed to decode event log: {cause}"),
-        DecodeError::RecordLimitExceeded { .. } => "failed to decode event log".to_owned(),
+        DecodeError::RecordLimitExceeded { max_records } => {
+            format!("failed to decode event log: RecordLimitExceeded: {max_records}")
+        }
     }
 }
 
@@ -1823,6 +1825,7 @@ impl PyStringOrSetReplica {
     fn try_merge_log_bytes(
         &mut self,
         bytes: &[u8],
+        max_records: Option<usize>,
         max_collection_elements: Option<usize>,
     ) -> Result<Vec<String>, String> {
         let log = self
@@ -1830,6 +1833,7 @@ impl PyStringOrSetReplica {
             .decode_log_bytes(
                 bytes,
                 DecodeLimits {
+                    max_records,
                     max_collection_elements,
                     ..DecodeLimits::default()
                 },
@@ -1965,14 +1969,16 @@ mod py_string_or_set_replica_python {
         }
 
         /// Return one core admission verdict for every decoded input record.
-        #[pyo3(signature = (bytes, *, max_collection_elements = None))]
+        #[pyo3(signature = (bytes, *, max_records = None, max_collection_elements = None))]
         pub fn merge_log_bytes(
             &mut self,
             bytes: &[u8],
+            max_records: Option<&Bound<'_, PyAny>>,
             max_collection_elements: Option<&Bound<'_, PyAny>>,
         ) -> PyResult<Vec<String>> {
+            let max_records = collection_budget(max_records)?;
             let max_collection_elements = collection_budget(max_collection_elements)?;
-            self.try_merge_log_bytes(bytes, max_collection_elements)
+            self.try_merge_log_bytes(bytes, max_records, max_collection_elements)
                 .map_err(py_value_error)
         }
 
@@ -4074,7 +4080,7 @@ mod string_orset_tests {
 
         let mut third = replica(3);
         third
-            .try_merge_log_bytes(&left.try_log_bytes().unwrap(), None)
+            .try_merge_log_bytes(&left.try_log_bytes().unwrap(), None, None)
             .unwrap();
         assert_eq!(third.elements(), left.elements());
         assert_eq!(third.tombstones(), left.tombstones());
@@ -4163,7 +4169,7 @@ mod string_orset_tests {
         );
         assert_eq!(
             reader
-                .try_merge_log_bytes(&incoming.to_wire_bytes().unwrap(), None)
+                .try_merge_log_bytes(&incoming.to_wire_bytes().unwrap(), None, None)
                 .unwrap(),
             vec![verdict]
         );
@@ -4207,7 +4213,7 @@ mod string_orset_tests {
         );
         assert_eq!(
             replica
-                .try_merge_log_bytes(&incoming.to_wire_bytes().unwrap(), None)
+                .try_merge_log_bytes(&incoming.to_wire_bytes().unwrap(), None, None)
                 .unwrap(),
             vec!["collision"]
         );
@@ -4279,11 +4285,11 @@ mod string_orset_tests {
             let mut bad = log.clone();
             bad[position] ^= 0x01;
             let mut reader = replica(2);
-            assert!(reader.try_merge_log_bytes(&bad, None).is_err());
+            assert!(reader.try_merge_log_bytes(&bad, None, None).is_err());
             assert!(reader.elements().is_empty());
         }
         let mut reader = replica(2);
-        reader.try_merge_log_bytes(&log, None).unwrap();
+        reader.try_merge_log_bytes(&log, None, None).unwrap();
         assert_eq!(reader.elements(), vec!["vaccine".to_string()]);
     }
 

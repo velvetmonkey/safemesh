@@ -31,6 +31,15 @@ assert third.merge_log_bytes(left.log_bytes()) == ['accepted', 'accepted']
 assert third.merge_log_bytes(left.log_bytes()) == ['duplicate', 'duplicate']
 assert (third.elements(), third.tombstones(), third.add_entries()) == (
     left.elements(), left.tombstones(), left.add_entries())
+budgeted = sm.StringOrSetReplica(4)
+before = budgeted.log_bytes()
+raises(ValueError, lambda: budgeted.merge_log_bytes(left.log_bytes(), max_records=1),
+       'failed to decode event log: RecordLimitExceeded: 1')
+assert budgeted.log_bytes() == before
+assert budgeted.merge_log_bytes(left.log_bytes(), max_records=2) == ['accepted', 'accepted']
+unbounded = sm.StringOrSetReplica(5)
+assert unbounded.merge_log_bytes(left.log_bytes()) == ['accepted', 'accepted']
+assert unbounded.log_bytes() == budgeted.log_bytes()
 for replica in [left, right, third]:
     assert (replica.version_for(1), replica.version_for(2)) == (2, 0)
 

@@ -366,7 +366,7 @@ export class SafeMeshManagedGCounter {
     [Symbol.dispose](): void;
     appendBump(tally: bigint): Uint8Array;
     close(): void;
-    mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate")[];
+    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate")[];
     mergeRecordBytes(bytes: Uint8Array): "accepted" | "duplicate";
     static open(store: SafeMeshStore, options: SafeMeshManagedCounterOptions): SafeMeshManagedGCounter;
     peerLogBytes(): Uint8Array;
@@ -386,7 +386,7 @@ export class SafeMeshManagedStringOrSet {
     appendRemoveObserved(element: string): Uint8Array;
     close(): void;
     elements(): string[];
-    mergeLogBytes(bytes: Uint8Array): ("accepted" | "duplicate")[];
+    mergeLogBytes(bytes: Uint8Array, max_collection_elements?: number | null, maxRecords?: number | null): ("accepted" | "duplicate")[];
     mergeRecordBytes(bytes: Uint8Array): "accepted" | "duplicate";
     observedTokens(element: string): BigUint64Array;
     static open(store: SafeMeshStore, options: SafeMeshManagedStringOrSetOptions): SafeMeshManagedStringOrSet;

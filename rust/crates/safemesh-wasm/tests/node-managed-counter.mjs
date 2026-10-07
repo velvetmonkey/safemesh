@@ -206,5 +206,19 @@ if (process.argv.includes('--low-level')) {
     sameWriter.close(); sameWriter.free();
     console.log('PRODUCT writer mismatch refused with CORRUPT; same writer restarted'); groups++;
   }
+  {
+    const source = fresh(new Store(), 1n), target = fresh(new Store());
+    source.appendBump(1n); source.appendBump(2n);
+    const log = source.peerLogBytes(), before = target.peerLogBytes();
+    assert.throws(() => target.mergeLogBytes(log, undefined, 1), /RecordLimitExceeded/);
+    assert.deepEqual(target.peerLogBytes(), before);
+    assert.deepEqual(target.mergeLogBytes(log, undefined, 2), ['accepted', 'accepted']);
+    const unbounded = fresh(new Store());
+    assert.deepEqual(unbounded.mergeLogBytes(log), ['accepted', 'accepted']);
+    assert.deepEqual(unbounded.peerLogBytes(), target.peerLogBytes());
+    source.close(); target.close(); unbounded.close();
+    source.free(); target.free(); unbounded.free();
+    groups++;
+  }
   console.log(`MANAGED_COUNTER_GROUPS=${groups}`);
 }
