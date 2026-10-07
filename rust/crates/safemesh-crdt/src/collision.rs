@@ -188,7 +188,13 @@ impl<D: WireDecode + WireSchema> WireDecode for CollisionReport<D> {
         cursor: &mut WireCursor<'_>,
         limits: CollectionLimits,
     ) -> Result<Self, WireError> {
-        Self::decode_wire_with_limits(cursor, limits, None)
+        Self::decode_limited(
+            cursor,
+            limits,
+            DecodeLimits::default().max_records,
+            DecodeLimits::default().max_records,
+        )
+        .map_err(WireError::from)
     }
 
     fn decode_wire_with_limits(

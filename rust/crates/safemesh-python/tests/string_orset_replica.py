@@ -288,6 +288,36 @@ raises(ValueError, lambda: sm.StringOrSetReplica.create_allocated(7010, 7000),
 assert restored.append_allocated_add('restored')
 del restored, other
 
+# One generated record body exercises both public history loaders at the boundary.
+source = sm.StringOrSetReplica.create_allocated(8001, 8000)
+source.append_allocated_add('large history')
+raw = source.log_bytes()
+body = raw[9:-4]
+schema_end = 8 + struct.unpack_from('<I', body, 4)[0]
+count_offset = schema_end + 1 + (8 if body[schema_end] == 1 else 0)
+one_record = body[count_offset + 4:]
+def repeated_history(count):
+    repeated = body[:count_offset] + struct.pack('<I', count) + one_record * count
+    checked = struct.pack('<II', len(repeated), len(repeated) ^ 0xffffffff) + repeated
+    return b'\x03' + checked + struct.pack('<I', zlib.crc32(checked))
+large = repeated_history(sm.DEFAULT_MAX_RECORDS + 1)
+at = repeated_history(sm.DEFAULT_MAX_RECORDS)
+receiver = sm.StringOrSetReplica(8001)
+before = (receiver.log_bytes(), receiver.elements())
+raises(ValueError, lambda: receiver.merge_log_bytes(large),
+       f'failed to decode event log: RecordLimitExceeded: {sm.DEFAULT_MAX_RECORDS}')
+assert (receiver.log_bytes(), receiver.elements()) == before
+assert len(receiver.merge_log_bytes(at)) == sm.DEFAULT_MAX_RECORDS
+unlimited = sm.StringOrSetReplica(8002)
+assert len(unlimited.merge_log_bytes(large, max_records=sm.UNLIMITED)) == sm.DEFAULT_MAX_RECORDS + 1
+identity = source.export_identity()[:29] + large
+del source
+raises(ValueError, lambda: sm.StringOrSetReplica.import_identity(identity),
+       f'failed to decode event log: RecordLimitExceeded: {sm.DEFAULT_MAX_RECORDS}')
+reopened = sm.StringOrSetReplica.import_identity(identity, max_records=sm.UNLIMITED)
+assert reopened.elements() == ['large history']
+del reopened
+
 # REPLICA_DIFFERENTIAL
 # Frozen from untouched product main 6cfcee7; never regenerate from the migration.
 import json

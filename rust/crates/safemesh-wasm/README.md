@@ -119,8 +119,11 @@ b.mergeLogBytes(batch); // one "accepted" per record b was missing
 A version at or ahead of the sender yields a batch with no records. A malformed
 version (odd length, a repeated author, a zero prefix, more than 4,096 authors,
 or not a `BigUint64Array`) throws `SafeMeshError` code 2 naming `peerVersion`.
-The optional second and third arguments are `mergeLogBytes`'s collection and
-record budgets; a batch over them throws the error that merge would throw.
+An unchecked batch can consume resources for every record it carries. The
+optional third argument defaults to 100,000 records, so a larger batch throws
+`RecordLimitExceeded` before changing state. Pass `unlimitedRecords()` in that
+position to restore the previous unbounded record count, accepting its resource
+cost, or pass a number for a caller budget. This record cap is not a memory bound.
 The pair shape cannot acknowledge sequence-zero records, so those are always
 included. Run [`examples/node-since-sync.mjs`](examples/node-since-sync.mjs)
 against a Node package, as in the demos below.
@@ -225,10 +228,12 @@ restored.appendAllocatedAdd("bandage"); // fresh token after restart
 view.free(); restored.free(); right.free();
 ```
 
-For untrusted saved history, `importIdentity(saved, maxRecords)` limits the
-number of log record occurrences before creating a live writer. A refused
-import leaves its allocation claim free for a later retry. Omitting the budget
-keeps the existing unbounded behavior.
+Saved history can consume resources for every record it contains.
+`importIdentity(saved)` defaults to 100,000 record occurrences;
+`RecordLimitExceeded` leaves the allocation claim free for a later retry.
+Pass `importIdentity(saved, unlimitedRecords())` to restore the former unbounded
+record count at its resource cost, or pass a numeric caller budget. The record
+cap is not a memory bound.
 
 Stdout:
 

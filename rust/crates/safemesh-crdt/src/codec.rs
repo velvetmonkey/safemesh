@@ -93,6 +93,9 @@ pub enum WireError {
     NestedRecordLimitExceeded {
         max_records: usize,
     },
+    RecordLimitExceeded {
+        max_records: usize,
+    },
     NonCanonicalVersionVector,
 }
 
@@ -164,6 +167,9 @@ impl core::fmt::Display for WireError {
             Self::NestedRecordLimitExceeded { max_records } => {
                 write!(f, "nested wire log exceeds record limit {max_records}")
             }
+            Self::RecordLimitExceeded { max_records } => {
+                write!(f, "RecordLimitExceeded: {max_records}")
+            }
             Self::NonCanonicalVersionVector => f.write_str("noncanonical wire version vector"),
         }
     }
@@ -204,11 +210,12 @@ impl CollectionLimits {
     };
 }
 
-/// Optional limits for [`EventLog::from_wire_bytes_with_limits`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Record and collection limits for [`EventLog::from_wire_bytes_with_limits`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DecodeLimits {
     /// Maximum record occurrences in each EventLog frame, including nested
-    /// frames and duplicates. `None` is unbounded; `Some(0)` admits only empty logs.
+    /// frames and duplicates. The default is [`Self::DEFAULT_MAX_RECORDS`];
+    /// `None` is explicit unlimited, and `Some(0)` admits only empty logs.
     /// This does not bound bytes or collection entries in a payload.
     pub max_records: Option<usize>,
     /// Maximum elements in each nested built-in collection. `None` uses
@@ -216,7 +223,26 @@ pub struct DecodeLimits {
     pub max_collection_elements: Option<usize>,
 }
 
-/// Failure from the opt-in bounded event-log decoder.
+impl DecodeLimits {
+    /// The default record budget for peer and persisted log frames.
+    pub const DEFAULT_MAX_RECORDS: usize = 100_000;
+    /// Explicitly retain the previous unbounded record decoding behavior.
+    pub const UNLIMITED: Self = Self {
+        max_records: None,
+        max_collection_elements: None,
+    };
+}
+
+impl Default for DecodeLimits {
+    fn default() -> Self {
+        Self {
+            max_records: Some(Self::DEFAULT_MAX_RECORDS),
+            max_collection_elements: None,
+        }
+    }
+}
+
+/// Failure from the bounded event-log decoder.
 /// Separate from [`WireError`] to preserve existing exhaustive matches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecodeError {
@@ -230,6 +256,17 @@ pub enum DecodeError {
 impl From<WireError> for DecodeError {
     fn from(error: WireError) -> Self {
         Self::Wire(error)
+    }
+}
+
+impl From<DecodeError> for WireError {
+    fn from(error: DecodeError) -> Self {
+        match error {
+            DecodeError::Wire(error) => error,
+            DecodeError::RecordLimitExceeded { max_records } => {
+                Self::RecordLimitExceeded { max_records }
+            }
+        }
     }
 }
 
@@ -309,8 +346,7 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
     /// As with [`WireDecode::from_wire_bytes`], this does not validate a destination
     /// CRDT for replay. The option is currently exposed only in Rust.
     ///
-    /// [`DecodeLimits::default`] preserves the unbounded decoder's values and
-    /// wire errors (wrapped in [`DecodeError::Wire`]).
+    /// [`DecodeLimits::default`] admits at most its named record budget.
     ///
     /// ```
     /// use safemesh_crdt::{DecodeError, DecodeLimits, EventLog, GSet, Record, RecordId};
@@ -360,7 +396,8 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
         bytes: &[u8],
         state: &C,
     ) -> Result<Self, WireError> {
-        let log = Self::from_wire_bytes(bytes)?;
+        let log = Self::from_wire_bytes_with_limits(bytes, DecodeLimits::default())
+            .map_err(WireError::from)?;
         log.validate_for(state)?;
         Ok(log)
     }
@@ -387,20 +424,8 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
     where
         D: Clone,
     {
-        let mut records = Vec::new();
-        let mut cursor = WireCursor::new(bytes);
-        let log = Self::decode_with(
-            &mut cursor,
-            CollectionLimits::WIRE_DEFAULT,
-            None,
-            |record| records.push(record.clone()),
-            |_| Ok::<(), WireError>(()),
-        )?;
-        if !cursor.is_empty() {
-            return Err(WireError::TrailingBytes);
-        }
-        log.validate_for(state)?;
-        Ok(records)
+        Self::records_from_wire_bytes_for_with_limits(bytes, state, DecodeLimits::default())
+            .map_err(WireError::from)
     }
 
     /// Decode each occurrence with record and nested collection budgets, then
@@ -481,7 +506,9 @@ impl<D: WireDecode + WireEncode + WireSchema + PartialEq> EventLog<D> {
         {
             Ok(bytes) => Ok(bytes),
             Err(DecodeError::Wire(error)) => Err(error),
-            Err(DecodeError::RecordLimitExceeded { .. }) => unreachable!("unbounded migration"),
+            Err(DecodeError::RecordLimitExceeded { max_records }) => {
+                Err(WireError::RecordLimitExceeded { max_records })
+            }
         }
     }
 

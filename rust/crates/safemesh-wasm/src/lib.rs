@@ -176,10 +176,29 @@ fn record_decode_js_error(error: WireError) -> JsValue {
     }
 }
 
+/// Explicitly disable the default record ceiling for a log load.
+/// A frame cannot declare this many records, so this preserves the old
+/// behavior for every representable frame.
+pub const UNLIMITED_RECORDS: u32 = u32::MAX;
+
+#[wasm_bindgen(js_name = unlimitedRecords)]
+pub fn unlimited_records() -> u32 {
+    UNLIMITED_RECORDS
+}
+
+#[wasm_bindgen(js_name = defaultRecordLimit)]
+pub fn default_record_limit() -> u32 {
+    DecodeLimits::DEFAULT_MAX_RECORDS as u32
+}
+
 fn decode_limits(value: Option<u32>, max_records: Option<u32>) -> DecodeLimits {
     DecodeLimits {
         max_collection_elements: value.map(|value| value as usize),
-        max_records: max_records.map(|value| value as usize),
+        max_records: match max_records {
+            Some(value) if value == UNLIMITED_RECORDS => None,
+            Some(value) => Some(value as usize),
+            None => DecodeLimits::default().max_records,
+        },
     }
 }
 
@@ -4311,9 +4330,9 @@ mod tests {
         }
         let peer = peer_version(&version_pairs(behind.replica.log())).unwrap();
         assert_eq!(&peer, behind.replica.version());
-        let unbounded = DecodeLimits::default();
+        let defaults = DecodeLimits::default();
         let batch =
-            since_log_bytes(ahead.replica.state(), ahead.replica.log(), &peer, unbounded).unwrap();
+            since_log_bytes(ahead.replica.state(), ahead.replica.log(), &peer, defaults).unwrap();
         let mut expected = Vec::new();
         EventLog::encode_records(Some(2), &ahead.replica.since(&peer), &mut expected).unwrap();
         assert_eq!(batch, expected);
@@ -4330,7 +4349,7 @@ mod tests {
         );
         let three = DecodeLimits {
             max_records: Some(3),
-            ..unbounded
+            ..defaults
         };
         assert_eq!(
             since_log_bytes(ahead.replica.state(), ahead.replica.log(), &peer, three),

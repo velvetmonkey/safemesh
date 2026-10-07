@@ -13,6 +13,71 @@ use safemesh_crdt::{
     WireEncode, WireError,
 };
 
+#[test]
+fn collision_report_default_record_budget() {
+    let n = DecodeLimits::DEFAULT_MAX_RECORDS;
+    let collisions: Vec<_> = (1..=n + 1)
+        .map(|sequence| RecordCollision {
+            id: RecordId {
+                replica: 0,
+                sequence: sequence as u64,
+            },
+            local: GCounterDelta {
+                replica: 0,
+                tally: 1,
+            },
+            remote: GCounterDelta {
+                replica: 0,
+                tally: 2,
+            },
+        })
+        .collect();
+    let frame = |entries: &[RecordCollision<GCounterDelta>]| {
+        CollisionReport {
+            collisions: entries.to_vec(),
+        }
+        .to_wire_bytes()
+        .unwrap()
+    };
+    let over = frame(&collisions);
+    let at = frame(&collisions[..n]);
+    assert_eq!(
+        CollisionReport::<GCounterDelta>::from_wire_bytes_with_limits(
+            &over,
+            DecodeLimits::default()
+        )
+        .err(),
+        Some(DecodeError::RecordLimitExceeded { max_records: n })
+    );
+    assert_eq!(
+        CollisionReport::<GCounterDelta>::from_wire_bytes(&over).err(),
+        Some(WireError::RecordLimitExceeded { max_records: n })
+    );
+    assert!(CollisionReport::<GCounterDelta>::from_wire_bytes(&at).is_ok());
+    assert!(
+        CollisionReport::<GCounterDelta>::from_wire_bytes_with_limits(&at, DecodeLimits::default())
+            .is_ok()
+    );
+    assert!(
+        CollisionReport::<GCounterDelta>::from_wire_bytes_with_limits(
+            &over,
+            DecodeLimits::UNLIMITED
+        )
+        .is_ok()
+    );
+    assert_eq!(
+        CollisionReport::<GCounterDelta>::from_wire_bytes_with_limits(
+            &at,
+            DecodeLimits {
+                max_records: Some(5),
+                ..DecodeLimits::default()
+            }
+        )
+        .err(),
+        Some(DecodeError::RecordLimitExceeded { max_records: 5 })
+    );
+}
+
 #[cfg(all(feature = "local-writer", target_os = "linux"))]
 mod local_alarm {
     use super::*;

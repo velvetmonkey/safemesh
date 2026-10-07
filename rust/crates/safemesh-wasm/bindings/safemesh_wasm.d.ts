@@ -669,6 +669,8 @@ export class SafeMeshStringOrSetReplica {
     versionVector(): BigUint64Array;
 }
 
+export function defaultRecordLimit(): number;
+
 export function enableWinsFlagDisableDeltaToWire(tokens: BigUint64Array): Uint8Array;
 
 export function enableWinsFlagEnableDeltaToWire(token: bigint): Uint8Array;
@@ -682,3 +684,5 @@ export function lwwMapRemoveDeltaToWire(key: bigint, timestamp: bigint, replica:
 export function lwwMapSetDeltaToWire(key: bigint, timestamp: bigint, replica: bigint, value: bigint): Uint8Array;
 
 export function lwwRegisterDeltaToWire(timestamp: bigint, replica: bigint, value: bigint): Uint8Array;
+
+export function unlimitedRecords(): number;
