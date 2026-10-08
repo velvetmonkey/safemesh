@@ -253,9 +253,11 @@ impl WireEncode for OrSetDelta<u64, u64> {
             }
             OrSetDelta::Remove { tokens } => {
                 write_u8(out, TAG_ORSET_REMOVE_U64);
-                write_len(out, tokens.len())?;
-                // Preserve order and duplicates for exact delta round trips.
-                for token in tokens {
+                let mut sorted_tokens = tokens.clone();
+                sorted_tokens.sort_unstable();
+                sorted_tokens.dedup();
+                write_len(out, sorted_tokens.len())?;
+                for token in &sorted_tokens {
                     write_u64(out, *token);
                 }
             }
@@ -294,7 +296,7 @@ impl WireDecode for OrSetDelta<u64, u64> {
 
 // UTF-8 delta tags are distinct from the u64 delta tags, including Remove.
 // Add carries a byte-length-prefixed UTF-8 element followed by a u64 token;
-// Remove carries a token count followed by u64 tokens in their original order.
+// Remove carries a token count followed by sorted, unique u64 tokens.
 impl WireEncode for OrSetDelta<String, u64> {
     fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
         match self {
@@ -305,8 +307,11 @@ impl WireEncode for OrSetDelta<String, u64> {
             }
             OrSetDelta::Remove { tokens } => {
                 write_u8(out, TAG_ORSET_REMOVE_STRING);
-                write_len(out, tokens.len())?;
-                for token in tokens {
+                let mut sorted_tokens = tokens.clone();
+                sorted_tokens.sort_unstable();
+                sorted_tokens.dedup();
+                write_len(out, sorted_tokens.len())?;
+                for token in &sorted_tokens {
                     write_u64(out, *token);
                 }
             }
