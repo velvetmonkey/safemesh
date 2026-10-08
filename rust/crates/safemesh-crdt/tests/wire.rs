@@ -838,6 +838,20 @@ fn orset_delta_cases() -> Vec<safemesh_crdt::OrSetDelta<u64, u64>> {
 
 #[test]
 fn orset_delta_roundtrips() {
+    let remove = safemesh_crdt::OrSetDelta::<u64, u64>::Remove {
+        tokens: vec![9, 2, 2],
+    };
+    assert_eq!(
+        remove.to_wire_bytes().unwrap(),
+        vec![0x32, 2, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0]
+    );
+    let wide_token = safemesh_crdt::OrSetDelta::<u64, u64>::Remove {
+        tokens: vec![258],
+    };
+    assert_eq!(
+        wide_token.to_wire_bytes().unwrap(),
+        vec![0x32, 1, 0, 0, 0, 2, 1, 0, 0, 0, 0, 0, 0]
+    );
     for delta in orset_delta_cases() {
         roundtrip(delta);
     }
@@ -1147,9 +1161,14 @@ fn orset_utf8_wire_shape_and_record_roundtrips() {
     };
     assert_eq!(
         remove.to_wire_bytes().unwrap(),
-        OrSetDelta::<String, u64>::Remove { tokens: vec![42] }
-            .to_wire_bytes()
-            .unwrap()
+        vec![0x34, 1, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0]
+    );
+    let two_tokens: OrSetDelta<String, u64> = OrSetDelta::Remove {
+        tokens: vec![9, 2, 2],
+    };
+    assert_eq!(
+        two_tokens.to_wire_bytes().unwrap(),
+        vec![0x34, 2, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0]
     );
     let mut log = EventLog::new();
     for delta in orset_utf8_cases() {
