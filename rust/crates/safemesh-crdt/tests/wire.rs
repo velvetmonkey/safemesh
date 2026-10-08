@@ -844,6 +844,110 @@ fn orset_delta_roundtrips() {
 }
 
 #[test]
+fn old_form_orset_remove_record_keeps_duplicate_identity() {
+    struct OldWireRemove<T> {
+        bytes: Vec<u8>,
+        marker: std::marker::PhantomData<T>,
+    }
+
+    impl<T> WireEncode for OldWireRemove<T> {
+        fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+            out.extend_from_slice(&self.bytes);
+            Ok(())
+        }
+    }
+
+    impl<T> safemesh_crdt::WireSchema for OldWireRemove<T>
+    where
+        safemesh_crdt::OrSetDelta<T, u64>: safemesh_crdt::WireSchema,
+    {
+        fn wire_schema() -> std::borrow::Cow<'static, [u8]> {
+            <safemesh_crdt::OrSetDelta<T, u64> as safemesh_crdt::WireSchema>::wire_schema()
+        }
+    }
+
+    fn check<T: Ord + Clone + std::fmt::Debug>()
+    where
+        safemesh_crdt::OrSetDelta<T, u64>: WireEncode
+            + WireDecode
+            + safemesh_crdt::WireSchema
+            + PartialEq
+            + Clone
+            + std::fmt::Debug,
+        safemesh_crdt::OrSet<T, u64>:
+            safemesh_crdt::Crdt<Delta = safemesh_crdt::OrSetDelta<T, u64>>,
+    {
+        use safemesh_crdt::OrSetDelta;
+        let canonical = OrSetDelta::<T, u64>::Remove { tokens: vec![2, 9] };
+        let reordered = OrSetDelta::<T, u64>::Remove {
+            tokens: vec![9, 2, 2],
+        };
+        assert_eq!(canonical.to_wire_bytes(), reordered.to_wire_bytes());
+
+        // Start with the current encoder's bytes and mutate only the vector
+        // layout to reconstruct a valid pre-sort writer frame.
+        let mut old_delta_bytes = canonical.to_wire_bytes().unwrap();
+        let first = old_delta_bytes[5..13].to_vec();
+        let second = old_delta_bytes[13..21].to_vec();
+        old_delta_bytes[1..5].copy_from_slice(&3u32.to_le_bytes());
+        old_delta_bytes[5..13].copy_from_slice(&second);
+        old_delta_bytes[13..21].copy_from_slice(&first);
+        old_delta_bytes.extend_from_slice(&first);
+        assert_ne!(old_delta_bytes, canonical.to_wire_bytes().unwrap());
+
+        let original = Record {
+            id: RecordId {
+                replica: 1,
+                sequence: 1,
+            },
+            delta: reordered,
+        };
+        let old_record = Record {
+            id: original.id,
+            delta: OldWireRemove::<T> {
+                bytes: old_delta_bytes.clone(),
+                marker: std::marker::PhantomData,
+            },
+        };
+        let old_bytes = old_record.to_wire_bytes().unwrap();
+        let reopened = Record::<OrSetDelta<T, u64>>::from_wire_bytes(&old_bytes).unwrap();
+        match &reopened.delta {
+            OrSetDelta::Remove { tokens } => assert_eq!(tokens, &[9, 2, 2]),
+            _ => panic!("old Remove frame changed variant"),
+        }
+        let reencoded = reopened.to_wire_bytes().unwrap();
+        assert_ne!(reencoded, old_bytes);
+        let reloaded = Record::<OrSetDelta<T, u64>>::from_wire_bytes(&reencoded).unwrap();
+        assert_eq!(reloaded.delta, original.delta);
+        match &reloaded.delta {
+            OrSetDelta::Remove { tokens } => assert_eq!(tokens, &[2, 9]),
+            _ => panic!("re-encoded Remove frame changed variant"),
+        }
+
+        let mut old_log_bytes = Vec::new();
+        EventLog::<OldWireRemove<T>>::encode_records(None, &[old_record], &mut old_log_bytes)
+            .unwrap();
+        let old_log = EventLog::<OrSetDelta<T, u64>>::from_wire_bytes(&old_log_bytes).unwrap();
+        assert_eq!(old_log.records()[0].delta, original.delta);
+        let reopened_log =
+            EventLog::<OrSetDelta<T, u64>>::from_wire_bytes(&old_log.to_wire_bytes().unwrap())
+                .unwrap();
+        assert_eq!(reopened_log.records()[0].delta, original.delta);
+        let mut log = EventLog::new();
+        assert_eq!(
+            log.insert_record(&safemesh_crdt::OrSet::<T, u64>::new(), original),
+            safemesh_crdt::Admission::Accepted
+        );
+        assert_eq!(
+            log.insert_record(&safemesh_crdt::OrSet::<T, u64>::new(), reloaded),
+            safemesh_crdt::Admission::Duplicate
+        );
+    }
+    check::<u64>();
+    check::<String>();
+}
+
+#[test]
 fn orset_delta_rejects_every_truncation() {
     for delta in orset_delta_cases() {
         let bytes = delta.to_wire_bytes().unwrap();
@@ -1043,7 +1147,9 @@ fn orset_utf8_wire_shape_and_record_roundtrips() {
     };
     assert_eq!(
         remove.to_wire_bytes().unwrap(),
-        vec![0x34, 2, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0]
+        OrSetDelta::<String, u64>::Remove { tokens: vec![42] }
+            .to_wire_bytes()
+            .unwrap()
     );
     let mut log = EventLog::new();
     for delta in orset_utf8_cases() {
