@@ -118,7 +118,7 @@ Runtime tested: the Rust, Node/WASM, and installed Python demo programs below ch
 | Python binding (`safemesh-python`) | **API present** — PyO3/maturin wrapper over the Rust core with G-Counter replica/event-log exchange and pyproject metadata. **Runtime tested** — Rust-side binding tests exercise wrapper calls. **Integration tested** — CI configures wheel builds, installs, binding tests, and Python demo/sync checks on `ubuntu-latest` with CPython 3.8–3.14. The full distribution smoke test also runs on Python 3.11. Other Python/OS combinations are not established by these jobs. |
 | Break-it demo (`cargo run -p safemesh-crdt --example break_it`) | **Runnable showpiece** — deterministic partition/drop/duplicate/reorder/heal scenario that exits nonzero unless the replicas converge |
 | Transport coverage contract | **Engineered + tested** — `TransportAdapter`, `InMemoryTransport`, and `anti_entropy` exercise subscribe/send/connectivity under drop, duplicate, reorder, partition, and heal campaigns |
-| Cold-chain kill-test (`cargo run -p safemesh-crdt --example cold_chain_kill_test`) | **Engineered evaluation** — software-only field-science vertical using the flat CRDT carriers and event-log exchange under transport faults |
+| Cold-chain kill-test (`cd rust && cargo run -p safemesh-crdt --example cold_chain_kill_test`) | **Engineered evaluation** — software-only field-science vertical using the flat CRDT carriers and event-log exchange under transport faults |
 | Laws harness (`--features laws`) | **Reusable tests** — checks merge laws and drop/dup/reorder convergence scenarios for any type implementing the SafeMesh traits; supplemental to the Lean-oracle diff |
 | User-defined types | **Tested, not proven** — users can implement the same merge contract and run the laws harness, but SafeMesh does not prove arbitrary application code |
 
@@ -201,7 +201,7 @@ Python story walkthrough: [`demos/python-cold-chain/README.md`](demos/python-col
 Reference application: [Fieldcheck](examples/fieldcheck/README.md) shows durable inspections
 surviving a service SIGKILL and reconciling after a loopback reconnect.
 
-`KILL-TEST.md` records the first software-only integrity vertical: field-science cold-chain sample custody. Run `cargo run -p safemesh-crdt --example cold_chain_kill_test` to exercise `EventLog`, `InMemoryTransport`, and the flat CRDT carriers through drop, duplicate, reorder, partition, and heal. This is an engineered evaluation artifact, not proof of sensors, custody law, storage durability, or real network delivery.
+`KILL-TEST.md` records the first software-only integrity vertical: field-science cold-chain sample custody. Run `cd rust && cargo run -p safemesh-crdt --example cold_chain_kill_test` to exercise `EventLog`, `InMemoryTransport`, and the flat CRDT carriers through drop, duplicate, reorder, partition, and heal. This is an engineered evaluation artifact, not proof of sensors, custody law, storage durability, or real network delivery.
 
 ## Transport Coverage Contract
 
