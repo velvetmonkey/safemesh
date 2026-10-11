@@ -4,7 +4,7 @@
 
 Security fixes target the current `main` branch (unreleased). There are no
 tagged releases or older release lines receiving security fixes. The
-[documentation](docs/src/content/docs/index.md) describes the current line as
+[documentation](docs/src/content/docs/index.mdx) describes the current line as
 `main (unreleased)`.
 
 ## Reporting a vulnerability privately

@@ -131,7 +131,9 @@ These language paths have different limits:
   `versionFor`, `versionVector`, `recordIds`, `sinceLogBytes`, `elements`,
   `observedTokens`, `tombstones`, `addEntries`, and `inspectRecordBytes`.
 - Python: G-Counter mutation/exchange with caller-owned storage; numeric OR-Set
-  mutation/remove/whole-state merge, without a UTF-8 replica or recovery promise.
+  mutation/remove/whole-state merge; UTF-8 `StringOrSetReplica` add/remove, record/log
+  exchange, read/inspect, and caller-persisted identity export/import. No disk I/O
+  or cross-process writer fencing is supplied by that replica.
 - C: G-Counter carrier mutation/read and delta encoding, and numeric OR-Set
   mutation/remove/whole-state merge; no log or recovery promise.
 
