@@ -212,9 +212,12 @@ Tag03Unshaped }` from an `EventLog` loader (Display: `legacy EventLog frame:
 found tag 0x02 (no CRC, no shape header), expected tag 0x03 with shape header;
 migrate once with EventLog::migrate_legacy_wire_bytes_for(bytes, &destination)
 ...`) means an earlier `safemesh-crdt` wrote the file, before the frame gained
-its CRC or its shape header. The bytes are intact and nothing was applied. Keep
-the file, then run the explicit migration once with the original replica count,
-reload the result, and replace the file:
+its CRC or its shape header. Nothing was applied; tag `0x02` cannot establish
+that the bytes are intact. Keep the file. A tag `0x02` frame has no checksum:
+migration accepts a changed payload bit when the frame still decodes, and the
+migrated value can differ from the original. Check your own checksum of the old
+file or compare it with a second copy before running the explicit migration
+with the original replica count. Then reload the result and replace the file:
 see "Migrating a legacy EventLog" in the
 [safemesh-crdt README](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md).
 Loaders never migrate on open. Durable stores postdate the shape header, so
@@ -455,8 +458,9 @@ tag `0x03` before it decodes any record. The error is
 `WireError::LegacyEventLogFrame`, naming the frame found.
 [`tests/legacy_event_log.rs`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/tests/legacy_event_log.rs)
 asserts that outcome on `from_wire_bytes`, `from_wire_bytes_for`,
-`records_from_wire_bytes_for`, and the bounded loader, then asserts lossless
-explicit migration and each file's pinned SHA-256.
+`records_from_wire_bytes_for`, and the bounded loader, then asserts
+byte-preserving explicit migration of the undamaged retained fixtures and each
+file's pinned SHA-256.
 
 Python `merge_log_bytes` raises `ValueError` with
 `failed to decode event log: ` in front of that same core text, and does not
@@ -475,6 +479,9 @@ Loaders never migrate on open. Migration is an explicit step. The crate README
 section [Migrating a legacy EventLog](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md#migrating-a-legacy-eventlog)
 is the single writer for the frame table, the replica-count rule, and the
 `migrate_event_log` commands.
+Before using those commands on tag `0x02`, check your own checksum of the old
+file or compare it with a second copy: the frame has no checksum, so migration
+accepts a changed payload bit when it still decodes.
 
 The retained corpus
 [`tests/fixtures/legacy-event-log/`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/tests/fixtures/legacy-event-log/README.md)

@@ -9,6 +9,10 @@
 //! enable-wins-flag-u64 or lww-map-u64. Counters take the original replica
 //! count; the other deltas take `unbounded`. The input is never modified and
 //! the output must not exist. Exit 0 on success, 1 on a refused file, 2 on usage.
+//! A tag 0x02 frame has no checksum. Migration accepts a changed payload bit
+//! when the frame still decodes, and the migrated value can differ from the
+//! original. Before migrating, check your own checksum of the old file or
+//! compare it with a second copy.
 use safemesh_crdt::{
     Crdt, EnableWinsFlag, EventLog, GCounter, LwwMap, LwwRegister, OrSet, PnCounter, WireDecode,
     WireEncode, WireError, WireSchema,
