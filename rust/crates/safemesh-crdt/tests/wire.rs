@@ -845,9 +845,7 @@ fn orset_delta_roundtrips() {
         remove.to_wire_bytes().unwrap(),
         vec![0x32, 2, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0]
     );
-    let wide_token = safemesh_crdt::OrSetDelta::<u64, u64>::Remove {
-        tokens: vec![258],
-    };
+    let wide_token = safemesh_crdt::OrSetDelta::<u64, u64>::Remove { tokens: vec![258] };
     assert_eq!(
         wide_token.to_wire_bytes().unwrap(),
         vec![0x32, 1, 0, 0, 0, 2, 1, 0, 0, 0, 0, 0, 0]
