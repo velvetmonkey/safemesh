@@ -30,8 +30,9 @@ are rejected as `IntegrityMismatch` for both GCounter and
 Run from the repository root with your own scratch directory:
 
 ```sh
-cargo run --manifest-path rust/Cargo.toml -p safemesh-crdt --example m2slice -- /home/monkey/scratch/claimtrue/m2-normal
-cargo run --manifest-path rust/Cargo.toml -p safemesh-crdt --example m2slice -- /home/monkey/scratch/claimtrue/m2-strict --require-integrity
+SM_SCRATCH="$(mktemp -d)"
+cargo run --manifest-path rust/Cargo.toml -p safemesh-crdt --example m2slice -- "${SM_SCRATCH:?}/m2-normal"
+cargo run --manifest-path rust/Cargo.toml -p safemesh-crdt --example m2slice -- "${SM_SCRATCH:?}/m2-strict" --require-integrity
 ```
 
 Continuous stdout suffix from each command (the example locates each payload in the current
@@ -69,8 +70,9 @@ This does **not** satisfy the corruption-aware release control.
 Run from the repository root, supplying your own scratch directory:
 
 ```sh
-cargo run --manifest-path rust/Cargo.toml -p safemesh-crdt --example m2slice -- /home/monkey/scratch/m2slice/logs
-cargo run --manifest-path rust/Cargo.toml -p safemesh-crdt --example m2slice -- /home/monkey/scratch/m2slice/logs --require-integrity
+SM_SCRATCH="$(mktemp -d)"
+cargo run --manifest-path rust/Cargo.toml -p safemesh-crdt --example m2slice -- "${SM_SCRATCH:?}/logs"
+cargo run --manifest-path rust/Cargo.toml -p safemesh-crdt --example m2slice -- "${SM_SCRATCH:?}/logs" --require-integrity
 ```
 
 The first command completes the clean walk and reports corruption observations.

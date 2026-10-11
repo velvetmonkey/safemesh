@@ -26,7 +26,7 @@ The application supplies and chooses the store implementation. It decides filesy
 
 ## Physical tamper contract
 
-The probes below run against main's built Node package and example, with scripts and outputs kept outside this branch in `/home/monkey/scratch/smnodeadapter/`. Adapter outcomes are **UNVERIFIED predictions**.
+The probes below run against main's built Node package and example, with scripts and outputs kept outside this branch in `/home/monkey/scratch/smnodeadapter/`. This is a record from the build box; readers do not need that path. Adapter outcomes are **UNVERIFIED predictions**.
 
 | Main mistake and planted probe | Observed on main | Prediction for a conforming adapter (UNVERIFIED) |
 | --- | --- | --- |
