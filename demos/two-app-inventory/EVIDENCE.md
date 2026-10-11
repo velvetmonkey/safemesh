@@ -41,7 +41,7 @@ safemesh-python --locked` passed. No Lean sources changed; no Lean build started
 The complete CI gate is not claimed as locally run. This directory adds an
 explicitly runnable acceptance journey, not a CI workflow.
 
-Retained lane evidence on the measurement host:
+Record from the build box; readers do not need this path to reproduce the journey. Retained lane evidence on that host:
 `/home/monkey/scratch/safemeshgradea3/retained.log`, `retained/`,
 `negative.log`, `negative/`, `smoke.log`, `smoke-fixed.log`, `wheel.log`, and
 `python-tests.log`. Each command's exit code is in the corresponding `.exit`

@@ -4,7 +4,7 @@ These are measurements, not platform support claims. The compatibility manifest'
 
 ## Compiler and dependency inputs
 
-CI Rust is pinned to 1.96.1 and maturin to 1.14.1. Exact compiler hashes, installed targets and runtime/distribution versions are in `versions.txt` and `node24-versions.txt`. Initial Node was 22.22.3; the corrected web run and packaging use Node 24.21.0 with npm 10.9.8. The inherited NODE_ENV=production requires `npm ci --include=dev` for web verification. No Lean build was started: the branch has zero changed lean/ files; lake resolves to /home/monkey/bin/lake. Lean toolchain text is recorded, not executed.
+CI Rust is pinned to 1.96.1 and maturin to 1.14.1. Exact compiler hashes, installed targets and runtime/distribution versions are in `versions.txt` and `node24-versions.txt`. Initial Node was 22.22.3; the corrected web run and packaging use Node 24.21.0 with npm 10.9.8. The inherited NODE_ENV=production requires `npm ci --include=dev` for web verification. No Lean build was started: the branch has zero changed lean/ files; the build-box record says lake resolved to /home/monkey/bin/lake. Readers do not need that path. Lean toolchain text is recorded, not executed.
 
 `cargo generate-lockfile` resolved unchanged manifest requirements to 33 external packages (37 including four workspace crates): 3 external direct packages and 30 external transitive-only packages. `dependencies.json` includes direct development dependencies. The generated `rust/Cargo.lock` is tracked; the branch removed the broad `Cargo.lock` ignore rule, so future lockfiles remain visible. Existing JS and Lean dependency files are retained.
 
