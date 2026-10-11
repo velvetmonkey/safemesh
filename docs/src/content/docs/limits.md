@@ -109,6 +109,9 @@ unbounded record count, accepting its resource cost. Explicit caller budgets
 still apply: Python `max_records=n` or WASM `mergeLogBytes(bytes, undefined, n)`.
 Rust legacy migration accepts `migrate_legacy_wire_bytes_for_with_limits(bytes,
 state, DecodeLimits { max_records: Some(n), ..DecodeLimits::default() })`.
+For tag `0x02`, check your own checksum of the old file or compare it with a
+second copy before migration. That frame has no checksum; the migration accepts
+a changed payload bit when the frame still decodes, even with a record limit.
 WASM `SafeMeshStringOrSetReplica.importIdentity(bytes, n)` bounds saved history
 before creating a live writer. The cap counts records and is not a memory bound;
 bytes and payload complexity need a separate application policy.

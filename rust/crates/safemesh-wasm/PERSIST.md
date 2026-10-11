@@ -532,6 +532,10 @@ Nothing was merged. Keep the file and convert it once with the `migrate_event_lo
 example from a clone, giving the delta and the original replica count. Then
 load the converted file; see
 [Migrating a legacy EventLog](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/README.md#migrating-a-legacy-eventlog).
+Before converting a tag `0x02` file, check your own checksum of the old file or
+compare it with a second copy. That frame has no checksum: migration accepts a
+changed payload bit when the frame still decodes, and the migrated value can
+differ from the original.
 The package never converts on load.
 
 ## Running the committed copy from a clone

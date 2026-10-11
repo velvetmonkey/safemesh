@@ -71,6 +71,8 @@ pub enum WireError {
     MissingShape,
     /// A valid EventLog frame from an earlier encoder. Nothing was decoded;
     /// migrate it once with [`EventLog::migrate_legacy_wire_bytes_for`].
+    /// For tag 0x02, check an old-file checksum or compare a second copy first;
+    /// see that method's warning about undetected changed bits.
     LegacyEventLogFrame {
         found: LegacyFrame,
     },
@@ -514,6 +516,12 @@ impl<D: WireDecode + WireEncode + WireSchema + PartialEq> EventLog<D> {
     /// returned unchanged, so a repeated migration has no further effect.
     /// Nested EventLog payloads are not rewritten; a legacy nested frame fails.
     ///
+    /// A tag 0x02 frame has no checksum. Migration accepts a frame with a
+    /// changed payload bit when it still decodes, and the migrated value can
+    /// differ from the original. Before migration, check your own checksum of
+    /// the old file or compare it with a second copy. A tag 0x03 frame has a
+    /// CRC and refuses the same kind of changed payload.
+    ///
     /// ```
     /// use safemesh_crdt::{EventLog, GCounter, GCounterDelta, LegacyFrame, WireDecode, WireError};
     /// let old = [0x02, 0, 0, 0, 0]; // an empty tag 0x02 log
@@ -542,6 +550,8 @@ impl<D: WireDecode + WireEncode + WireSchema + PartialEq> EventLog<D> {
     /// Migrate a legacy frame with a budget for each input record occurrence.
     /// Duplicate records count; the limit is checked before decoding the next record.
     /// A current shaped frame uses the same limited decoder as ordinary loading.
+    /// The tag 0x02 checksum warning and pre-migration checks in
+    /// [`Self::migrate_legacy_wire_bytes_for`] apply here too.
     pub fn migrate_legacy_wire_bytes_for_with_limits<C: Crdt<Delta = D>>(
         bytes: &[u8],
         state: &C,

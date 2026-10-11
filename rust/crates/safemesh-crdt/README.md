@@ -523,6 +523,11 @@ expected and this step:
 legacy EventLog frame: found tag 0x02 (no CRC, no shape header), expected tag 0x03 with shape header; migrate once with EventLog::migrate_legacy_wire_bytes_for(bytes, &destination) or `cargo run -p safemesh-crdt --example migrate_event_log`, giving the original replica count (safemesh-crdt README, "Migrating a legacy EventLog")
 ```
 
+A tag `0x02` frame has no checksum. Migration accepts a frame with a changed
+payload bit when it still decodes, and the migrated value can differ from the
+original. Before using either migration command, check your own checksum of
+the old file or compare it with a second copy.
+
 Python raises `ValueError` and WASM throws `SafeMeshError` code 1, with
 `failed to decode event log: ` before this same text. An unshaped `0x03` frame
 that fails its CRC is still `IntegrityMismatch`. A `0x02` tag is named only when
@@ -544,6 +549,7 @@ let log = EventLog::from_wire_bytes_for(&migrated, &state)?; // then persist `mi
 
 For untrusted history, use `migrate_legacy_wire_bytes_for_with_limits(&old_bytes,
 &state, DecodeLimits { max_records: Some(n), ..DecodeLimits::default() })`.
+The same tag `0x02` warning and pre-migration check above apply to this call.
 The budget counts every input occurrence, including duplicates, and refuses
 before decoding record `n + 1`. It also applies when the input is already a
 current shaped frame. The original call now uses the 100,000-record default;
@@ -578,7 +584,8 @@ The retained corpus `tests/fixtures/legacy-event-log/` holds each frame for
 every built-in delta that could be persisted then, generated from the last
 commit that wrote it. CI regenerates it at those commits
 (`scripts/check-legacy-event-log-fixtures.sh`). `tests/legacy_event_log.rs`
-asserts each file's exact error and lossless migration, and pins its SHA-256.
+asserts each undamaged retained file's exact error and byte-preserving migration,
+and pins its SHA-256.
 
 
 ## Checked local writers (Linux)
