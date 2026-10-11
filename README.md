@@ -82,7 +82,7 @@ Artifact available: the install flows below produce local Rust packages, WASM/Ty
 
 | Surface | Future consumer command — NOT YET PUBLISHED | v0.1 dry-run/local command |
 |---|---|---|
-| Rust core | `cargo add safemesh-crdt@0.1.0` | `cd rust && cargo publish --dry-run -p safemesh-crdt --allow-dirty` |
+| Rust core | `cargo add safemesh-crdt@0.1.0` | `(cd rust && cargo publish --dry-run -p safemesh-crdt --allow-dirty)` |
 | WASM / TypeScript | `npm install safemesh-wasm@0.1.0` | `tmp=$(mktemp -d) && scripts/package-wasm.sh bundler "$tmp/pkg"` |
 | Python | `pip install safemesh-python==0.1.0` | `tmp=$(mktemp -d) && (cd rust/crates/safemesh-python && maturin build --release --features extension-module --out "$tmp/wheels") && python3 -m venv "$tmp/venv" && "$tmp/venv/bin/pip" install --no-index --find-links "$tmp/wheels" safemesh-python` |
 
@@ -96,7 +96,7 @@ Runtime tested: the Rust, Node/WASM, and installed Python demo programs below ch
 
 | Surface | One-liner from the repo root |
 |---|---|
-| Rust | `cd rust && cargo run -p safemesh-crdt --example break_it` |
+| Rust | `(cd rust && cargo run -p safemesh-crdt --example break_it)` |
 | WASM / Node | `tmp=$(mktemp -d) && wasm-pack build rust/crates/safemesh-wasm --target nodejs --out-dir "$tmp/pkg" --release && node rust/crates/safemesh-wasm/examples/node-convergence.mjs "$tmp/pkg"` |
 | Python | `tmp=$(mktemp -d) && (cd rust/crates/safemesh-python && maturin build --release --features extension-module --out "$tmp/wheels") && python3 -m venv "$tmp/venv" && "$tmp/venv/bin/pip" install --no-index --find-links "$tmp/wheels" safemesh-python && "$tmp/venv/bin/python" rust/crates/safemesh-python/examples/data_mule_demo.py` |
 
@@ -116,9 +116,9 @@ Runtime tested: the Rust, Node/WASM, and installed Python demo programs below ch
 | C ABI spine (`safemesh-ffi`) | **API present** — thin C ABI wrapper over the Rust core with committed `include/safemesh.h`. **Runtime tested** — Rust-side calls exercise the wrapper. **Build checked** — the header drift check compares generated and committed declarations. **Artifact available** — external C distribution evidence is not recorded here. **Integration tested** — `scripts/ffi-c-smoke.sh` compiles, links, and runs an external C caller against the built library in the Linux CI job; other platforms are not covered. |
 | WASM / TypeScript binding (`safemesh-wasm`) | **API present** — wasm-bindgen wrapper over the Rust core with G-Counter replica/event-log exchange and committed TypeScript declarations. **Build checked** — CI compiles `wasm32-unknown-unknown` on Linux. **Runtime tested** — Rust-side binding tests exercise host behavior. **Integration tested** — the package smoke flow runs a generated package in Node; the web README separately records the Chromium walkthrough. Browser/version/OS matrix coverage is not established by the wasm32 build. |
 | Python binding (`safemesh-python`) | **API present** — PyO3/maturin wrapper over the Rust core with G-Counter replica/event-log exchange and pyproject metadata. **Runtime tested** — Rust-side binding tests exercise wrapper calls. **Integration tested** — CI configures wheel builds, installs, binding tests, and Python demo/sync checks on `ubuntu-latest` with CPython 3.8–3.14. The full distribution smoke test also runs on Python 3.11. Other Python/OS combinations are not established by these jobs. |
-| Break-it demo (`cargo run -p safemesh-crdt --example break_it`) | **Runnable showpiece** — deterministic partition/drop/duplicate/reorder/heal scenario that exits nonzero unless the replicas converge |
+| Break-it demo (`(cd rust && cargo run -p safemesh-crdt --example break_it)`) | **Runnable showpiece** — deterministic partition/drop/duplicate/reorder/heal scenario that exits nonzero unless the replicas converge |
 | Transport coverage contract | **Engineered + tested** — `TransportAdapter`, `InMemoryTransport`, and `anti_entropy` exercise subscribe/send/connectivity under drop, duplicate, reorder, partition, and heal campaigns |
-| Cold-chain kill-test (`cargo run -p safemesh-crdt --example cold_chain_kill_test`) | **Engineered evaluation** — software-only field-science vertical using the flat CRDT carriers and event-log exchange under transport faults |
+| Cold-chain kill-test (`(cd rust && cargo run -p safemesh-crdt --example cold_chain_kill_test)`) | **Engineered evaluation** — software-only field-science vertical using the flat CRDT carriers and event-log exchange under transport faults |
 | Laws harness (`--features laws`) | **Reusable tests** — checks merge laws and drop/dup/reorder convergence scenarios for any type implementing the SafeMesh traits; supplemental to the Lean-oracle diff |
 | User-defined types | **Tested, not proven** — users can implement the same merge contract and run the laws harness, but SafeMesh does not prove arbitrary application code |
 
@@ -201,7 +201,7 @@ Python story walkthrough: [`demos/python-cold-chain/README.md`](demos/python-col
 Reference application: [Fieldcheck](examples/fieldcheck/README.md) shows durable inspections
 surviving a service SIGKILL and reconciling after a loopback reconnect.
 
-`KILL-TEST.md` records the first software-only integrity vertical: field-science cold-chain sample custody. Run `cargo run -p safemesh-crdt --example cold_chain_kill_test` to exercise `EventLog`, `InMemoryTransport`, and the flat CRDT carriers through drop, duplicate, reorder, partition, and heal. This is an engineered evaluation artifact, not proof of sensors, custody law, storage durability, or real network delivery.
+`KILL-TEST.md` records the first software-only integrity vertical: field-science cold-chain sample custody. Run `(cd rust && cargo run -p safemesh-crdt --example cold_chain_kill_test)` to exercise `EventLog`, `InMemoryTransport`, and the flat CRDT carriers through drop, duplicate, reorder, partition, and heal. This is an engineered evaluation artifact, not proof of sensors, custody law, storage durability, or real network delivery.
 
 ## Transport Coverage Contract
 
