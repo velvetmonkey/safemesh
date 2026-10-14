@@ -24,6 +24,9 @@ jobs:
       - name: Install release asset tools
         run: |
           python3 -m pip install 'maturin==1.14.1'
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')"
+          echo "RUSTUP_TOOLCHAIN=$version" >> "$GITHUB_ENV"
+          export RUSTUP_TOOLCHAIN="$version"
           cargo install wasm-pack --version 0.15.0 --locked
       - name: Build release assets without upload
         run: bash scripts/build-release-assets.sh "$RUNNER_TEMP/release-assets"
