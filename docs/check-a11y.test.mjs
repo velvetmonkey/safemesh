@@ -16,3 +16,19 @@ test('planted image without alt and unnamed button make the accessibility check 
   assert.match(result.stdout, /article\/.*image-alt.*img/s);
   assert.match(result.stdout, /article\/.*button-name.*button/s);
 });
+
+test('per-rule ratchet permits the baseline and rejects only a rise', () => {
+  const baseline = join(root, 'baseline.json');
+  const data = { measuredOn: '2026-10-14', engine: 'axe-core@4.10.3', tags: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'], total: 2, counts: { 'button-name': 1, 'image-alt': 1 } };
+  writeFileSync(baseline, JSON.stringify(data));
+  const allowed = spawnSync(process.execPath, ['docs/check-a11y.mjs', '--root', root, '--baseline', baseline], { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: process.env });
+  assert.equal(allowed.status, 0, allowed.stderr);
+  assert.match(allowed.stdout, /PASS button-name: 1\/1/);
+  data.counts['button-name'] = 0;
+  data.total = 1;
+  writeFileSync(baseline, JSON.stringify(data));
+  const raised = spawnSync(process.execPath, ['docs/check-a11y.mjs', '--root', root, '--baseline', baseline], { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: process.env });
+  assert.equal(raised.status, 1, raised.stderr);
+  assert.match(raised.stdout, /FAIL button-name: 1\/0/);
+  assert.match(raised.stdout, /PASS image-alt: 1\/1/);
+});
