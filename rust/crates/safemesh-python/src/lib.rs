@@ -886,7 +886,7 @@ mod py_g_counter_replica_python {
 #[pyclass(name = "EnableWinsFlagReplica")]
 pub struct PyEnableWinsFlagReplica {
     replica_id: u64,
-    replica: Replica<EnableWinsFlag<u64>>,
+    log: Replica<EnableWinsFlag<u64>>,
 }
 
 // PyO3 0.22 generates redundant PyErr conversions outside the annotated item.
@@ -901,7 +901,7 @@ mod py_enable_wins_flag_replica_python {
         pub fn new(#[pyo3(from_py_with = "numeric")] replica_id: u64) -> Self {
             PyEnableWinsFlagReplica {
                 replica_id,
-                replica: Replica::new(EnableWinsFlag::new()),
+                log: Replica::new(EnableWinsFlag::new()),
             }
         }
 
@@ -912,7 +912,7 @@ mod py_enable_wins_flag_replica_python {
         ) -> PyResult<Bound<'py, PyBytes>> {
             let delta = EnableWinsFlagDelta::Enable { token };
             let record = self
-                .replica
+                .log
                 .append(self.replica_id, delta)
                 .map_err(replica_append_error)?;
             encode_bytes(py, record.to_wire_bytes(), "failed to encode record")
@@ -923,10 +923,10 @@ mod py_enable_wins_flag_replica_python {
             py: Python<'py>,
         ) -> PyResult<Bound<'py, PyBytes>> {
             let delta = EnableWinsFlagDelta::Disable {
-                tokens: self.replica.state().observed_tokens().into_iter().collect(),
+                tokens: self.log.state().observed_tokens().into_iter().collect(),
             };
             let record = self
-                .replica
+                .log
                 .append(self.replica_id, delta)
                 .map_err(replica_append_error)?;
             encode_bytes(py, record.to_wire_bytes(), "failed to encode record")
@@ -940,7 +940,7 @@ mod py_enable_wins_flag_replica_python {
                 CollectionLimits::WIRE_DEFAULT,
             )
             .map_err(|error| record_decode_error(replica_wire_error(error)))?;
-            record_verdict(self.replica.admit(record))
+            record_verdict(self.log.admit(record))
         }
 
         /// Return one core admission verdict for every decoded input record.
@@ -956,16 +956,13 @@ mod py_enable_wins_flag_replica_python {
                 max_records,
                 ..DecodeLimits::default()
             };
-            let log = self
-                .replica
-                .decode_log_bytes(bytes, limits)
-                .map_err(|error| {
-                    bounded_event_log_decode_error(replica_log_error(error), false, omitted)
-                })?;
+            let log = self.log.decode_log_bytes(bytes, limits).map_err(|error| {
+                bounded_event_log_decode_error(replica_log_error(error), false, omitted)
+            })?;
             Ok(log
                 .iter()
                 .cloned()
-                .map(|record| self.replica.admit(record))
+                .map(|record| self.log.admit(record))
                 .map(admission_name)
                 .collect())
         }
@@ -973,7 +970,7 @@ mod py_enable_wins_flag_replica_python {
         pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
             encode_bytes(
                 py,
-                self.replica.log_bytes().map_err(replica_wire_error),
+                self.log.log_bytes().map_err(replica_wire_error),
                 "failed to encode event log",
             )
         }
@@ -982,7 +979,7 @@ mod py_enable_wins_flag_replica_python {
         /// different payload, raised when a peer's record collided here or a
         /// peer's report named one. In memory only; never merged into state.
         pub fn collisions(&self) -> PyResult<Vec<PyRecordCollision>> {
-            record_collisions(self.replica.log())
+            record_collisions(self.log.log())
         }
 
         /// The collision report to send back to the peer whose batch was just
@@ -993,7 +990,7 @@ mod py_enable_wins_flag_replica_python {
         ) -> PyResult<Option<Bound<'py, PyBytes>>> {
             collision_report_bytes(
                 py,
-                self.replica
+                self.log
                     .collision_report_bytes()
                     .map_err(replica_wire_report_error),
             )
@@ -1013,7 +1010,7 @@ mod py_enable_wins_flag_replica_python {
         ) -> PyResult<Vec<String>> {
             let limits = collision_report_limits(max_records, max_collection_elements)?;
             collision_verdicts(
-                self.replica
+                self.log
                     .merge_collision_report_bytes(bytes, limits)
                     .map_err(replica_report_error),
                 omitted_record_budget(max_records),
@@ -1021,19 +1018,19 @@ mod py_enable_wins_flag_replica_python {
         }
 
         pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
-            self.replica.version().get(replica)
+            self.log.version().get(replica)
         }
 
         pub fn value(&self) -> bool {
-            self.replica.state().value()
+            self.log.state().value()
         }
 
         pub fn enabled_tokens(&self) -> Vec<u64> {
-            self.replica.state().enables().iter().copied().collect()
+            self.log.state().enables().iter().copied().collect()
         }
 
         pub fn tombstone_tokens(&self) -> Vec<u64> {
-            self.replica.state().tombstones().iter().copied().collect()
+            self.log.state().tombstones().iter().copied().collect()
         }
     }
 }
@@ -3333,7 +3330,7 @@ for make, append, read in [
                 println!("Python {frame}: {expected}");
                 assert_eq!(c.value(), 0);
                 assert!(c.replica.log().records().is_empty());
-                assert!(f.replica.log().records().is_empty());
+                assert!(f.log.records().is_empty());
                 assert!(m.log.records().is_empty());
                 assert!(r.log.records().is_empty());
             }
@@ -4539,13 +4536,23 @@ macro_rules! legacy_replica_test_views {
     };
 }
 #[cfg(test)]
+trait FlagReplicaRecords {
+    fn records(&self) -> &[Record<EnableWinsFlagDelta<u64>>];
+}
+#[cfg(test)]
+impl FlagReplicaRecords for Replica<EnableWinsFlag<u64>> {
+    fn records(&self) -> &[Record<EnableWinsFlagDelta<u64>>] {
+        self.log().records()
+    }
+}
+#[cfg(test)]
 impl ReplicaTestViews for PyEnableWinsFlagReplica {
     type State = EnableWinsFlag<u64>;
     fn test_state(&self) -> &Self::State {
-        self.replica.state()
+        self.log.state()
     }
     fn test_log(&self) -> &EventLog<EnableWinsFlagDelta<u64>> {
-        self.replica.log()
+        self.log.log()
     }
 }
 #[cfg(test)]
