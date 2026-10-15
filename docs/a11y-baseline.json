@@ -1,0 +1,20 @@
+{
+  "measuredOn": "2026-10-14",
+  "sourceHead": "1bf24db6cdabcd8fe55a1183cb6d714a79a913c7",
+  "engine": "axe-core@4.10.3",
+  "tags": [
+    "wcag2a",
+    "wcag2aa",
+    "wcag21a",
+    "wcag21aa",
+    "wcag22aa"
+  ],
+  "total": 376,
+  "counts": {
+    "color-contrast": 156,
+    "definition-list": 1,
+    "nested-interactive": 102,
+    "scrollable-region-focusable": 5,
+    "summary-name": 112
+  }
+}

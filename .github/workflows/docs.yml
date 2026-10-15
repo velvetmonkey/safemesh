@@ -92,6 +92,17 @@ jobs:
       - name: Crawl built pages, assets, anchors and external links
         timeout-minutes: 3
         run: python3 docs/check-links.py
+      - name: Check page transfer and JavaScript budgets
+        timeout-minutes: 10
+        run: |
+          cd web && npx playwright install --with-deps chromium && cd ..
+          node --test docs/check-page-budget.test.mjs
+          node docs/check-page-budget.mjs
+      - name: Check automated accessibility
+        timeout-minutes: 15
+        run: |
+          node --test docs/check-a11y.test.mjs
+          node docs/check-a11y.mjs
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
