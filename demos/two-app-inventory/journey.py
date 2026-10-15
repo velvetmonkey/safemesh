@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import socket
@@ -30,6 +31,13 @@ def require(condition, message):
         raise AssertionError(message)
 
 
+def current_crate_version():
+    manifest = Path(__file__).resolve().parents[2] / 'rust/crates/safemesh-crdt/Cargo.toml'
+    match = re.search(r'(?m)^version = "([^"]+)"$', manifest.read_text())
+    require(match is not None, 'crate version missing')
+    return match.group(1)
+
+
 def convergence(ports, expected):
     states = [rpc(port, 'status') for port in ports]
     require(all(s['state'] == expected for s in states), f'divergent state: {states}')
@@ -51,6 +59,7 @@ def main():
                         help='negative control: exit nonzero at the planted dropped delivery')
     args = parser.parse_args()
     require(args.rounds > 0 and args.interval >= 0, 'invalid workload')
+    expected_version = current_crate_version()
     root = args.run_dir.resolve()
     root.mkdir(parents=True, exist_ok=False)
     source = Path(__file__).resolve().parent
@@ -84,7 +93,7 @@ def main():
             try:
                 status = rpc(ports[index], 'status')
                 require(status['pid'] == process.pid, 'unexpected listener')
-                require(status['package_version'] == '0.1.0', 'wrong package version')
+                require(status['package_version'] == expected_version, 'wrong package version')
                 require(app / 'venv' in Path(status['package_file']).parents,
                         'package did not load from private installed environment')
                 emit('started', **status)
