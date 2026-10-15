@@ -103,6 +103,9 @@ jobs:
         run: |
           node --test docs/check-a11y.test.mjs
           node docs/check-a11y.mjs
+      - name: Check homepage startup failures
+        timeout-minutes: 3
+        run: node --test docs/startup-failure.browser.test.mjs
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
