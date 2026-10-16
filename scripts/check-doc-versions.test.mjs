@@ -63,4 +63,14 @@ test('W-NONE exits 1 without a tarball name', () => fails({ ...clean(), wasm: 'n
 test('P-README exits 1 for the Python README line', () => fails({ ...clean(), python: 'safemesh-python==0.1.0\n' }, paths.python));
 test('P-REQ exits 1 for requirements.txt:1', () => fails({ ...clean(), requirements: 'safemesh-python==0.1.0\n' }, paths.requirements));
 test('C-OLD exits 1 for the docs sentence', () => fails({ ...clean(), crdt: 'currently records `0.1.0` as an unpublished crate version\n' }, paths.crdt));
-test('BUMP exits 1 when only the wasm manifest changes', () => fails({ ...clean(), wasmManifest: '[package]\nversion = "9.8.8"\n' }, paths.wasm));
+test('BUMP exits 1 when only the wasm manifest changes', () => withTree({
+  ...clean(),
+  wasm: 'npm install safemesh-wasm-0.2.0.tgz\n',
+  wasmManifest: '[package]\nversion = "0.2.0"\n',
+}, (run, root) => {
+  assert.equal(run().status, 0);
+  writeFileSync(join(root, paths.wasmManifest), '[package]\nversion = "9.8.8"\n');
+  const result = run();
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /FAIL demos\/wasm-checklist\/README.md:\d+:/);
+}));
