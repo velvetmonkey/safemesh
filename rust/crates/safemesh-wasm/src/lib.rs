@@ -3717,6 +3717,46 @@ mod tests {
     }
 
     #[test]
+    fn wasm_lww_map_replica_reads_have_absolute_values() {
+        const EMPTY: &str = "720000000000000000";
+        const SET: &str =
+            "720100000007000000000000000a000000000000000100000000000000640000000000000000000000";
+        const REMOVE: &str = "720100000007000000000000000a00000000000000010000000000000064000000000000000100000007000000000000000b000000000000000100000000000000";
+        let decode_hex = |hex: &str| {
+            hex.as_bytes()
+                .chunks_exact(2)
+                .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+                .collect::<Vec<u8>>()
+        };
+
+        let mut r = SafeMeshLwwMapReplica::new(1);
+        assert!(!r.has_key(7), "empty has_key");
+        assert_eq!(r.entry_keys(), Vec::<u64>::new(), "empty entry_keys");
+        assert_eq!(
+            r.state_bytes().unwrap(),
+            decode_hex(EMPTY),
+            "empty state_bytes"
+        );
+
+        r.append_set(7, 10, 1, 100).unwrap();
+        assert!(r.has_key(7), "set has_key");
+        assert_eq!(r.entry_keys(), vec![7], "set entry_keys");
+        assert_eq!(r.visible_keys(), vec![7], "set visible_keys");
+        assert_eq!(r.state_bytes().unwrap(), decode_hex(SET), "set state_bytes");
+
+        r.append_remove(7, 11, 1).unwrap();
+        assert!(!r.has_key(7), "remove has_key");
+        assert_eq!(r.entry_keys(), vec![7], "remove entry_keys");
+        assert_eq!(r.visible_keys(), Vec::<u64>::new(), "remove visible_keys");
+        assert_eq!(r.removal_keys(), vec![7], "remove removal_keys");
+        assert_eq!(
+            r.state_bytes().unwrap(),
+            decode_hex(REMOVE),
+            "remove state_bytes"
+        );
+    }
+
+    #[test]
     fn wasm_lww_replicas_exchange_canonical_record_bytes() {
         let mut left = SafeMeshLwwRegisterReplica::new(1);
         let mut right = SafeMeshLwwRegisterReplica::new(2);

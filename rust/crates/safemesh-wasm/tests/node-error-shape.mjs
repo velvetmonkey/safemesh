@@ -552,3 +552,23 @@ for (const foreign of [9n, 1n, 99n, 2n ** 32n, 2n ** 64n - 1n]) {
 console.log(`LWW_OWNERSHIP_TEXT_CASES=15 FAILURES=${lwwOwnershipFailures.length}`);
 assert.deepEqual(lwwOwnershipFailures, []);
 console.log("LWW_FOREIGN_WRITER_REFUSED=true");
+
+{
+  const r = new wasm.SafeMeshLwwMapReplica(1n);
+  const stateHex = () => Buffer.from(r.stateBytes()).toString("hex");
+  assert.equal(r.hasKey(7n), false, "empty hasKey");
+  assert.deepEqual(Array.from(r.entryKeys()), [], "empty entryKeys");
+  assert.equal(stateHex(), "720000000000000000", "empty stateBytes");
+
+  r.appendSet(7n, 10n, 1n, 100n);
+  assert.equal(r.hasKey(7n), true, "set hasKey");
+  assert.deepEqual(Array.from(r.entryKeys()), [7n], "set entryKeys");
+  assert.equal(stateHex(), "720100000007000000000000000a000000000000000100000000000000640000000000000000000000", "set stateBytes");
+
+  r.appendRemove(7n, 11n, 1n);
+  assert.equal(r.hasKey(7n), false, "remove hasKey");
+  assert.deepEqual(Array.from(r.entryKeys()), [7n], "remove entryKeys");
+  assert.equal(stateHex(), "720100000007000000000000000a00000000000000010000000000000064000000000000000100000007000000000000000b000000000000000100000000000000", "remove stateBytes");
+  r.free();
+}
+console.log("LWW_MAP_REPLICA_ABSOLUTE_READS=true");
