@@ -32,6 +32,7 @@ const axe = resolve('docs/node_modules/axe-core/axe.min.js');
 if (!existsSync(axe)) throw new Error(`pinned axe-core missing: ${axe}`);
 const browser = await chromium.launch({ headless: true });
 let violations = 0;
+let unsettled = 0;
 const counts = {};
 try {
   for (const htmlFile of pages) {
@@ -46,7 +47,25 @@ try {
       });
       const page = await context.newPage();
       await page.goto(origin + route, { waitUntil: 'load', timeout: 30000 });
-      await page.waitForTimeout(200);
+      try {
+        await page.waitForFunction(() =>
+          document.fonts.status === 'loaded' &&
+          [...document.querySelectorAll('.expressive-code pre')].every(pre =>
+            pre.closest('details:not([open])') ||
+            (pre.scrollWidth > pre.clientWidth) === pre.hasAttribute('tabindex')),
+        null, { polling: 50, timeout: 10000 });
+      } catch (error) {
+        const state = await page.evaluate(() => ({
+          fonts: document.fonts.status,
+          waiting: [...document.querySelectorAll('.expressive-code pre')]
+            .filter(pre => !pre.closest('details:not([open])') &&
+              (pre.scrollWidth > pre.clientWidth) !== pre.hasAttribute('tabindex'))
+            .map(pre => `${pre.getAttribute('data-language') || 'pre'} ${pre.scrollWidth}/${pre.clientWidth} tabindex=${pre.hasAttribute('tabindex')}`),
+        })).catch(() => null);
+        console.log(`UNSETTLED ${route}: ${state ? `fonts=${state.fonts}; waiting=${state.waiting.join(', ') || 'none'}` : String(error)}`);
+        unsettled++;
+        continue;
+      }
       await page.addScriptTag({ path: axe });
       const result = await page.evaluate(tags => window.axe.run(document, { runOnly: { type: 'tag', values: tags } }), TAGS);
       for (const rule of result.violations) {
@@ -60,6 +79,7 @@ try {
 } finally { await browser.close(); }
 const sortedCounts = Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)));
 if (writeBaseline) {
+  if (unsettled) throw new Error(`${unsettled} page(s) did not settle; baseline not written`);
   const sourceHead = execFileSync('git', ['rev-parse', 'origin/main'], { encoding: 'utf8' }).trim();
   const baseline = { measuredOn: new Date().toISOString().slice(0, 10), sourceHead, engine, tags: TAGS, total: violations, counts: sortedCounts };
   writeFileSync(baselinePath, JSON.stringify(baseline, null, 2) + '\n');
@@ -77,5 +97,5 @@ if (writeBaseline) {
     if (red) regressions++;
   }
   console.log(`Accessibility ratchet: ${pages.length} pages, ${violations}/${baseline.total} total rule occurrences, ${regressions} rules above baseline; automated WCAG A/AA tag scan only, manual review remains open.`);
-  if (regressions) process.exitCode = 1;
+  if (regressions || unsettled) process.exitCode = 1;
 }
