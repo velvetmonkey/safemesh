@@ -47,19 +47,22 @@ try {
       });
       const page = await context.newPage();
       await page.goto(origin + route, { waitUntil: 'load', timeout: 30000 });
+      await page.evaluate(() => {
+        for (const details of document.querySelectorAll('details')) {
+          if (details.querySelector('.expressive-code')) details.open = true;
+        }
+      });
       try {
         await page.waitForFunction(() =>
           document.fonts.status === 'loaded' &&
           [...document.querySelectorAll('.expressive-code pre')].every(pre =>
-            pre.closest('details:not([open])') ||
             (pre.scrollWidth > pre.clientWidth) === pre.hasAttribute('tabindex')),
         null, { polling: 50, timeout: 10000 });
       } catch (error) {
         const state = await page.evaluate(() => ({
           fonts: document.fonts.status,
           waiting: [...document.querySelectorAll('.expressive-code pre')]
-            .filter(pre => !pre.closest('details:not([open])') &&
-              (pre.scrollWidth > pre.clientWidth) !== pre.hasAttribute('tabindex'))
+            .filter(pre => (pre.scrollWidth > pre.clientWidth) !== pre.hasAttribute('tabindex'))
             .map(pre => `${pre.getAttribute('data-language') || 'pre'} ${pre.scrollWidth}/${pre.clientWidth} tabindex=${pre.hasAttribute('tabindex')}`),
         })).catch(() => null);
         console.log(`UNSETTLED ${route}: ${state ? `fonts=${state.fonts}; waiting=${state.waiting.join(', ') || 'none'}` : String(error)}`);
