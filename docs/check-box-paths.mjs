@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unified } from 'unified';
@@ -8,6 +8,7 @@ import { createProcessor } from '@mdx-js/mdx';
 import remarkGfm from 'remark-gfm';
 import remarkSmartypants from 'remark-smartypants';
 import remarkDirective from 'remark-directive';
+import { pages as assurancePages } from './assurance.mjs';
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const rootFlag = process.argv.indexOf('--root');
@@ -17,7 +18,7 @@ if (rootFlag !== -1 && !process.argv[rootFlag + 1]) {
 const root = rootFlag === -1 ? repository : resolve(process.argv[rootFlag + 1]);
 const content = join(root, 'docs/src/content/docs');
 const forbidden = '/home/' + 'monkey';
-const markdownParser = unified().use(remarkParse);
+const markdownParser = unified().use(remarkParse).use(remarkGfm);
 const mdxParser = createProcessor({
   format: 'mdx',
   remarkPlugins: [remarkGfm, remarkSmartypants, remarkDirective],
@@ -36,16 +37,21 @@ function* codeNodes(node) {
   for (const child of node.children ?? []) yield* codeNodes(child);
 }
 
-const pages = pagesUnder(content).sort();
+const pages = pagesUnder(content);
+for (const [route, source] of Object.entries(assurancePages)) {
+  if (existsSync(join(content, `${route}.md`))) pages.push(join(root, source));
+}
+pages.sort();
 if (pages.length === 0) throw new Error(`no published pages in ${content}`);
 let fences = 0;
 let refusals = 0;
 let parseErrors = 0;
 for (const page of pages) {
-  const source = readFileSync(page, 'utf8');
   const mdx = extname(page) === '.mdx';
+  let source;
   let tree;
   try {
+    source = readFileSync(page, 'utf8');
     tree = (mdx ? mdxParser : markdownParser).parse(source);
   } catch (error) {
     const name = relative(root, page).split(sep).join('/');
