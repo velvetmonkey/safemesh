@@ -4,6 +4,10 @@ import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
+import { createProcessor } from '@mdx-js/mdx';
+import remarkGfm from 'remark-gfm';
+import remarkSmartypants from 'remark-smartypants';
+import remarkDirective from 'remark-directive';
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const rootFlag = process.argv.indexOf('--root');
@@ -13,7 +17,11 @@ if (rootFlag !== -1 && !process.argv[rootFlag + 1]) {
 const root = rootFlag === -1 ? repository : resolve(process.argv[rootFlag + 1]);
 const content = join(root, 'docs/src/content/docs');
 const forbidden = '/home/' + 'monkey';
-const parser = unified().use(remarkParse);
+const markdownParser = unified().use(remarkParse);
+const mdxParser = createProcessor({
+  format: 'mdx',
+  remarkPlugins: [remarkGfm, remarkSmartypants, remarkDirective],
+});
 
 function pagesUnder(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
@@ -32,13 +40,23 @@ const pages = pagesUnder(content).sort();
 if (pages.length === 0) throw new Error(`no published pages in ${content}`);
 let fences = 0;
 let refusals = 0;
+let parseErrors = 0;
 for (const page of pages) {
   const source = readFileSync(page, 'utf8');
-  const tree = parser.parse(source);
+  const mdx = extname(page) === '.mdx';
+  let tree;
+  try {
+    tree = (mdx ? mdxParser : markdownParser).parse(source);
+  } catch (error) {
+    const name = relative(root, page).split(sep).join('/');
+    console.error(`FAIL ${name}: ${error.message}`);
+    parseErrors++;
+    continue;
+  }
   for (const node of codeNodes(tree)) {
-    // The parser also calls four-space indented blocks "code". A fence starts
-    // at the node's source position with up to three leading spaces.
-    if (!/^ {0,3}(?:`{3,}|~{3,})/.test(source.slice(node.position.start.offset))) continue;
+    // Markdown calls four-space indented blocks "code" too. MDX has no
+    // indented code blocks, so every MDX code node is a fence.
+    if (!mdx && !/^ {0,3}(?:`{3,}|~{3,})/.test(source.slice(node.position.start.offset))) continue;
     fences++;
     for (const line of node.value.split(/\r?\n/)) {
       if (!line.includes(forbidden)) continue;
@@ -48,5 +66,5 @@ for (const page of pages) {
     }
   }
 }
-if (refusals) process.exitCode = 1;
+if (refusals || parseErrors) process.exitCode = 1;
 else console.log(`PASS ${pages.length} pages, ${fences} fenced blocks read`);
