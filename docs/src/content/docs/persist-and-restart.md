@@ -552,7 +552,7 @@ Before a first release, the project does not promise:
 - **A version-numbering promise**, including semantic versioning or a support
   window. `safemesh-crdt`
   [`Cargo.toml`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/Cargo.toml)
-  currently records `0.1.0` as an unpublished crate version; that number is not
+  currently records `0.2.0` as an unpublished crate version; that number is not
   a versioning promise.
 - **That an older decoder can read every future EventLog frame.** The full gate
   samples current output with the tagged `v0.1.0` decoder; a later format may
