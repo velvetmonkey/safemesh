@@ -32,3 +32,41 @@ test('per-rule ratchet permits the baseline and rejects only a rise', () => {
   assert.match(raised.stdout, /FAIL button-name: 1\/0/);
   assert.match(raised.stdout, /PASS image-alt: 1\/1/);
 });
+
+const zeroBaseline = join(root, 'zero-baseline.json');
+writeFileSync(zeroBaseline, JSON.stringify({ measuredOn: '2026-10-16', engine: 'axe-core@4.10.3', tags: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'], total: 0, counts: {} }));
+const overflowingPre = '<div class="expressive-code"><pre style="width:100px;overflow:auto;white-space:pre">' + 'long-line-'.repeat(60) + '</pre></div>';
+function scanFixture(route) {
+  return spawnSync(process.execPath, ['docs/check-a11y.mjs', '--root', join(root, route), '--baseline', zeroBaseline], { cwd: new URL('..', import.meta.url), encoding: 'utf8', env: process.env });
+}
+
+test('late focus settles before axe runs on every repeat', () => {
+  const fixture = join(root, 'late-focus');
+  mkdirSync(fixture);
+  writeFileSync(join(fixture, 'index.html'), `<!doctype html><html lang="en"><title>Late focus</title><body><main><h1>Late focus</h1>${overflowingPre}</main><script>setTimeout(() => document.querySelector('.expressive-code pre').setAttribute('tabindex', '0'), 600)</script></body></html>`);
+  for (let i = 0; i < 5; i++) {
+    const result = scanFixture('late-focus');
+    assert.equal(result.status, 0, `repeat ${i + 1}: ${result.stdout}\n${result.stderr}`);
+    assert.doesNotMatch(result.stdout, /scrollable-region-focusable|UNSETTLED/);
+  }
+});
+
+test('a scroll region that never receives focus fails on every repeat', () => {
+  const fixture = join(root, 'never-focus');
+  mkdirSync(fixture);
+  writeFileSync(join(fixture, 'index.html'), `<!doctype html><html lang="en"><title>Never focus</title><body><main><h1>Never focus</h1>${overflowingPre}</main></body></html>`);
+  for (let i = 0; i < 5; i++) {
+    const result = scanFixture('never-focus');
+    assert.equal(result.status, 1, `repeat ${i + 1}: ${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /UNSETTLED \/safemesh\//);
+  }
+});
+
+test('closed details do not hold the visible code block wait open', () => {
+  const fixture = join(root, 'closed-details');
+  mkdirSync(fixture);
+  writeFileSync(join(fixture, 'index.html'), `<!doctype html><html lang="en"><title>Closed details</title><body><main><h1>Closed details</h1><details><summary>Code</summary>${overflowingPre}</details></main></body></html>`);
+  const result = scanFixture('closed-details');
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.doesNotMatch(result.stdout, /scrollable-region-focusable|UNSETTLED/);
+});
