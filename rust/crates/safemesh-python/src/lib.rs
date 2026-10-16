@@ -8,8 +8,7 @@ use safemesh_crdt::ownership::{allocate_token, WriterConfig};
 use safemesh_crdt::{
     CollectionLimits, Crdt, DecodeError, DecodeLimits, EnableWinsFlag, EnableWinsFlagDelta,
     EventLog, GCounter, GCounterDelta, GSet, LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta,
-    OrSet, OrSetDelta, PnCounter, Record, Replica, ReplicaError, Rga, WireDecode, WireEncode,
-    WireError,
+    OrSet, OrSetDelta, PnCounter, Record, Replica, ReplicaError, Rga, WireEncode, WireError,
 };
 use safemesh_crdt::{CollisionVerdict, RecordId};
 
@@ -1222,8 +1221,7 @@ mod py_lww_map_replica_python {
 #[pyclass(name = "LwwRegisterReplica")]
 pub struct PyLwwRegisterReplica {
     replica_id: u64,
-    state: LwwRegister<u64>,
-    log: EventLog<LwwRegisterDelta<u64>>,
+    replica: Replica<LwwRegister<u64>>,
 }
 
 // PyO3 0.22 generates redundant PyErr conversions outside the annotated item.
@@ -1238,8 +1236,7 @@ mod py_lww_register_replica_python {
         pub fn new(#[pyo3(from_py_with = "numeric")] replica_id: u64) -> Self {
             PyLwwRegisterReplica {
                 replica_id,
-                state: LwwRegister::new(),
-                log: EventLog::new(),
+                replica: Replica::new(LwwRegister::new()),
             }
         }
 
@@ -1255,39 +1252,24 @@ mod py_lww_register_replica_python {
                 replica: writer_replica,
                 value,
             };
-            let id = self
-                .log
-                .append_with(
-                    &mut self.state,
-                    self.replica_id,
-                    delta.clone(),
-                    |state, delta| {
-                        state.apply_delta(delta.clone());
-                    },
-                )
-                .map_err(append_error)?;
-            encode_bytes(
-                py,
-                Record { id, delta }.to_wire_bytes(),
-                "failed to encode record",
-            )
+            let record = self
+                .replica
+                .append(self.replica_id, delta)
+                .map_err(replica_append_error)?;
+            encode_bytes(py, record.to_wire_bytes(), "failed to encode record")
         }
 
         /// Return the core admission verdict for the decoded input record, as
         /// `merge_log_bytes` does per record. Only "accepted" changes state.
         pub fn merge_record_bytes(&mut self, bytes: &[u8]) -> PyResult<String> {
-            let record = Record::<LwwRegisterDelta<u64>>::from_wire_bytes(bytes)
-                .map_err(record_decode_error)?;
-            record_verdict(
-                self.log
-                    .admit_with(&mut self.state, record, |state, delta| {
-                        state.apply_delta(delta.clone());
-                    }),
+            let record = Replica::<LwwRegister<u64>>::inspect_record_bytes(
+                bytes,
+                CollectionLimits::WIRE_DEFAULT,
             )
+            .map_err(|error| record_decode_error(replica_wire_error(error)))?;
+            record_verdict(self.replica.admit(record))
         }
 
-        // This class keeps its own admission copy by the 2026-10-01 ruling (P2 step 4 tight, OR-1 = A).
-        // A shared Replica admission fix does not reach this copy; apply it here by hand.
         /// Return one core admission verdict for every decoded input record.
         #[pyo3(signature = (bytes, *, max_records = None))]
         pub fn merge_log_bytes(
@@ -1301,34 +1283,33 @@ mod py_lww_register_replica_python {
                 max_records,
                 ..DecodeLimits::default()
             };
-            let log = EventLog::<LwwRegisterDelta<u64>>::records_from_wire_bytes_for_with_limits(
-                bytes,
-                &self.state,
-                limits,
-            )
-            .map_err(|error| bounded_event_log_decode_error(error, false, omitted))?;
+            let log = self
+                .replica
+                .decode_log_bytes(bytes, limits)
+                .map_err(|error| {
+                    bounded_event_log_decode_error(replica_log_error(error), false, omitted)
+                })?;
             Ok(log
                 .iter()
                 .cloned()
-                .map(|record| {
-                    self.log
-                        .admit_with(&mut self.state, record, |state, delta| {
-                            state.apply_delta(delta.clone());
-                        })
-                })
+                .map(|record| self.replica.admit(record))
                 .map(admission_name)
                 .collect())
         }
 
         pub fn log_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-            encode_bytes(py, self.log.to_wire_bytes(), "failed to encode event log")
+            encode_bytes(
+                py,
+                self.replica.log_bytes().map_err(replica_wire_error),
+                "failed to encode event log",
+            )
         }
 
         /// The collision alarm: every held record ID a peer holds with a
         /// different payload, raised when a peer's record collided here or a
         /// peer's report named one. In memory only; never merged into state.
         pub fn collisions(&self) -> PyResult<Vec<PyRecordCollision>> {
-            record_collisions(&self.log)
+            record_collisions(self.replica.log())
         }
 
         /// The collision report to send back to the peer whose batch was just
@@ -1337,7 +1318,12 @@ mod py_lww_register_replica_python {
             &self,
             py: Python<'py>,
         ) -> PyResult<Option<Bound<'py, PyBytes>>> {
-            collision_report_bytes(py, self.log.collision_report_bytes())
+            collision_report_bytes(
+                py,
+                self.replica
+                    .collision_report_bytes()
+                    .map_err(replica_wire_report_error),
+            )
         }
 
         /// Merge a peer's collision report and return one verdict per entry:
@@ -1354,25 +1340,32 @@ mod py_lww_register_replica_python {
         ) -> PyResult<Vec<String>> {
             let limits = collision_report_limits(max_records, max_collection_elements)?;
             collision_verdicts(
-                self.log.merge_collision_report_bytes(bytes, limits),
+                self.replica
+                    .merge_collision_report_bytes(bytes, limits)
+                    .map_err(replica_report_error),
                 omitted_record_budget(max_records),
             )
         }
 
         pub fn version_for(&self, #[pyo3(from_py_with = "numeric")] replica: u64) -> u64 {
-            self.log.version().get(replica)
+            self.replica.version().get(replica)
         }
 
         pub fn has_value(&self) -> bool {
-            self.state.value().is_some()
+            self.replica.state().value().is_some()
         }
 
         pub fn value_or(&self, #[pyo3(from_py_with = "numeric")] default_value: u64) -> u64 {
-            self.state.value().copied().unwrap_or(default_value)
+            self.replica
+                .state()
+                .value()
+                .copied()
+                .unwrap_or(default_value)
         }
 
         pub fn timestamp_or(&self, #[pyo3(from_py_with = "numeric")] default_value: u64) -> u64 {
-            self.state
+            self.replica
+                .state()
                 .entry()
                 .map(|entry| entry.dot.timestamp)
                 .unwrap_or(default_value)
@@ -1382,7 +1375,8 @@ mod py_lww_register_replica_python {
             &self,
             #[pyo3(from_py_with = "numeric")] default_value: u64,
         ) -> u64 {
-            self.state
+            self.replica
+                .state()
                 .entry()
                 .map(|entry| entry.dot.replica)
                 .unwrap_or(default_value)
@@ -2337,7 +2331,7 @@ mod py_pncounter_python {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use safemesh_crdt::{RecordId, WireEncode};
+    use safemesh_crdt::{RecordId, WireDecode, WireEncode};
 
     fn with_python<T>(f: impl FnOnce(Python<'_>) -> T) -> T {
         pyo3::prepare_freethreaded_python();
@@ -3314,7 +3308,7 @@ for make, append, read in [
                 assert!(c.replica.log().records().is_empty());
                 assert!(f.log.records().is_empty());
                 assert!(m.replica.log().records().is_empty());
-                assert!(r.log.records().is_empty());
+                assert!(r.test_log().records().is_empty());
             }
         });
     }
@@ -4504,20 +4498,6 @@ impl ReplicaTestViews for PyGCounterReplica {
     }
 }
 #[cfg(test)]
-macro_rules! legacy_replica_test_views {
-    ($binding:ty, $state:ty) => {
-        impl ReplicaTestViews for $binding {
-            type State = $state;
-            fn test_state(&self) -> &Self::State {
-                &self.state
-            }
-            fn test_log(&self) -> &EventLog<<Self::State as Crdt>::Delta> {
-                &self.log
-            }
-        }
-    };
-}
-#[cfg(test)]
 trait FlagReplicaRecords {
     fn records(&self) -> &[Record<EnableWinsFlagDelta<u64>>];
 }
@@ -4548,4 +4528,12 @@ impl ReplicaTestViews for PyLwwMapReplica {
     }
 }
 #[cfg(test)]
-legacy_replica_test_views!(PyLwwRegisterReplica, LwwRegister<u64>);
+impl ReplicaTestViews for PyLwwRegisterReplica {
+    type State = LwwRegister<u64>;
+    fn test_state(&self) -> &Self::State {
+        self.replica.state()
+    }
+    fn test_log(&self) -> &EventLog<LwwRegisterDelta<u64>> {
+        self.replica.log()
+    }
+}
