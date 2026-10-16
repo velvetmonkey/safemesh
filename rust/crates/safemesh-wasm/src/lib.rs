@@ -483,8 +483,8 @@ record_exchange_methods!(SafeMeshGCounterReplica, true, |this| (
     this.replica.log()
 ));
 record_exchange_methods!(SafeMeshEnableWinsFlagReplica, false, |this| (
-    &this.state,
-    &this.log
+    this.replica.state(),
+    this.replica.log()
 ));
 record_exchange_methods!(SafeMeshLwwMapReplica, false, |this| (
     &this.state,
@@ -663,8 +663,11 @@ collision_alarm_methods!(
 );
 collision_alarm_methods!(
     SafeMeshEnableWinsFlagReplica,
-    |this| &this.log,
-    |this, bytes, limits| this.log.merge_collision_report_bytes(bytes, limits)
+    |this| this.replica.log(),
+    |this, bytes, limits| this
+        .replica
+        .merge_collision_report_bytes(bytes, limits)
+        .map_err(replica_report_error)
 );
 collision_alarm_methods!(
     SafeMeshLwwMapReplica,
@@ -1148,8 +1151,7 @@ impl SafeMeshGCounterReplica {
 #[wasm_bindgen]
 pub struct SafeMeshEnableWinsFlagReplica {
     replica_id: u64,
-    state: EnableWinsFlag<u64>,
-    log: EventLog<EnableWinsFlagDelta<u64>>,
+    replica: Replica<EnableWinsFlag<u64>>,
 }
 
 #[wasm_bindgen]
@@ -1174,20 +1176,14 @@ impl SafeMeshEnableWinsFlagReplica {
     #[wasm_bindgen(js_name = appendDisableObserved)]
     pub fn append_disable_observed(&mut self) -> Result<Vec<u8>, JsValue> {
         let delta = EnableWinsFlagDelta::Disable {
-            tokens: self.state.observed_tokens().into_iter().collect(),
+            tokens: self.replica.state().observed_tokens().into_iter().collect(),
         };
-        let id = self
-            .log
-            .append_with(
-                &mut self.state,
-                self.replica_id,
-                delta.clone(),
-                |state, delta| {
-                    state.apply_delta(delta.clone());
-                },
-            )
-            .map_err(|error| JsValue::from(append_error(error)))?;
-        Record { id, delta }
+        self.replica
+            .append(self.replica_id, delta)
+            .map_err(|error| match error {
+                ReplicaError::Append(error) => JsValue::from(append_error(error)),
+                _ => unreachable!(),
+            })?
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
     }
@@ -1203,22 +1199,17 @@ impl SafeMeshEnableWinsFlagReplica {
         bytes: &[u8],
         max_collection_elements: Option<u32>,
     ) -> Result<String, JsValue> {
-        let record = Record::<EnableWinsFlagDelta<u64>>::from_wire_bytes_with_collection_limits(
+        let record = Replica::<EnableWinsFlag<u64>>::inspect_record_bytes(
             bytes,
             collection_limits(max_collection_elements),
         )
-        .map_err(record_decode_js_error)?;
-        record_verdict(
-            self.log
-                .admit_with(&mut self.state, record, |state, delta| {
-                    state.apply_delta(delta.clone());
-                }),
-        )
-        .map_err(JsValue::from)
+        .map_err(|error| match error {
+            ReplicaError::RecordDecode(error) => record_decode_js_error(error),
+            _ => unreachable!(),
+        })?;
+        record_verdict(self.replica.admit(record)).map_err(JsValue::from)
     }
 
-    // This class keeps its own admission copy by the 2026-10-01 ruling (P2 step 4 tight, OR-1 = A).
-    // A shared Replica admission fix does not reach this copy; apply it here by hand.
     /// Return one core admission verdict for every decoded input record.
     /// `maxRecords` is the third argument; the second limits collection elements.
     #[wasm_bindgen(
@@ -1232,29 +1223,27 @@ impl SafeMeshEnableWinsFlagReplica {
         max_collection_elements: Option<u32>,
         maxRecords: Option<u32>,
     ) -> Result<Vec<String>, JsValue> {
-        let log = EventLog::<EnableWinsFlagDelta<u64>>::records_from_wire_bytes_for_with_limits(
-            bytes,
-            &self.state,
-            decode_limits(max_collection_elements, maxRecords),
-        )
-        .map_err(|error| event_log_decode_js_error(error, false, maxRecords.is_none()))?;
+        let log = self
+            .replica
+            .decode_log_bytes(bytes, decode_limits(max_collection_elements, maxRecords))
+            .map_err(|error| match error {
+                ReplicaError::LogDecode(error) => {
+                    event_log_decode_js_error(error, false, maxRecords.is_none())
+                }
+                _ => unreachable!(),
+            })?;
         Ok(log
             .iter()
             .cloned()
-            .map(|record| {
-                self.log
-                    .admit_with(&mut self.state, record, |state, delta| {
-                        state.apply_delta(delta.clone());
-                    })
-            })
+            .map(|record| self.replica.admit(record))
             .map(admission_name)
             .collect())
     }
 
     #[wasm_bindgen(js_name = logBytes)]
     pub fn log_bytes(&self) -> Result<Vec<u8>, JsValue> {
-        self.log
-            .to_wire_bytes()
+        self.replica
+            .log_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode event log"))
     }
 
@@ -1268,17 +1257,17 @@ impl SafeMeshEnableWinsFlagReplica {
     }
 
     pub fn value(&self) -> bool {
-        self.state.value()
+        self.replica.state().value()
     }
 
     #[wasm_bindgen(js_name = enabledTokens)]
     pub fn enabled_tokens(&self) -> Vec<u64> {
-        self.state.enables().iter().copied().collect()
+        self.replica.state().enables().iter().copied().collect()
     }
 
     #[wasm_bindgen(js_name = tombstoneTokens)]
     pub fn tombstone_tokens(&self) -> Vec<u64> {
-        self.state.tombstones().iter().copied().collect()
+        self.replica.state().tombstones().iter().copied().collect()
     }
 }
 
@@ -2432,31 +2421,24 @@ impl SafeMeshEnableWinsFlagReplica {
     pub fn new(replica_id: u64) -> Self {
         SafeMeshEnableWinsFlagReplica {
             replica_id,
-            state: EnableWinsFlag::new(),
-            log: EventLog::new(),
+            replica: Replica::new(EnableWinsFlag::new()),
         }
     }
 
     pub fn append_enable(&mut self, token: u64) -> Result<Vec<u8>, JsValue> {
         let delta = EnableWinsFlagDelta::Enable { token };
-        let id = self
-            .log
-            .append_with(
-                &mut self.state,
-                self.replica_id,
-                delta.clone(),
-                |state, delta| {
-                    state.apply_delta(delta.clone());
-                },
-            )
-            .map_err(|error| JsValue::from(append_error(error)))?;
-        Record { id, delta }
+        self.replica
+            .append(self.replica_id, delta)
+            .map_err(|error| match error {
+                ReplicaError::Append(error) => JsValue::from(append_error(error)),
+                _ => unreachable!(),
+            })?
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
     }
 
     pub fn version_for(&self, replica: u64) -> u64 {
-        self.log.version().get(replica)
+        self.replica.version().get(replica)
     }
 }
 impl SafeMeshLwwMapReplica {
@@ -3260,7 +3242,8 @@ mod tests {
         check!(
             SafeMeshEnableWinsFlagReplica::new(2),
             EnableWinsFlagDelta::Enable { token: 5 },
-            EnableWinsFlagDelta::Enable { token: 9 }
+            EnableWinsFlagDelta::Enable { token: 9 },
+            core
         );
         check!(
             SafeMeshLwwRegisterReplica::new(2),
@@ -3541,7 +3524,8 @@ mod tests {
         check!(
             SafeMeshEnableWinsFlagReplica::new(2),
             EnableWinsFlagDelta::Enable { token: 5 },
-            EnableWinsFlagDelta::Enable { token: 9 }
+            EnableWinsFlagDelta::Enable { token: 9 },
+            core
         );
         check!(
             SafeMeshLwwRegisterReplica::new(2),
