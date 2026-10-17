@@ -62,11 +62,35 @@ test('a scroll region that never receives focus fails on every repeat', () => {
   }
 });
 
-test('closed details do not hold the visible code block wait open', () => {
+test('closed details with a never focusable scroll region fail on every repeat', () => {
   const fixture = join(root, 'closed-details');
   mkdirSync(fixture);
-  writeFileSync(join(fixture, 'index.html'), `<!doctype html><html lang="en"><title>Closed details</title><body><main><h1>Closed details</h1><details><summary>Code</summary>${overflowingPre}</details></main></body></html>`);
-  const result = scanFixture('closed-details');
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  assert.doesNotMatch(result.stdout, /scrollable-region-focusable|UNSETTLED/);
+  writeFileSync(join(fixture, 'index.html'), `<!doctype html><html lang="en"><title>Closed details</title><style>details:not([open]) .expressive-code pre{display:none}</style><body><main><h1>Closed details</h1><details><summary>Code</summary>${overflowingPre}</details></main></body></html>`);
+  for (let i = 0; i < 5; i++) {
+    const result = scanFixture('closed-details');
+    assert.equal(result.status, 1, `repeat ${i + 1}: ${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /UNSETTLED \/safemesh\/|scrollable-region-focusable/);
+  }
+});
+
+test('closed details code that gains focus after opening stays green', () => {
+  const fixture = join(root, 'closed-late-focus');
+  mkdirSync(fixture);
+  writeFileSync(join(fixture, 'index.html'), `<!doctype html><html lang="en"><title>Closed late focus</title><body><main><h1>Closed late focus</h1><details><summary>Code</summary>${overflowingPre}</details></main><script>new ResizeObserver(() => { const pre = document.querySelector('.expressive-code pre'); if (pre.scrollWidth > pre.clientWidth) pre.setAttribute('tabindex', '0') }).observe(document.querySelector('.expressive-code pre'))</script></body></html>`);
+  for (let i = 0; i < 5; i++) {
+    const result = scanFixture('closed-late-focus');
+    assert.equal(result.status, 0, `repeat ${i + 1}: ${result.stdout}\n${result.stderr}`);
+    assert.doesNotMatch(result.stdout, /scrollable-region-focusable|UNSETTLED/);
+  }
+});
+
+test('closed details image without alt is scanned when code gains focus', () => {
+  const fixture = join(root, 'closed-image');
+  mkdirSync(fixture);
+  writeFileSync(join(fixture, 'index.html'), `<!doctype html><html lang="en"><title>Closed image</title><style>details:not([open]) .expressive-code pre{display:none}</style><body><main><h1>Closed image</h1><details><summary>Code</summary>${overflowingPre}<img src="/safemesh/pixel.png"></details></main><script>new ResizeObserver(() => { const pre = document.querySelector('.expressive-code pre'); if (pre.scrollWidth > pre.clientWidth) pre.setAttribute('tabindex', '0') }).observe(document.querySelector('.expressive-code pre'))</script></body></html>`);
+  for (let i = 0; i < 5; i++) {
+    const result = scanFixture('closed-image');
+    assert.equal(result.status, 1, `repeat ${i + 1}: ${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /FOUND \/safemesh\/: image-alt:/);
+  }
 });
