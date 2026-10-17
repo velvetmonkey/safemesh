@@ -506,8 +506,8 @@ record_exchange_methods!(SafeMeshStringOrSetReplica, false, |this| (
     this.replica.log()
 ));
 record_exchange_methods!(SafeMeshPnCounterReplica, true, |this| (
-    &this.state,
-    &this.log
+    this.replica.state(),
+    this.replica.log()
 ));
 
 /// One record ID this replica holds that a peer holds with a different
@@ -699,8 +699,11 @@ collision_alarm_methods!(
 );
 collision_alarm_methods!(
     SafeMeshPnCounterReplica,
-    |this| &this.log,
-    |this, bytes, limits| this.log.merge_collision_report_bytes(bytes, limits)
+    |this| this.replica.log(),
+    |this, bytes, limits| this
+        .replica
+        .merge_collision_report_bytes(bytes, limits)
+        .map_err(replica_report_error)
 );
 
 #[wasm_bindgen]
@@ -3514,7 +3517,8 @@ mod tests {
             PnCounterDelta::Dec {
                 replica: 1,
                 tally: 9
-            }
+            },
+            core
         );
         check!(
             SafeMeshEnableWinsFlagReplica::new(2),
@@ -4524,8 +4528,7 @@ mod tests {
 #[wasm_bindgen]
 pub struct SafeMeshPnCounterReplica {
     replica_id: u64,
-    state: PnCounter,
-    log: EventLog<PnCounterDelta>,
+    replica: Replica<PnCounter>,
 }
 
 #[wasm_bindgen]
@@ -4573,13 +4576,16 @@ impl SafeMeshPnCounterReplica {
         bytes: &[u8],
         max_collection_elements: Option<u32>,
     ) -> Result<String, JsValue> {
-        let record = Record::<PnCounterDelta>::from_wire_bytes_with_collection_limits(
+        let record = Replica::<PnCounter>::inspect_record_bytes(
             bytes,
             collection_limits(max_collection_elements),
         )
-        .map_err(record_decode_js_error)?;
+        .map_err(|e| match e {
+            ReplicaError::RecordDecode(e) => record_decode_js_error(e),
+            _ => unreachable!(),
+        })?;
         if safemesh_crdt::ownership::check_counter_record(
-            self.state.p_state().len(),
+            self.replica.state().p_state().len(),
             record.id,
             &record.delta,
         )
@@ -4590,17 +4596,9 @@ impl SafeMeshPnCounterReplica {
                 "counter coordinate out of range or not owned by record author",
             ));
         }
-        record_verdict(
-            self.log
-                .admit_with(&mut self.state, record, |state, delta| {
-                    state.apply_delta(delta.clone());
-                }),
-        )
-        .map_err(JsValue::from)
+        record_verdict(self.replica.admit(record)).map_err(JsValue::from)
     }
 
-    // This class keeps its own admission copy by the 2026-10-01 ruling (P2 step 4 tight, OR-1 = A).
-    // A shared Replica admission fix does not reach this copy; apply it here by hand.
     /// Return one core admission verdict for every decoded input record.
     /// `maxRecords` is the third argument; the second limits collection elements.
     #[wasm_bindgen(
@@ -4614,15 +4612,18 @@ impl SafeMeshPnCounterReplica {
         max_collection_elements: Option<u32>,
         maxRecords: Option<u32>,
     ) -> Result<Vec<String>, JsValue> {
-        let log = EventLog::<PnCounterDelta>::records_from_wire_bytes_for_with_limits(
-            bytes,
-            &self.state,
-            decode_limits(max_collection_elements, maxRecords),
-        )
-        .map_err(|error| event_log_decode_js_error(error, true, maxRecords.is_none()))?;
+        let log = self
+            .replica
+            .decode_log_bytes(bytes, decode_limits(max_collection_elements, maxRecords))
+            .map_err(|e| match e {
+                ReplicaError::LogDecode(e) => {
+                    event_log_decode_js_error(e, true, maxRecords.is_none())
+                }
+                _ => unreachable!(),
+            })?;
         if log.iter().any(|r| {
             safemesh_crdt::ownership::check_counter_record(
-                self.state.p_state().len(),
+                self.replica.state().p_state().len(),
                 r.id,
                 &r.delta,
             )
@@ -4634,22 +4635,16 @@ impl SafeMeshPnCounterReplica {
             ));
         }
         Ok(log
-            .iter()
-            .cloned()
-            .map(|record| {
-                self.log
-                    .admit_with(&mut self.state, record, |state, delta| {
-                        state.apply_delta(delta.clone());
-                    })
-            })
+            .into_iter()
+            .map(|record| self.replica.admit(record))
             .map(admission_name)
             .collect())
     }
 
     #[wasm_bindgen(js_name = logBytes)]
     pub fn log_bytes(&self) -> Result<Vec<u8>, JsValue> {
-        self.log
-            .to_wire_bytes()
+        self.replica
+            .log_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode event log"))
     }
 
@@ -4671,22 +4666,23 @@ impl SafeMeshPnCounterReplica {
     /// The Rust-core total behind [`Self::value`]; not exported, so host-side
     /// tests can read it without constructing a JavaScript value.
     fn total(&self) -> i128 {
-        self.state.value()
+        self.replica.state().value()
     }
 
     /// Compare the Rust-core carrier states without reproducing its equality in JavaScript.
     #[wasm_bindgen(js_name = sameStateAs)]
     pub fn same_state_as(&self, other: &SafeMeshPnCounterReplica) -> bool {
-        self.state == other.state
+        self.replica.state() == other.replica.state()
     }
 
     /// Complete carrier: increment coordinates followed by decrement coordinates.
     #[wasm_bindgen(js_name = state)]
     pub fn state(&self) -> Vec<u64> {
-        self.state
+        self.replica
+            .state()
             .p_state()
             .iter()
-            .chain(self.state.n_state())
+            .chain(self.replica.state().n_state())
             .copied()
             .collect()
     }
@@ -4696,14 +4692,13 @@ impl SafeMeshPnCounterReplica {
     pub fn new(replica_id: u64, replicas: usize) -> Self {
         SafeMeshPnCounterReplica {
             replica_id,
-            state: PnCounter::new(replicas),
-            log: EventLog::with_replica_count(replicas),
+            replica: Replica::new(PnCounter::new(replicas)),
         }
     }
 
     pub fn append_inc(&mut self, counter_replica: usize, tally: u64) -> Result<Vec<u8>, JsValue> {
         if safemesh_crdt::ownership::check_counter_record(
-            self.state.p_state().len(),
+            self.replica.state().p_state().len(),
             safemesh_crdt::RecordId {
                 replica: self.replica_id,
                 sequence: 1,
@@ -4724,25 +4719,19 @@ impl SafeMeshPnCounterReplica {
             replica: counter_replica,
             tally,
         };
-        let id = self
-            .log
-            .append_with(
-                &mut self.state,
-                self.replica_id,
-                delta.clone(),
-                |state, delta| {
-                    state.apply_delta(delta.clone());
-                },
-            )
-            .map_err(|error| JsValue::from(append_error(error)))?;
-        Record { id, delta }
+        self.replica
+            .append(self.replica_id, delta)
+            .map_err(|e| match e {
+                ReplicaError::Append(e) => JsValue::from(append_error(e)),
+                _ => unreachable!(),
+            })?
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
     }
 
     pub fn append_dec(&mut self, counter_replica: usize, tally: u64) -> Result<Vec<u8>, JsValue> {
         if safemesh_crdt::ownership::check_counter_record(
-            self.state.p_state().len(),
+            self.replica.state().p_state().len(),
             safemesh_crdt::RecordId {
                 replica: self.replica_id,
                 sequence: 1,
@@ -4763,24 +4752,18 @@ impl SafeMeshPnCounterReplica {
             replica: counter_replica,
             tally,
         };
-        let id = self
-            .log
-            .append_with(
-                &mut self.state,
-                self.replica_id,
-                delta.clone(),
-                |state, delta| {
-                    state.apply_delta(delta.clone());
-                },
-            )
-            .map_err(|error| JsValue::from(append_error(error)))?;
-        Record { id, delta }
+        self.replica
+            .append(self.replica_id, delta)
+            .map_err(|e| match e {
+                ReplicaError::Append(e) => JsValue::from(append_error(e)),
+                _ => unreachable!(),
+            })?
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
     }
 
     pub fn version_for(&self, replica: u64) -> u64 {
-        self.log.version().get(replica)
+        self.replica.version().get(replica)
     }
 }
 
