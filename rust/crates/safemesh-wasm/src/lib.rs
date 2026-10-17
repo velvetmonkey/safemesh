@@ -7,7 +7,8 @@ use safemesh_crdt::{
     CollectionLimits, Crdt, DecodeError, DecodeLimits, EnableWinsFlag, EnableWinsFlagDelta,
     EventLog, GCounter, GCounterDelta, GSet, LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta,
     OrSet, OrSetDelta, PnCounter, PnCounterDelta, Record, Replica, ReplicaError, Rga,
-    VersionVector, VersionVectorLimits, WireDecode, WireEncode, WireError, WireSchema,
+    VersionVector, VersionVectorLimitError, VersionVectorLimits, WireDecode, WireEncode, WireError,
+    WireSchema,
 };
 use safemesh_crdt::{CollisionVerdict, RecordId};
 use std::{
@@ -377,6 +378,12 @@ fn peer_version(pairs: &[u64]) -> Result<VersionVector, BindingError> {
                 pairs.len()
             ),
         ));
+    }
+    if let Some(max_authors) = VersionVectorLimits::WIRE_DEFAULT.max_authors {
+        if pairs.len() / 2 > max_authors {
+            let error = VersionVectorLimitError::AuthorLimitExceeded { max_authors };
+            return Err(binding_error(2, format!("peerVersion: {error}")));
+        }
     }
     let mut entries = BTreeMap::new();
     for pair in pairs.chunks_exact(2) {
@@ -4420,6 +4427,28 @@ mod tests {
         ] {
             assert_eq!(peer_version(pairs), Err(binding_error(2, message)));
         }
+    }
+
+    #[test]
+    fn peer_version_counts_authors_before_building_the_map() {
+        let at_limit: Vec<u64> = (0..4096).flat_map(|author| [author, 1]).collect();
+        let mut over_limit_with_repeat = at_limit.clone();
+        over_limit_with_repeat.extend([0, 1]);
+        assert_eq!(
+            peer_version(&over_limit_with_repeat),
+            Err(binding_error(
+                2,
+                "peerVersion: peer version exceeds author limit 4096"
+            ))
+        );
+        assert_eq!(peer_version(&at_limit).unwrap().entries().len(), 4096);
+
+        let mut at_limit_with_repeat: Vec<u64> = (0..4095).flat_map(|author| [author, 1]).collect();
+        at_limit_with_repeat.extend([0, 2]);
+        assert_eq!(
+            peer_version(&at_limit_with_repeat),
+            Err(binding_error(2, "peerVersion repeats author 0"))
+        );
     }
 
     #[test]
