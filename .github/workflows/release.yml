@@ -24,6 +24,8 @@ jobs:
           version="$(python3 -c 'import tomllib; print(tomllib.load(open("rust/crates/safemesh-crdt/Cargo.toml", "rb"))["package"]["version"])')"
           test "$GITHUB_REF_NAME" = "v$version"
           test "$(git rev-parse "${GITHUB_REF_NAME}^{commit}")" = "$GITHUB_SHA"
+      - name: Require complete release notes for this tag
+        run: python3 scripts/check-release-notes.py "$GITHUB_REF_NAME"
       - name: Require successful CI on this exact commit on main
         env:
           GH_TOKEN: ${{ github.token }}
@@ -112,7 +114,7 @@ jobs:
           if [[ "$GITHUB_REF_NAME" == *rc* ]]; then prerelease+=(--prerelease); fi
           gh release create "$GITHUB_REF_NAME" ./*.crate ./*.whl ./*.tgz SHA256SUMS \
             --draft --verify-tag "${prerelease[@]}" --title "SafeMesh $GITHUB_REF_NAME" \
-            --notes-file "$GITHUB_WORKSPACE/docs/releases/v0.2.0.md"
+            --notes-file "$GITHUB_WORKSPACE/docs/releases/$GITHUB_REF_NAME.md"
 
   verify-draft:
     needs: draft
