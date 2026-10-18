@@ -45,8 +45,8 @@ where
 {
     write_new(
         out,
-        &format!("{name}.transaction"),
-        &fs::read(root.join("writer-0.transaction")).unwrap(),
+        &format!("{name}.journal"),
+        &fs::read(root.join("writer-0.journal")).unwrap(),
     );
     write_new(
         out,
