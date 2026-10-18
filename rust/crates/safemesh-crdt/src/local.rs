@@ -26,6 +26,7 @@ use std::{
 ///         LocalError::Refused => "refused",
 ///         LocalError::Exhausted => "exhausted",
 ///         LocalError::PeerWriterAhead => "writer ahead",
+///         LocalError::StoreExists => "store exists",
 ///         LocalError::RecoveryRequired => "recovery",
 ///         LocalError::Configuration => "configuration",
 ///         LocalError::CounterWidth(_) => "counter width",
@@ -45,6 +46,9 @@ pub enum LocalError {
     Exhausted,
     /// A peer supplied an own-writer record above the committed high-water.
     PeerWriterAhead,
+    /// A fresh writer store already exists at this root for this writer.
+    StoreExists,
+    /// Store metadata is damaged or disagrees with its durable history.
     RecoveryRequired,
     Configuration,
     /// The requested counter width exceeds the core constructor domain.
@@ -77,7 +81,8 @@ impl core::fmt::Display for LocalError {
                 f.write_str("local writer sequence, generation, or token allocation exhausted")
             }
             Self::PeerWriterAhead => f.write_str("a peer returned a record for this writer above its durable high-water; local writes on this open replica are stopped; reopening clears this stop and an old-identity restore is detected only when a peer returns such a record; open a restored store with a new writer identity"),
-            Self::RecoveryRequired => f.write_str("local store requires recovery"),
+            Self::StoreExists => f.write_str("local store already exists for this writer; restart it, or create with a new root or writer ID"),
+            Self::RecoveryRequired => f.write_str("local store requires recovery: its writer fence, journal header, rollback counter or migration files are damaged or do not agree"),
             Self::CounterWidth(error) => error.fmt(f),
             Self::Configuration => f.write_str("invalid or mismatched local writer configuration"),
             Self::InvalidRecord(error) => error.fmt(f),
@@ -294,7 +299,7 @@ where
                 return Err(LocalError::Configuration);
             }
             if held {
-                return Err(LocalError::RecoveryRequired);
+                return Err(LocalError::StoreExists);
             }
             word(16)
         };
@@ -820,7 +825,7 @@ where
         // Never overwrite a history whose fence is missing, in either format.
         let path = journal::path(&root, config.writer);
         if exists(&transaction_path(&root, config))? || exists(&path)? {
-            return Err(LocalError::RecoveryRequired);
+            return Err(LocalError::StoreExists);
         }
         let mut inner = LocalReplica::fresh(&root, config, state)?;
         if !inner.held {

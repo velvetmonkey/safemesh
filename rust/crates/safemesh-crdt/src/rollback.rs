@@ -52,7 +52,7 @@ impl Counter {
     pub(super) fn create(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
         let (marker, path) = paths(root, config.writer)?;
         if read_regular(&marker)?.is_some() || read_regular(&path)?.is_some() {
-            return Err(LocalError::RecoveryRequired);
+            return Err(LocalError::StoreExists);
         }
         let mut identity = [0u8; 16];
         File::open("/dev/urandom")?.read_exact(&mut identity)?;
