@@ -1526,6 +1526,56 @@ fn protected_counter_path(root: &Path, writer: u64) -> PathBuf {
     rollback::paths(root, writer).unwrap().1
 }
 #[test]
+fn refused_create_leaves_no_store_files() {
+    let store_root = root();
+    let first = DurableReplica::counter(&store_root, config()).unwrap();
+    drop(first);
+    let counter = protected_counter_path(&store_root, 0);
+    let original = fs::read(&counter).unwrap();
+    fs::remove_dir_all(&store_root).unwrap();
+    assert!(matches!(
+        DurableReplica::counter(&store_root, config()),
+        Err(LocalError::RecoveryRequired)
+    ));
+    let entries: Vec<_> = fs::read_dir(&store_root).unwrap().collect();
+    assert!(
+        entries.is_empty(),
+        "refused create left {} store entries",
+        entries.len()
+    );
+    assert_eq!(fs::read(&counter).unwrap(), original);
+    let other = WriterConfig {
+        writers: 2,
+        writer: 1,
+    };
+    assert!(DurableReplica::counter(&store_root, other).is_ok());
+
+    let set_root = root();
+    drop(DurableReplica::utf8_set(&set_root, config()).unwrap());
+    let set_counter = protected_counter_path(&set_root, 0);
+    let set_original = fs::read(&set_counter).unwrap();
+    fs::remove_dir_all(&set_root).unwrap();
+    assert!(matches!(
+        DurableReplica::utf8_set(&set_root, config()),
+        Err(LocalError::RecoveryRequired)
+    ));
+    assert_eq!(fs::read_dir(&set_root).unwrap().count(), 0);
+    assert_eq!(fs::read(&set_counter).unwrap(), set_original);
+}
+#[test]
+fn existing_store_refusal_preserves_files() {
+    let root = root();
+    drop(LocalReplica::counter(&root, config()).unwrap());
+    let fence = root.join("writer-0.fence");
+    let before = fs::read(&fence).unwrap();
+    assert!(matches!(
+        DurableReplica::counter(&root, config()),
+        Err(LocalError::RecoveryRequired)
+    ));
+    assert_eq!(fs::read(&fence).unwrap(), before);
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+}
+#[test]
 fn rollback_r1_store_only_restore_refuses() {
     let root = root();
     let mut r = DurableReplica::counter(&root, config()).unwrap();
@@ -1584,6 +1634,104 @@ fn rollback_crash_child() {
     fault(boundary, true);
     r.bump(r.ticket(), 2).unwrap();
     panic!("crash checkpoint did not exit");
+}
+#[test]
+fn rollback_batch_crash_child() {
+    let Ok(root) = std::env::var("SAFEMESH_ROLLBACK_BATCH_ROOT") else {
+        return;
+    };
+    let boundary = std::env::var("SAFEMESH_ROLLBACK_BATCH_BOUNDARY")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let mut r = DurableReplica::restart_counter(Path::new(&root), config()).unwrap();
+    fault(boundary, true);
+    r.bump_batch(r.ticket(), [2, 3, 4]).unwrap();
+    panic!("batch crash checkpoint did not exit");
+}
+#[test]
+fn rollback_batch_crash_boundaries() {
+    for boundary in [19, 20, 21, 13, 14] {
+        let root = root();
+        let mut r = DurableReplica::counter(&root, config()).unwrap();
+        r.bump(r.ticket(), 1).unwrap();
+        drop(r);
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "local::durable_tests::rollback_batch_crash_child",
+            ])
+            .env("SAFEMESH_ROLLBACK_BATCH_ROOT", &root)
+            .env("SAFEMESH_ROLLBACK_BATCH_BOUNDARY", boundary.to_string())
+            .output()
+            .unwrap();
+        let status = root.join("rollback-batch-child.exit");
+        fs::write(&status, output.status.code().unwrap().to_string()).unwrap();
+        assert_eq!(fs::read_to_string(status).unwrap(), "77", "{output:?}");
+        match boundary {
+            19 => assert_eq!(
+                DurableReplica::restart_counter(&root, config())
+                    .unwrap()
+                    .state()
+                    .value(),
+                1
+            ),
+            20 | 21 => {
+                assert!(
+                    matches!(
+                        DurableReplica::restart_counter(&root, config()),
+                        Err(LocalError::RecoveryRequired)
+                    ),
+                    "boundary {boundary} must refuse"
+                );
+                let other = WriterConfig {
+                    writers: 2,
+                    writer: 1,
+                };
+                assert!(DurableReplica::counter(&root, other).is_ok());
+            }
+            13 => match DurableReplica::restart_counter(&root, config()) {
+                Ok(restarted) => {
+                    std::println!("batch boundary 13: complete journal was visible");
+                    assert_eq!(restarted.state().value(), 4);
+                }
+                Err(LocalError::RecoveryRequired) => {
+                    std::println!("batch boundary 13: restart refused");
+                }
+                Err(error) => panic!("boundary 13: {error}"),
+            },
+            14 => assert_eq!(
+                DurableReplica::restart_counter(&root, config())
+                    .unwrap()
+                    .state()
+                    .value(),
+                4
+            ),
+            _ => unreachable!(),
+        }
+    }
+}
+#[test]
+fn rollback_batch_empty_and_refused_write_nothing() {
+    let root = root();
+    let mut r = DurableReplica::counter(&root, config()).unwrap();
+    let path = store_file(&root);
+    let counter = protected_counter_path(&root, 0);
+    let journal_bytes = fs::read(&path).unwrap();
+    let counter_bytes = fs::read(&counter).unwrap();
+    assert!(r.bump_batch(r.ticket(), []).unwrap().is_empty());
+    assert_eq!(fs::read(&path).unwrap(), journal_bytes);
+    assert_eq!(fs::read(&counter).unwrap(), counter_bytes);
+    assert!(matches!(
+        r.receive(r.ticket(), h1_record(u64::MAX)),
+        Err(LocalError::PeerWriterAhead)
+    ));
+    assert!(matches!(
+        r.bump_batch(r.ticket(), [1, 2]),
+        Err(LocalError::PeerWriterAhead)
+    ));
+    assert_eq!(fs::read(&path).unwrap(), journal_bytes);
+    assert_eq!(fs::read(&counter).unwrap(), counter_bytes);
 }
 #[test]
 fn rollback_r4_crash_write_boundaries() {

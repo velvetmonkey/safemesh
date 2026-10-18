@@ -49,11 +49,17 @@ fn identity_bytes(magic: &[u8; 8], config: WriterConfig, identity: &[u8; 16]) ->
 }
 
 impl Counter {
-    pub(super) fn create(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
+    pub(super) fn ensure_absent(root: &Path, config: WriterConfig) -> Result<(), LocalError> {
         let (marker, path) = paths(root, config.writer)?;
         if read_regular(&marker)?.is_some() || read_regular(&path)?.is_some() {
             return Err(LocalError::RecoveryRequired);
         }
+        Ok(())
+    }
+
+    pub(super) fn create(root: &Path, config: WriterConfig) -> Result<Self, LocalError> {
+        Self::ensure_absent(root, config)?;
+        let (marker, path) = paths(root, config.writer)?;
         let mut identity = [0u8; 16];
         File::open("/dev/urandom")?.read_exact(&mut identity)?;
         let counter = Self {
@@ -113,13 +119,20 @@ impl Counter {
     }
 
     pub(super) fn advance(&mut self, sequence: u64) -> Result<(), LocalError> {
-        if sequence != self.sequence.checked_add(1).ok_or(LocalError::Exhausted)? {
+        self.advance_batch(
+            self.sequence.checked_add(1).ok_or(LocalError::Exhausted)?,
+            sequence,
+        )
+    }
+
+    pub(super) fn advance_batch(&mut self, first: u64, last: u64) -> Result<(), LocalError> {
+        if first != self.sequence.checked_add(1).ok_or(LocalError::Exhausted)? || last < first {
             return Err(LocalError::RecoveryRequired);
         }
         persistence::checkpoint(19)?;
-        self.write(sequence)?;
+        self.write(last)?;
         persistence::checkpoint(20)?;
-        self.sequence = sequence;
+        self.sequence = last;
         Ok(())
     }
 }

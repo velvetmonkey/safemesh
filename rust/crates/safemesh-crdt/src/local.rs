@@ -822,6 +822,9 @@ where
         if exists(&transaction_path(&root, config))? || exists(&path)? {
             return Err(LocalError::RecoveryRequired);
         }
+        // The counter lives beside the store. Check it only after canonicalizing
+        // the root, and before creating this writer's fence or journal.
+        rollback::Counter::ensure_absent(&root, config)?;
         let mut inner = LocalReplica::fresh(&root, config, state)?;
         if !inner.held {
             return Err(LocalError::Refused);
@@ -972,6 +975,93 @@ where
             Admission::Accepted => Ok(record),
             _ => Err(LocalError::Refused),
         }
+    }
+
+    /// Commit local deltas as one durable batch. The counter records the final
+    /// sequence before any journal entry is written. An interrupted batch can
+    /// therefore require recovery, as an interrupted single append can.
+    pub fn append_batch(
+        &mut self,
+        ticket: WriteTicket,
+        deltas: impl IntoIterator<Item = C::Delta>,
+    ) -> Result<Vec<Record<C::Delta>>, LocalError>
+    where
+        C: Clone,
+    {
+        let deltas: Vec<_> = deltas.into_iter().collect();
+        if deltas.is_empty() {
+            return Ok(Vec::new());
+        }
+        if self.inner.peer_writer_ahead {
+            return Err(LocalError::PeerWriterAhead);
+        }
+        let count = u64::try_from(deltas.len()).map_err(|_| LocalError::Exhausted)?;
+        let last = self
+            .inner
+            .last_sequence
+            .checked_add(count)
+            .ok_or(LocalError::Exhausted)?;
+        let first = self.inner.last_sequence + 1;
+        let mut state = self.inner.state.clone();
+        let mut log = self.inner.log.clone();
+        let mut records = Vec::with_capacity(deltas.len());
+        let mut entries = Vec::with_capacity(deltas.len());
+        for (index, delta) in deltas.into_iter().enumerate() {
+            let sequence = first + index as u64;
+            let record = Record {
+                id: RecordId {
+                    replica: self.inner.config.writer,
+                    sequence,
+                },
+                delta,
+            };
+            if refuses(
+                self.inner.context(ticket, true),
+                record.id,
+                record.delta.owned_payload(),
+            ) {
+                return Err(LocalError::Refused);
+            }
+            if log.insert_record(&state, record.clone()) != Admission::Accepted {
+                return Err(LocalError::Refused);
+            }
+            state.apply_delta(record.delta.clone());
+            if matches!(self.store, Store::Journal { .. }) {
+                entries.push(journal::entry(
+                    sequence,
+                    &record.to_wire_bytes().map_err(encode_error)?,
+                )?);
+            }
+            records.push(record);
+        }
+        // Keep the lock but disable writes before any uncertain persistence.
+        self.inner.held = false;
+        if let Some(counter) = &mut self.rollback {
+            counter.advance_batch(first, last)?;
+        }
+        match &mut self.store {
+            Store::Transaction(path) => Self::commit(path, self.inner.config, &log, last)?,
+            Store::Journal { file, len } => {
+                use std::os::unix::fs::FileExt;
+                let mut offset = *len;
+                for (index, bytes) in entries.iter().enumerate() {
+                    file.write_all_at(bytes, offset)?;
+                    offset += bytes.len() as u64;
+                    if index == 0 {
+                        persistence::checkpoint(21)?;
+                    }
+                }
+                persistence::checkpoint(13)?;
+                file.sync_data()?;
+                persistence::checkpoint(14)?;
+                *len = offset;
+            }
+        }
+        self.inner.state = state;
+        self.inner.log = log;
+        self.inner.last_sequence = last;
+        self.inner.held = true;
+        Ok(records)
     }
 }
 impl<C: Crdt> DurableReplica<C>
@@ -1423,6 +1513,21 @@ impl DurableReplica<GCounter> {
                 replica: self.inner.config.writer as usize,
                 tally,
             },
+        )
+    }
+    /// Append many increasing local tallies with one counter write and one
+    /// journal sync. An empty batch has no effect.
+    pub fn bump_batch(
+        &mut self,
+        ticket: WriteTicket,
+        tallies: impl IntoIterator<Item = u64>,
+    ) -> Result<Vec<Record<GCounterDelta>>, LocalError> {
+        let replica = self.inner.config.writer as usize;
+        self.append_batch(
+            ticket,
+            tallies
+                .into_iter()
+                .map(|tally| GCounterDelta { replica, tally }),
         )
     }
 }
