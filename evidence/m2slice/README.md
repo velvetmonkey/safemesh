@@ -8,7 +8,7 @@
 For the Linux `--features local-writer` journey, follow the
 [core walk and copyable recovery command](../../rust/crates/safemesh-crdt/README.md#reopen-the-store-after-the-walk-including-an-overwrite-refusal).
 A repeated fresh run against the same `walk-logs` correctly refuses with
-`RecoveryRequired`; the current harness then panics with `left: "101"` /
+`StoreExists`; the current harness then panics with `left: "101"` /
 `right: "77"`. Keep the store and reopen it with the linked command.
 Both named restart APIs recovered the durable counter `[12, 7]` and all four
 UTF-8 members for both writers. The recovery notes cover incomplete, empty,

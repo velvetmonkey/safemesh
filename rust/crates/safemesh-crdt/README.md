@@ -168,7 +168,7 @@ UTF-8 set delta schema=safemesh/orset-delta-utf8-u64/v1
 
 If you run the walk twice against the same directory, the second run refuses to
 overwrite the durable store. The current harness reports a child
-`RecoveryRequired` panic followed by `left: "101"` / `right: "77"`: 77 is the
+`StoreExists` panic followed by `left: "101"` / `right: "77"`: 77 is the
 intentional exit after the child's ACK; 101 is its unexpected panic exit.
 Keep `walk-logs`, including every fence and journal file. Use the recovery
 command below to reopen it. To start a separate new walk, choose a different,
@@ -608,7 +608,7 @@ individual decoded records; duplicate and reordered valid delivery is supported.
 
 This adapter acknowledges in memory. It does not yet commit edits durably or
 recover an existing store: opening a previously initialized store with the lock
-available returns `RecoveryRequired`. The default core remains `no_std`; raw
+available returns `StoreExists`. The default core remains `no_std`; raw
 carriers and `EventLog` do not themselves grant an exclusive writer lease.
 
 ### Durable local commits (packet B)
@@ -645,8 +645,9 @@ test and reports it through `torn_tail()`. SafeMesh does not claim that an
 acknowledged final record survives later damage to its bytes. Such damage is
 discarded as a torn tail and is not refused for a pre-protection append-log
 store; a protected store refuses if the lost entry carried own-writer progress.
-The fresh `counter` and `utf8_set` constructors still return `RecoveryRequired`
-for an existing store. This path does not claim general power-loss certification.
+The fresh `counter` and `utf8_set` constructors return `StoreExists`
+for an existing store. Callers that matched `RecoveryRequired` for a second
+create must now match `StoreExists`. This path does not claim general power-loss certification.
 
 The joined walkthrough demonstrates that acknowledged edits can be recovered
 from the child's committed stores after it exits without running destructors,
