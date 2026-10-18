@@ -105,9 +105,9 @@ cleaned exercise stores
 ```
 <!-- /gold -->
 
-`DurableReplica::counter` / `utf8_set` create the stores. Each successful edit
+`DurableReplica::counter` / `utf8_set` create the stores. Each successful single-record edit
 appends and syncs its own record; `restart_counter` / `restart_utf8_set` validate and
-replay the existing store while reacquiring the writer. Each accepted write of the
+replay the existing store while reacquiring the writer. Each accepted single-record write of the
 local writer adds one counter file sync and one directory sync. A
 `DurableReplica::append_batch` or counter `bump_batch` writes the counter once
 for the whole batch, then writes its journal entries and syncs the journal once.
