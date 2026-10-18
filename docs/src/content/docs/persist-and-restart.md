@@ -108,7 +108,14 @@ cleaned exercise stores
 `DurableReplica::counter` / `utf8_set` create the stores. Each successful edit
 appends and syncs its own record; `restart_counter` / `restart_utf8_set` validate and
 replay the existing store while reacquiring the writer. Each accepted write of the
-local writer adds one counter file sync and one directory sync. For an existing counter,
+local writer adds one counter file sync and one directory sync. A
+`DurableReplica::append_batch` or counter `bump_batch` writes the counter once
+for the whole batch, then writes its journal entries and syncs the journal once.
+In a 10,000-append release run on one box, medians were 111.930 s on main for
+single bumps, 105.856 s on this change for single bumps, 1.090 s for 100 batches
+of 100, and 0.128 s for 10 batches of 1,000. Relative to main, the ratios were
+0.946, 0.00974, and 0.00114. The main pre-run CPU sample dipped to 78 percent
+idle, so these ratios are indicative. For an existing counter,
 `restart_counter_from_store(root, writer)` reads the committed count under that
 writer's lock and runs the same checked replay, while explicit `restart_counter`
 still rejects a mismatched count. Their collection budget
@@ -648,16 +655,14 @@ The rollback counter file is in the parent of the store directory. Its name
 matches `.safemesh-<hash>-writer-<id>.counter`. Deleting the store directory
 leaves this file in place. A new store at the same path with the same writer ID
 returns `RecoveryRequired` from `DurableReplica::counter` or `utf8_set`.
-The refused create leaves a writer fence and journal in the new store directory.
+The refused create leaves no files in the new store directory. The directory
+itself may remain.
 
-To reuse the old writer ID after you remove a store on purpose, clear that
-partial store, remove its counter file, and then create the store. Removing
-only the counter file after the refused create still returns `RecoveryRequired`.
+To reuse the old writer ID after you remove a store on purpose, remove its
+counter file, and then create the store.
 Only an operator who knows that the old store is gone on purpose may remove
 the counter file: it protects that writer against rollback. You can also keep
-the counter file and create with a new writer ID. A new writer ID can create
-even if the refused create left the old writer's fence and journal in the
-store directory.
+the counter file and create with a new writer ID.
 
 ### Supported size
 
