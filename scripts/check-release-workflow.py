@@ -18,7 +18,7 @@ def check(path: Path) -> list[str]:
         'read-only default': r'permissions:\s*\n\s+contents:\s*read',
         'version tag': r'test "\$GITHUB_REF_NAME" = "v\$version"',
         'exact tag commit': r'git rev-parse "\$\{GITHUB_REF_NAME\}\^\{commit\}".*\$GITHUB_SHA',
-        'complete release notes': r'Require complete release notes for this tag\s+run: python3 scripts/check-release-notes\.py "\$GITHUB_REF_NAME"',
+        'complete release notes': r'= "\$GITHUB_SHA"\s*\n\s*- name: Require complete release notes for this tag\s*\n\s*run: python3 scripts/check-release-notes\.py "\$GITHUB_REF_NAME"',
         'exact-commit CI': r'head_sha=\$GITHUB_SHA.*event=push.*\.head_sha == \$sha and \.head_branch == "main" and \.conclusion == "success"',
         'required human reviewer': r'environments/release-publish.*required_reviewers.*reviewer\.login == "velvetmonkey"',
         'published release refusal': r'Refuse an already published release.*release-state.*= true',

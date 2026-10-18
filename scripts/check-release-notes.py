@@ -29,10 +29,12 @@ def main() -> int:
         commits = git('log', '--first-parent', '--format=%H %s', f'{prev}..{rev}').splitlines()
         merged = set()
         optional = set()
+        uncounted = []
         for entry in commits:
             commit, subject = entry.split(' ', 1)
             match = re.match(r'Merge pull request #(\d+) ', subject)
             if not match:
+                uncounted.append((commit, subject))
                 continue
             paths = git('diff', '--name-only', f'{commit}^1', commit).splitlines()
             if paths and all(path.startswith('docs/releases/') for path in paths):
@@ -49,7 +51,9 @@ def main() -> int:
         print(f'MISSING PR #{n}')
     for n in extra:
         print(f'EXTRA PR #{n}')
-    if missing or extra:
+    for commit, subject in uncounted:
+        print(f'UNCOUNTED COMMIT {commit} {subject}')
+    if missing or extra or uncounted:
         return 1
     print(f'Release notes complete for {args.tag}: {len(listed)} PRs')
     return 0
