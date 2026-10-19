@@ -144,6 +144,7 @@ def main():
                         "owned": "Another Fieldcheck process owns this store; close it and reopen",
                         "storage": "Could not open this store because of a storage error; fix the storage problem and reopen",
                         "configuration": "Store writer configuration does not match; reopen with the original writer",
+                        "store_exists": "This store already exists; reopen it instead of creating it",
                         "replay": "Could not recover this checklist; inspect the damaged store before reopening",
                         "startup": "Could not start this store; inspect its local files and reopen",
                     }

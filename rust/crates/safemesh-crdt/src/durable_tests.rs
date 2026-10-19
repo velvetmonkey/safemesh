@@ -1190,6 +1190,7 @@ fn fresh_durable_race_and_live_writer() {
                 let result = DurableReplica::counter(&store, config());
                 let outcome = match &result {
                     Ok(_) => "ok",
+                    Err(LocalError::StoreExists) => "store exists",
                     Err(LocalError::RecoveryRequired) => "recovery",
                     Err(LocalError::Refused) => "refused",
                     Err(_) => "unexpected",
@@ -1213,8 +1214,41 @@ fn fresh_durable_race_and_live_writer() {
     let _live = DurableReplica::counter(&live_root, config()).unwrap();
     assert!(matches!(
         DurableReplica::counter(&live_root, config()),
+        Err(LocalError::StoreExists)
+    ));
+}
+#[test]
+fn second_create_is_store_exists() {
+    let root = root();
+    let first = DurableReplica::counter(&root, config()).unwrap();
+    drop(first);
+    assert!(matches!(
+        DurableReplica::counter(&root, config()),
+        Err(LocalError::StoreExists)
+    ));
+}
+#[test]
+fn truncated_fence_restart_is_recovery_required() {
+    let root = root();
+    let first = DurableReplica::counter(&root, config()).unwrap();
+    drop(first);
+    let fence = root.join("writer-0.fence");
+    let original = fs::read(&fence).unwrap();
+    fs::write(&fence, &original[..23]).unwrap();
+    let before = store_files(&root);
+    assert!(matches!(
+        DurableReplica::restart_counter(&root, config()),
         Err(LocalError::RecoveryRequired)
     ));
+    assert_eq!(store_files(&root), before, "refusal changed store files");
+}
+#[test]
+fn store_exists_and_recovery_texts_differ() {
+    let exists = LocalError::StoreExists.to_string();
+    let recovery = LocalError::RecoveryRequired.to_string();
+    assert_ne!(exists, recovery);
+    assert!(exists.contains("already exists"));
+    assert!(recovery.contains("requires recovery"));
 }
 #[test]
 fn fresh_ancestor_sync_refusal_and_retry() {
@@ -1995,7 +2029,7 @@ fn interrupted_migration_is_refused_then_completed() {
     ));
     assert!(matches!(
         DurableReplica::counter(&root, config()),
-        Err(LocalError::RecoveryRequired)
+        Err(LocalError::StoreExists)
     ));
     assert_eq!(store_files(&root), both, "refusals change nothing");
     let r = DurableReplica::migrate_counter_to_append_log(&root, config()).unwrap();
@@ -2976,6 +3010,6 @@ fn durable_receive_and_refusal() {
     drop(r);
     assert!(matches!(
         DurableReplica::counter(&root, config()),
-        Err(LocalError::RecoveryRequired)
+        Err(LocalError::StoreExists)
     ));
 }
