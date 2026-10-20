@@ -510,7 +510,7 @@ mod owned_local {
         drop(r);
         let reopened = LocalReplica::counter(&path, config(0));
         println!("reopen error={:?}", reopened.as_ref().err());
-        assert!(matches!(reopened, Err(LocalError::RecoveryRequired)));
+        assert!(matches!(reopened, Err(LocalError::StoreExists)));
         assert!(matches!(
             LocalReplica::counter(
                 &path,

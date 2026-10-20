@@ -131,8 +131,8 @@ Read the [complete Rust source and storage boundary](/safemesh/using-safemesh/#r
 ## Diagnose a failed Rust exercise
 
 The fixture uses `expect`/`unwrap`, so failures appear as a Rust panic (exit 101).
-On a second `persist`, an existing store returns `RecoveryRequired` (Display:
-`local store requires recovery`). Check whether `.gold-rust` existed before this
+On a second `persist`, an existing store returns `StoreExists` (Display:
+`local store already exists for this writer; restart it, or create with a new root or writer ID`). Check whether `.gold-rust` existed before this
 run: if it did, keep that store and run `restart` with its original writer
 configuration, or use a fresh checkout for a separate exercise.
 
@@ -142,8 +142,8 @@ that owner and wait for it to release the lock, then retry `restart` with the
 same store and writer configuration. Keep the fence file in place; deleting it
 does not release the other owner's lock or restore ownership safely.
 
-A truncated writer fence on `restart` returns the same `RecoveryRequired` and
-`local store requires recovery`. If the store was already present and this was
+A truncated writer fence on `restart` returns `RecoveryRequired` (Display:
+`local store requires recovery: its writer fence, journal header, rollback counter or migration files are damaged or do not agree`). If the store was already present and this was
 a `restart`, inspect its `writer-0.fence` files: each must be 24 bytes. Retain a
 damaged store for inspection and recover only from a known consistent copy with
 its original writer identity and allocation metadata. Never reset an existing
@@ -552,7 +552,7 @@ Before a first release, the project does not promise:
 - **A version-numbering promise**, including semantic versioning or a support
   window. `safemesh-crdt`
   [`Cargo.toml`](https://github.com/velvetmonkey/safemesh/blob/main/rust/crates/safemesh-crdt/Cargo.toml)
-  currently records `0.1.0` as an unpublished crate version; that number is not
+  currently records `0.2.0` as an unpublished crate version; that number is not
   a versioning promise.
 - **That an older decoder can read every future EventLog frame.** The full gate
   samples current output with the tagged `v0.1.0` decoder; a later format may
@@ -647,12 +647,12 @@ completes it ([`interrupted_migration_is_refused_then_completed`](https://github
 The rollback counter file is in the parent of the store directory. Its name
 matches `.safemesh-<hash>-writer-<id>.counter`. Deleting the store directory
 leaves this file in place. A new store at the same path with the same writer ID
-returns `RecoveryRequired` from `DurableReplica::counter` or `utf8_set`.
+returns `StoreExists` from `DurableReplica::counter` or `utf8_set`.
 The refused create leaves a writer fence and journal in the new store directory.
 
 To reuse the old writer ID after you remove a store on purpose, clear that
 partial store, remove its counter file, and then create the store. Removing
-only the counter file after the refused create still returns `RecoveryRequired`.
+only the counter file after the refused create still returns `StoreExists`.
 Only an operator who knows that the old store is gone on purpose may remove
 the counter file: it protects that writer against rollback. You can also keep
 the counter file and create with a new writer ID. A new writer ID can create

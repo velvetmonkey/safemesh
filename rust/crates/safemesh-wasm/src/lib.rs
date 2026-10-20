@@ -7,7 +7,8 @@ use safemesh_crdt::{
     CollectionLimits, Crdt, DecodeError, DecodeLimits, EnableWinsFlag, EnableWinsFlagDelta,
     EventLog, GCounter, GCounterDelta, GSet, LwwMap, LwwMapDelta, LwwRegister, LwwRegisterDelta,
     OrSet, OrSetDelta, PnCounter, PnCounterDelta, Record, Replica, ReplicaError, Rga,
-    VersionVector, VersionVectorLimits, WireDecode, WireEncode, WireError, WireSchema,
+    VersionVector, VersionVectorLimitError, VersionVectorLimits, WireDecode, WireEncode, WireError,
+    WireSchema,
 };
 use safemesh_crdt::{CollisionVerdict, RecordId};
 use std::{
@@ -378,6 +379,12 @@ fn peer_version(pairs: &[u64]) -> Result<VersionVector, BindingError> {
             ),
         ));
     }
+    if let Some(max_authors) = VersionVectorLimits::WIRE_DEFAULT.max_authors {
+        if pairs.len() / 2 > max_authors {
+            let error = VersionVectorLimitError::AuthorLimitExceeded { max_authors };
+            return Err(binding_error(2, format!("peerVersion: {error}")));
+        }
+    }
     let mut entries = BTreeMap::new();
     for pair in pairs.chunks_exact(2) {
         if entries.insert(pair[0], pair[1]).is_some() {
@@ -487,8 +494,8 @@ record_exchange_methods!(SafeMeshEnableWinsFlagReplica, false, |this| (
     this.replica.log()
 ));
 record_exchange_methods!(SafeMeshLwwMapReplica, false, |this| (
-    &this.state,
-    &this.log
+    this.replica.state(),
+    this.replica.log()
 ));
 record_exchange_methods!(SafeMeshLwwRegisterReplica, false, |this| (
     this.replica.state(),
@@ -671,8 +678,11 @@ collision_alarm_methods!(
 );
 collision_alarm_methods!(
     SafeMeshLwwMapReplica,
-    |this| &this.log,
-    |this, bytes, limits| this.log.merge_collision_report_bytes(bytes, limits)
+    |this| this.replica.log(),
+    |this, bytes, limits| this
+        .replica
+        .merge_collision_report_bytes(bytes, limits)
+        .map_err(replica_report_error)
 );
 collision_alarm_methods!(
     SafeMeshLwwRegisterReplica,
@@ -1277,8 +1287,7 @@ impl SafeMeshEnableWinsFlagReplica {
 #[wasm_bindgen]
 pub struct SafeMeshLwwMapReplica {
     replica_id: u64,
-    state: LwwMap<u64, u64>,
-    log: EventLog<LwwMapDelta<u64, u64>>,
+    replica: Replica<LwwMap<u64, u64>>,
 }
 
 #[wasm_bindgen]
@@ -1286,7 +1295,8 @@ impl SafeMeshLwwMapReplica {
     /// Canonical complete carrier, including hidden entries and remove dots.
     #[wasm_bindgen(js_name = stateBytes)]
     pub fn state_bytes(&self) -> Result<Vec<u8>, JsValue> {
-        self.state
+        self.replica
+            .state()
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode state"))
     }
@@ -1338,22 +1348,17 @@ impl SafeMeshLwwMapReplica {
         bytes: &[u8],
         max_collection_elements: Option<u32>,
     ) -> Result<String, JsValue> {
-        let record = Record::<LwwMapDelta<u64, u64>>::from_wire_bytes_with_collection_limits(
+        let record = Replica::<LwwMap<u64, u64>>::inspect_record_bytes(
             bytes,
             collection_limits(max_collection_elements),
         )
-        .map_err(record_decode_js_error)?;
-        record_verdict(
-            self.log
-                .admit_with(&mut self.state, record, |state, delta| {
-                    state.apply_delta(delta.clone());
-                }),
-        )
-        .map_err(JsValue::from)
+        .map_err(|error| match error {
+            ReplicaError::RecordDecode(error) => record_decode_js_error(error),
+            _ => unreachable!(),
+        })?;
+        record_verdict(self.replica.admit(record)).map_err(JsValue::from)
     }
 
-    // This class keeps its own admission copy by the 2026-10-01 ruling (P2 step 4 tight, OR-1 = A).
-    // A shared Replica admission fix does not reach this copy; apply it here by hand.
     /// Return one core admission verdict for every decoded input record.
     /// `maxRecords` is the third argument; the second limits collection elements.
     #[wasm_bindgen(
@@ -1367,29 +1372,27 @@ impl SafeMeshLwwMapReplica {
         max_collection_elements: Option<u32>,
         maxRecords: Option<u32>,
     ) -> Result<Vec<String>, JsValue> {
-        let log = EventLog::<LwwMapDelta<u64, u64>>::records_from_wire_bytes_for_with_limits(
-            bytes,
-            &self.state,
-            decode_limits(max_collection_elements, maxRecords),
-        )
-        .map_err(|error| event_log_decode_js_error(error, false, maxRecords.is_none()))?;
+        let log = self
+            .replica
+            .decode_log_bytes(bytes, decode_limits(max_collection_elements, maxRecords))
+            .map_err(|error| match error {
+                ReplicaError::LogDecode(error) => {
+                    event_log_decode_js_error(error, false, maxRecords.is_none())
+                }
+                _ => unreachable!(),
+            })?;
         Ok(log
             .iter()
             .cloned()
-            .map(|record| {
-                self.log
-                    .admit_with(&mut self.state, record, |state, delta| {
-                        state.apply_delta(delta.clone());
-                    })
-            })
+            .map(|record| self.replica.admit(record))
             .map(admission_name)
             .collect())
     }
 
     #[wasm_bindgen(js_name = logBytes)]
     pub fn log_bytes(&self) -> Result<Vec<u8>, JsValue> {
-        self.log
-            .to_wire_bytes()
+        self.replica
+            .log_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode event log"))
     }
 
@@ -1424,17 +1427,17 @@ impl SafeMeshLwwMapReplica {
 
     #[wasm_bindgen(js_name = visibleKeys)]
     pub fn visible_keys(&self) -> Vec<u64> {
-        self.state.value().keys().copied().collect()
+        self.replica.state().value().keys().copied().collect()
     }
 
     #[wasm_bindgen(js_name = entryKeys)]
     pub fn entry_keys(&self) -> Vec<u64> {
-        self.state.entries().keys().copied().collect()
+        self.replica.state().entries().keys().copied().collect()
     }
 
     #[wasm_bindgen(js_name = removalKeys)]
     pub fn removal_keys(&self) -> Vec<u64> {
-        self.state.removals().keys().copied().collect()
+        self.replica.state().removals().keys().copied().collect()
     }
 }
 
@@ -2440,8 +2443,7 @@ impl SafeMeshLwwMapReplica {
     pub fn new(replica_id: u64) -> Self {
         SafeMeshLwwMapReplica {
             replica_id,
-            state: LwwMap::new(),
-            log: EventLog::new(),
+            replica: Replica::new(LwwMap::new()),
         }
     }
 
@@ -2458,18 +2460,12 @@ impl SafeMeshLwwMapReplica {
             replica: writer_replica,
             value,
         };
-        let id = self
-            .log
-            .append_with(
-                &mut self.state,
-                self.replica_id,
-                delta.clone(),
-                |state, delta| {
-                    state.apply_delta(delta.clone());
-                },
-            )
-            .map_err(|error| JsValue::from(append_error(error)))?;
-        Record { id, delta }
+        self.replica
+            .append(self.replica_id, delta)
+            .map_err(|error| match error {
+                ReplicaError::Append(error) => JsValue::from(append_error(error)),
+                _ => unreachable!(),
+            })?
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
     }
@@ -2485,32 +2481,30 @@ impl SafeMeshLwwMapReplica {
             timestamp,
             replica: writer_replica,
         };
-        let id = self
-            .log
-            .append_with(
-                &mut self.state,
-                self.replica_id,
-                delta.clone(),
-                |state, delta| {
-                    state.apply_delta(delta.clone());
-                },
-            )
-            .map_err(|error| JsValue::from(append_error(error)))?;
-        Record { id, delta }
+        self.replica
+            .append(self.replica_id, delta)
+            .map_err(|error| match error {
+                ReplicaError::Append(error) => JsValue::from(append_error(error)),
+                _ => unreachable!(),
+            })?
             .to_wire_bytes()
             .map_err(|_| safe_mesh_error(1, "failed to encode record"))
     }
 
     pub fn version_for(&self, replica: u64) -> u64 {
-        self.log.version().get(replica)
+        self.replica.version().get(replica)
     }
 
     pub fn has_key(&self, key: u64) -> bool {
-        self.state.get(&key).is_some()
+        self.replica.state().get(&key).is_some()
     }
 
     pub fn value_or(&self, key: u64, default_value: u64) -> u64 {
-        self.state.get(&key).copied().unwrap_or(default_value)
+        self.replica
+            .state()
+            .get(&key)
+            .copied()
+            .unwrap_or(default_value)
     }
 }
 impl SafeMeshLwwRegisterReplica {
@@ -3267,7 +3261,8 @@ mod tests {
                 key: 1,
                 timestamp: 2,
                 replica: 1
-            }
+            },
+            core
         );
 
         let first = Record {
@@ -3550,7 +3545,8 @@ mod tests {
                 key: 1,
                 timestamp: 2,
                 replica: 1
-            }
+            },
+            core
         );
         check!(
             SafeMeshStringOrSetReplica::new(2),
@@ -3723,6 +3719,46 @@ mod tests {
         assert_eq!(left.value_or(7, 0), right.value_or(7, 0));
         assert_eq!(left.visible_keys(), vec![7]);
         assert_eq!(left.removal_keys(), vec![7]);
+    }
+
+    #[test]
+    fn wasm_lww_map_replica_reads_have_absolute_values() {
+        const EMPTY: &str = "720000000000000000";
+        const SET: &str =
+            "720100000007000000000000000a000000000000000100000000000000640000000000000000000000";
+        const REMOVE: &str = "720100000007000000000000000a00000000000000010000000000000064000000000000000100000007000000000000000b000000000000000100000000000000";
+        let decode_hex = |hex: &str| {
+            hex.as_bytes()
+                .chunks_exact(2)
+                .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+                .collect::<Vec<u8>>()
+        };
+
+        let mut r = SafeMeshLwwMapReplica::new(1);
+        assert!(!r.has_key(7), "empty has_key");
+        assert_eq!(r.entry_keys(), Vec::<u64>::new(), "empty entry_keys");
+        assert_eq!(
+            r.state_bytes().unwrap(),
+            decode_hex(EMPTY),
+            "empty state_bytes"
+        );
+
+        r.append_set(7, 10, 1, 100).unwrap();
+        assert!(r.has_key(7), "set has_key");
+        assert_eq!(r.entry_keys(), vec![7], "set entry_keys");
+        assert_eq!(r.visible_keys(), vec![7], "set visible_keys");
+        assert_eq!(r.state_bytes().unwrap(), decode_hex(SET), "set state_bytes");
+
+        r.append_remove(7, 11, 1).unwrap();
+        assert!(!r.has_key(7), "remove has_key");
+        assert_eq!(r.entry_keys(), vec![7], "remove entry_keys");
+        assert_eq!(r.visible_keys(), Vec::<u64>::new(), "remove visible_keys");
+        assert_eq!(r.removal_keys(), vec![7], "remove removal_keys");
+        assert_eq!(
+            r.state_bytes().unwrap(),
+            decode_hex(REMOVE),
+            "remove state_bytes"
+        );
     }
 
     #[test]
@@ -4389,6 +4425,28 @@ mod tests {
         ] {
             assert_eq!(peer_version(pairs), Err(binding_error(2, message)));
         }
+    }
+
+    #[test]
+    fn peer_version_counts_authors_before_building_the_map() {
+        let at_limit: Vec<u64> = (0..4096).flat_map(|author| [author, 1]).collect();
+        let mut over_limit_with_repeat = at_limit.clone();
+        over_limit_with_repeat.extend([0, 1]);
+        assert_eq!(
+            peer_version(&over_limit_with_repeat),
+            Err(binding_error(
+                2,
+                "peerVersion: peer version exceeds author limit 4096"
+            ))
+        );
+        assert_eq!(peer_version(&at_limit).unwrap().entries().len(), 4096);
+
+        let mut at_limit_with_repeat: Vec<u64> = (0..4095).flat_map(|author| [author, 1]).collect();
+        at_limit_with_repeat.extend([0, 2]);
+        assert_eq!(
+            peer_version(&at_limit_with_repeat),
+            Err(binding_error(2, "peerVersion repeats author 0"))
+        );
     }
 
     #[test]
