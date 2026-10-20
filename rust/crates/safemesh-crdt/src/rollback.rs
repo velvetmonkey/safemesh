@@ -119,10 +119,11 @@ impl Counter {
     }
 
     pub(super) fn advance(&mut self, sequence: u64) -> Result<(), LocalError> {
-        self.advance_batch(
-            self.sequence.checked_add(1).ok_or(LocalError::Exhausted)?,
-            sequence,
-        )
+        let next = self.sequence.checked_add(1).ok_or(LocalError::Exhausted)?;
+        if sequence != next {
+            return Err(LocalError::RecoveryRequired);
+        }
+        self.advance_batch(next, sequence)
     }
 
     pub(super) fn advance_batch(&mut self, first: u64, last: u64) -> Result<(), LocalError> {
