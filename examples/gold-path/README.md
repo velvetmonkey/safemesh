@@ -4,7 +4,8 @@ From the repository root, start with `docs/src/content/docs/getting-started.md`,
 `persist-and-restart.md` and `connect-replicas.md` in the same directory.
 Rust is a standalone Cargo application consuming the local crate with `local-writer`.
 TypeScript imports the complete `wasm-pack --target nodejs` output directory and
-compiles against its generated declarations, without a hand-written type shim.
+compiles against its generated declarations and the typed declaration for the
+existing example Store, without an `any` shim.
 
 `python3 scripts/check-gold-paths.py` checks twenty marked Markdown blocks against their
 canonical sources, extracts the displayed code and thirteen commands into an
