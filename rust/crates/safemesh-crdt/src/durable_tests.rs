@@ -1569,7 +1569,7 @@ fn refused_create_leaves_no_store_files() {
     fs::remove_dir_all(&store_root).unwrap();
     assert!(matches!(
         DurableReplica::counter(&store_root, config()),
-        Err(LocalError::RecoveryRequired)
+        Err(LocalError::StoreExists)
     ));
     let entries: Vec<_> = fs::read_dir(&store_root).unwrap().collect();
     assert!(
@@ -1591,7 +1591,7 @@ fn refused_create_leaves_no_store_files() {
     fs::remove_dir_all(&set_root).unwrap();
     assert!(matches!(
         DurableReplica::utf8_set(&set_root, config()),
-        Err(LocalError::RecoveryRequired)
+        Err(LocalError::StoreExists)
     ));
     assert_eq!(fs::read_dir(&set_root).unwrap().count(), 0);
     assert_eq!(fs::read(&set_counter).unwrap(), set_original);
@@ -1604,7 +1604,7 @@ fn existing_store_refusal_preserves_files() {
     let before = fs::read(&fence).unwrap();
     assert!(matches!(
         DurableReplica::counter(&root, config()),
-        Err(LocalError::RecoveryRequired)
+        Err(LocalError::StoreExists)
     ));
     assert_eq!(fs::read(&fence).unwrap(), before);
     assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
