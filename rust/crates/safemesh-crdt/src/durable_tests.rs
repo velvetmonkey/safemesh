@@ -1610,6 +1610,22 @@ fn existing_store_refusal_preserves_files() {
     assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
 }
 #[test]
+fn rollback_single_advance_refuses_skipped_sequence() {
+    let root = root();
+    let mut r = DurableReplica::counter(&root, config()).unwrap();
+    r.bump(r.ticket(), 1).unwrap();
+    let counter = protected_counter_path(&root, 0);
+    let before = fs::read(&counter).unwrap();
+
+    let result = r.rollback.as_mut().unwrap().advance(3);
+    assert!(
+        matches!(&result, Err(LocalError::RecoveryRequired)),
+        "skipped advance returned {:?}",
+        result
+    );
+    assert_eq!(fs::read(&counter).unwrap(), before);
+}
+#[test]
 fn rollback_r1_store_only_restore_refuses() {
     let root = root();
     let mut r = DurableReplica::counter(&root, config()).unwrap();
