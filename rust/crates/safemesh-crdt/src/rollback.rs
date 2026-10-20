@@ -52,7 +52,7 @@ impl Counter {
     pub(super) fn ensure_absent(root: &Path, config: WriterConfig) -> Result<(), LocalError> {
         let (marker, path) = paths(root, config.writer)?;
         if read_regular(&marker)?.is_some() || read_regular(&path)?.is_some() {
-            return Err(LocalError::RecoveryRequired);
+            return Err(LocalError::StoreExists);
         }
         Ok(())
     }

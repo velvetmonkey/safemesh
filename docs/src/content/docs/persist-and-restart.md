@@ -138,8 +138,8 @@ Read the [complete Rust source and storage boundary](/safemesh/using-safemesh/#r
 ## Diagnose a failed Rust exercise
 
 The fixture uses `expect`/`unwrap`, so failures appear as a Rust panic (exit 101).
-On a second `persist`, an existing store returns `RecoveryRequired` (Display:
-`local store requires recovery`). Check whether `.gold-rust` existed before this
+On a second `persist`, an existing store returns `StoreExists` (Display:
+`local store already exists for this writer; restart it, or create with a new root or writer ID`). Check whether `.gold-rust` existed before this
 run: if it did, keep that store and run `restart` with its original writer
 configuration, or use a fresh checkout for a separate exercise.
 
@@ -149,8 +149,8 @@ that owner and wait for it to release the lock, then retry `restart` with the
 same store and writer configuration. Keep the fence file in place; deleting it
 does not release the other owner's lock or restore ownership safely.
 
-A truncated writer fence on `restart` returns the same `RecoveryRequired` and
-`local store requires recovery`. If the store was already present and this was
+A truncated writer fence on `restart` returns `RecoveryRequired` (Display:
+`local store requires recovery: its writer fence, journal header, rollback counter or migration files are damaged or do not agree`). If the store was already present and this was
 a `restart`, inspect its `writer-0.fence` files: each must be 24 bytes. Retain a
 damaged store for inspection and recover only from a known consistent copy with
 its original writer identity and allocation metadata. Never reset an existing
@@ -654,7 +654,7 @@ completes it ([`interrupted_migration_is_refused_then_completed`](https://github
 The rollback counter file is in the parent of the store directory. Its name
 matches `.safemesh-<hash>-writer-<id>.counter`. Deleting the store directory
 leaves this file in place. A new store at the same path with the same writer ID
-returns `RecoveryRequired` from `DurableReplica::counter` or `utf8_set`.
+returns `StoreExists` from `DurableReplica::counter` or `utf8_set`.
 The refused create leaves no files in the new store directory. The directory
 itself may remain.
 

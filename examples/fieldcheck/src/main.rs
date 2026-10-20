@@ -153,6 +153,7 @@ fn local_error_kind(error: &LocalError) -> &'static str {
         // Only `_with_limits` restarts, which fieldcheck does not use, refuse by budget.
         LocalError::Exhausted => "storage",
         LocalError::RecordLimitExceeded { .. } => "storage",
+        LocalError::StoreExists => "store_exists",
         LocalError::RecoveryRequired => "replay",
         LocalError::InvalidRecord(_) => "replay",
         LocalError::History(_) => "replay",
@@ -316,6 +317,11 @@ mod tests {
             local_error_kind(&LocalError::PeerWriterAhead),
             "writer_ahead",
             "PeerWriterAhead"
+        );
+        assert_eq!(
+            local_error_kind(&LocalError::StoreExists),
+            "store_exists",
+            "StoreExists"
         );
         assert_eq!(
             local_error_kind(&LocalError::RecoveryRequired),
