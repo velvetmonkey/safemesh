@@ -20,6 +20,7 @@ const labDir = fileURLToPath(new URL(`./dist/${LAB_MOUNT}`, import.meta.url));
 const run = (args, options) => execFileSync('npm', args, { stdio: 'inherit', ...options });
 
 console.log(`Site ${site.href}\nLab  ${lab.href} (base path ${lab.pathname})`);
+run(['run', 'prebuild'], { cwd: docs });
 run(['run', 'build:docs'], { cwd: docs, env: { ...process.env, LAB_URL: lab.href } });
 run(['run', 'build', '--', '--base', lab.pathname, '--outDir', labDir, '--emptyOutDir'], { cwd: web });
 console.log(`Lab built into ${labDir} for ${lab.href}`);
