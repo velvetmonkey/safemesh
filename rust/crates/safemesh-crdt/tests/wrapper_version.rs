@@ -1,21 +1,18 @@
-use safemesh_crdt::*;
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
-
-fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v0.1.0")
-}
-
 #[cfg(all(feature = "local-writer", target_os = "linux"))]
 mod store {
-    use super::*;
+    use safemesh_crdt::*;
     use safemesh_crdt::{
         local::{CommittedTransaction, DurableReplica, LocalError},
         ownership::WriterConfig,
     };
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
+    fn fixtures() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v0.1.0")
+    }
     fn config() -> WriterConfig {
         WriterConfig {
             writers: 2,
@@ -206,8 +203,9 @@ mod store {
         let mut bytes = fs::read(fixtures().join("transaction.bin")).unwrap();
         let writers = u64::from_le_bytes(*b"SMTRANS1");
         bytes[..8].copy_from_slice(&writers.to_le_bytes());
-        fs::write(root.join("writer-0.transaction"), &bytes).unwrap();
-        let saved = CommittedTransaction::read(&root, WriterConfig { writers, writer: 0 }).unwrap();
+        bytes[8..16].copy_from_slice(&1_u64.to_le_bytes());
+        fs::write(root.join("writer-1.transaction"), &bytes).unwrap();
+        let saved = CommittedTransaction::read(&root, WriterConfig { writers, writer: 1 }).unwrap();
         assert_eq!(saved.log_bytes, bytes[24..]);
     }
 
