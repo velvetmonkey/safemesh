@@ -14,6 +14,21 @@ use alloc::vec::Vec;
 use std::path::{Path, PathBuf};
 
 pub(crate) const MAGIC: [u8; 8] = *b"SMJOURN1";
+pub(crate) fn check_magic(bytes: &[u8]) -> Result<(), LocalError> {
+    if bytes.len() < 8 {
+        return Err(LocalError::RecoveryRequired);
+    }
+    if bytes[..8] == MAGIC {
+        return Ok(());
+    }
+    if bytes[..7] == MAGIC[..7] && bytes[7].is_ascii_digit() && bytes[7] > b'1' {
+        return Err(LocalError::UnsupportedFormat {
+            file: "journal",
+            version: bytes[7] - b'0',
+        });
+    }
+    Err(LocalError::RecoveryRequired)
+}
 /// Magic, writer count, writer, base allocation sequence, base frame length.
 pub(crate) const HEADER: usize = 8 + 8 + 8 + 8 + 4;
 /// Length pair before an entry's payload.
@@ -117,7 +132,8 @@ pub(crate) fn parse(bytes: &[u8], config: WriterConfig) -> Result<Parsed<'_>, Lo
 
 /// Returns (base sequence, base frame length) for a header matching `config`.
 pub(crate) fn check_header(bytes: &[u8], config: WriterConfig) -> Result<(u64, usize), LocalError> {
-    if bytes.len() < HEADER || bytes[..8] != MAGIC {
+    check_magic(bytes)?;
+    if bytes.len() < HEADER {
         return Err(LocalError::RecoveryRequired);
     }
     let word = |i: usize| u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());

@@ -14,6 +14,22 @@ use std::{
 const MARKER_MAGIC: &[u8; 8] = b"SMROLLB1";
 const COUNTER_MAGIC: &[u8; 8] = b"SMCOUNT1";
 
+fn check_magic(bytes: &[u8], magic: &[u8; 8], file: &'static str) -> Result<(), LocalError> {
+    if bytes.len() < 8 {
+        return Err(LocalError::RecoveryRequired);
+    }
+    if bytes[..8] == magic[..] {
+        return Ok(());
+    }
+    if bytes[..7] == magic[..7] && bytes[7].is_ascii_digit() && bytes[7] > b'1' {
+        return Err(LocalError::UnsupportedFormat {
+            file,
+            version: bytes[7] - b'0',
+        });
+    }
+    Err(LocalError::RecoveryRequired)
+}
+
 pub(super) struct Counter {
     path: PathBuf,
     identity: [u8; 16],
@@ -86,6 +102,8 @@ impl Counter {
             (None, None) => return Ok(None), // A pre-protection store keeps its old open behavior.
             _ => return Err(LocalError::RecoveryRequired),
         };
+        check_magic(&marker, MARKER_MAGIC, "rollback marker")?;
+        check_magic(&bytes, COUNTER_MAGIC, "rollback counter")?;
         if marker.len() != 40
             || marker[..24] != identity_bytes(MARKER_MAGIC, config, &[0; 16])[..24]
         {
