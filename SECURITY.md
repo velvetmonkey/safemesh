@@ -12,12 +12,12 @@ tagged releases or older release lines receiving security fixes. The
 Use GitHub's [private vulnerability reporting form](https://github.com/velvetmonkey/safemesh/security/advisories/new)
 to report an unpatched vulnerability privately to the maintainers.
 
-**This channel is not yet enabled for this repository.** A repository admin must
-enable private vulnerability reporting in the repository's security settings
-before the form can accept reports. Until then, no private reporting channel is
-published; keep vulnerability details private until this channel is available.
+Private vulnerability reporting is enabled for this repository. The form
+above accepts private reports. Use it to send details to the maintainers
+without making them public.
 
-Once enabled, include the affected commit, steps to reproduce, and the potential
-impact in your private report.
+Include the affected commit, steps to reproduce, and the potential impact in
+your private report. Keep vulnerability details private while you prepare the
+report.
 
 Do not open a public issue or pull request describing an unpatched vulnerability.
