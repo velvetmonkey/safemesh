@@ -31,6 +31,40 @@ test('planted WASM request at load makes an ordinary article RED', () => {
   assert.match(result.stdout, /article\/.*WASM.*demo\.wasm/s);
 });
 
+test('home hero WASM is allowed only on the home page and counts in its total', () => {
+  const wasm = Buffer.from('0061736d01000000', 'hex');
+  const root = () => mkdtempSync(join(process.env.TMPDIR || tmpdir(), 'smdoc-home-wasm-'));
+  const page = name => `<!doctype html><html lang="en"><title>Fixture</title><script>fetch("/safemesh/hero-wasm/${name}")</script><body><main>Home</main></body></html>`;
+  const put = (site, route, name, bytes) => {
+    mkdirSync(join(site, 'hero-wasm'));
+    if (route === 'article') mkdirSync(join(site, 'article'));
+    writeFileSync(join(site, route === 'article' ? 'article/index.html' : 'index.html'), page(name));
+    writeFileSync(join(site, 'hero-wasm', name), bytes);
+  };
+
+  const home = root();
+  put(home, 'home', 'safemesh_wasm_bg.wasm', wasm);
+  const allowed = check(home);
+  assert.equal(allowed.status, 0, `home hero WASM must pass: ${allowed.stdout}\n${allowed.stderr}`);
+  assert.match(allowed.stdout, /PASS \/safemesh\/.*hero-wasm\/safemesh_wasm_bg\.wasm/, 'home PASS line must name the hero WASM');
+
+  const article = root();
+  put(article, 'article', 'safemesh_wasm_bg.wasm', wasm);
+  const articleResult = check(article);
+  assert.equal(articleResult.status, 1, `article hero WASM must fail: ${articleResult.stdout}\n${articleResult.stderr}`);
+
+  const other = root();
+  put(other, 'home', 'other.wasm', wasm);
+  const otherResult = check(other);
+  assert.equal(otherResult.status, 1, `other home WASM must fail: ${otherResult.stdout}\n${otherResult.stderr}`);
+
+  const heavy = root();
+  put(heavy, 'home', 'safemesh_wasm_bg.wasm', randomBytes(400 * 1024));
+  const heavyResult = check(heavy);
+  assert.equal(heavyResult.status, 1, `400 KiB home hero WASM must exceed guide total: ${heavyResult.stdout}\n${heavyResult.stderr}`);
+  assert.match(heavyResult.stdout, /FAIL \/safemesh\/.*350 KiB/, 'heavy home page must fail the 350 KiB guide limit');
+});
+
 test('generated Rust reference uses its dated class while the same guide weight stays RED', () => {
   const content = randomBytes(500 * 1024).toString('base64');
   const html = `<!doctype html><html lang="en"><title>Fixture</title><body><main>${content}</main></body></html>`;
