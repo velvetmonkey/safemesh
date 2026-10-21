@@ -6,11 +6,27 @@ use crate::{Crdt, MergeError, Mergeable, RecordId, WireError};
 use alloc::{collections::BTreeSet, vec::Vec};
 
 /// Delta for an observed-token enable-wins flag.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum EnableWinsFlagDelta<K> {
     Enable { token: K },
     Disable { tokens: Vec<K> },
 }
+
+// Record admission compares Disable tokens as a set. Keep the received vector
+// so callers can inspect the order and repeats that were present on the wire.
+impl<K: Ord> PartialEq for EnableWinsFlagDelta<K> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Enable { token: a }, Self::Enable { token: b }) => a == b,
+            (Self::Disable { tokens: a }, Self::Disable { tokens: b }) => {
+                a.iter().collect::<BTreeSet<_>>() == b.iter().collect::<BTreeSet<_>>()
+            }
+            _ => false,
+        }
+    }
+}
+
+impl<K: Ord> Eq for EnableWinsFlagDelta<K> {}
 
 /// Enable-wins boolean flag.
 ///
