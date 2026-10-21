@@ -81,3 +81,16 @@ test('a different named runner fails by path', () => withTree(({ edit, run }) =>
   assert.equal(result.status, 1);
   assert.match(result.stderr, /^FAIL README\.md:126: runner windows-latest differs from python job ubuntu-latest/m);
 }));
+test('F5: a version after a range fails README', () => withTree(({ edit, run }) => {
+  edit(readme, 'CPython 3.8–3.14.', 'CPython 3.8–3.14 and 3.15.');
+  const result = run();
+  assert.equal(result.status, 1);
+  assert.equal(failureLines(result).length, 1, result.stderr);
+  assert.match(result.stderr, /^FAIL README\.md:126:/);
+}));
+test('NEG: a later clause is not the matrix', () => withTree(({ edit, run }) => {
+  edit(using, 'also runs on CPython 3.11', 'also runs on CPython 3.15');
+  const result = run();
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /PASS python matrix 3\.8\.\.3\.14 \(7 versions\), 5 surfaces/);
+}));
