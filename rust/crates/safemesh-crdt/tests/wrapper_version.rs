@@ -197,6 +197,30 @@ mod store {
     }
 
     #[test]
+    fn damaged_magic_with_high_digit_needs_recovery() {
+        for file in ["journal", "rollback marker", "rollback counter"] {
+            let root = installed("journal");
+            let path = match file {
+                "journal" => root.join("writer-0.journal"),
+                "rollback marker" => root.join("writer-0.rollback"),
+                "rollback counter" => counter_path(&root),
+                _ => unreachable!(),
+            };
+            let mut bytes = fs::read(&path).unwrap();
+            bytes[0] ^= 0xff;
+            bytes[7] = b'2';
+            fs::write(&path, bytes).unwrap();
+            let error = DurableReplica::restart_counter(&root, config())
+                .err()
+                .unwrap();
+            assert!(
+                matches!(error, LocalError::RecoveryRequired),
+                "{file}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn legacy_transaction_magic_writers_word_stays_legacy() {
         let root = scratch("magic-writers").join("store");
         fs::create_dir(&root).unwrap();
@@ -204,6 +228,20 @@ mod store {
         let writers = u64::from_le_bytes(*b"SMTRANS1");
         bytes[..8].copy_from_slice(&writers.to_le_bytes());
         bytes[8..16].copy_from_slice(&1_u64.to_le_bytes());
+        fs::write(root.join("writer-1.transaction"), &bytes).unwrap();
+        let saved = CommittedTransaction::read(&root, WriterConfig { writers, writer: 1 }).unwrap();
+        assert_eq!(saved.log_bytes, bytes[24..]);
+    }
+
+    #[test]
+    fn legacy_transaction_tag_02_stays_legacy() {
+        let root = scratch("legacy-tag-02").join("store");
+        fs::create_dir(&root).unwrap();
+        let mut bytes = fs::read(fixtures().join("transaction.bin")).unwrap();
+        let writers = u64::from_le_bytes(*b"SMTRANS1");
+        bytes[..8].copy_from_slice(&writers.to_le_bytes());
+        bytes[8..16].copy_from_slice(&1_u64.to_le_bytes());
+        bytes[24] = 0x02;
         fs::write(root.join("writer-1.transaction"), &bytes).unwrap();
         let saved = CommittedTransaction::read(&root, WriterConfig { writers, writer: 1 }).unwrap();
         assert_eq!(saved.log_bytes, bytes[24..]);
