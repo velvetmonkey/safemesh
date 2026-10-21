@@ -433,7 +433,8 @@ to build the local Node package, compile this program with `tsc` and execute it.
 It imports the real generated declarations and calls the Rust core through WASM.
 The checkout’s `examples/gold-path/typescript/` contains these exact files,
 `package.json` and the npm lockfile. Copy the complete program below or edit
-`main.ts` directly.
+`main.ts` directly. The program opens managed handles with the example
+`FileSystemStore`, which is outside `pkg/` and is not packaged.
 
 <details>
 <summary>Complete allocated-writer TypeScript program</summary>
@@ -441,120 +442,115 @@ The checkout’s `examples/gold-path/typescript/` contains these exact files,
 <!-- gold:source ts:typescript/main.ts -->
 ```ts
 import { strict as assert } from "node:assert";
-import { mkdirSync, readFileSync, writeFileSync, unlinkSync, rmdirSync } from "node:fs";
-import { SafeMeshGCounterReplica as Counter, SafeMeshStringOrSetReplica as Members } from "./pkg/safemesh_wasm";
+import { mkdirSync, unlinkSync, rmdirSync } from "node:fs";
+import { SafeMeshManagedGCounter, SafeMeshManagedStringOrSet,
+  SafeMeshGCounterReplica as CounterPeer, SafeMeshStringOrSetReplica as MembersPeer } from "./pkg/safemesh_wasm";
 
-// tsc checks these imports against the generated package's .d.ts, with no `any` shim.
+// tsc checks the generated package and the typed example Store, with no `any` shim.
+import("../../../rust/crates/safemesh-wasm/examples/node-filesystem-store.mjs").then(({ FileSystemStore }) => {
 const step = process.argv[2];
 const root = ".gold-typescript";
 assert(["persist", "restart"].includes(step), "pass persist or restart");
-let counter: Counter | undefined;
-let members: Members | undefined;
-function memberState(replica: Members) {
-  const entries = replica.addEntries();
-  try {
-    return {
-      adds: entries.map(entry => `${entry.element()}:${entry.token()}`).sort(),
-      tombstones: Array.from(replica.tombstones(), String).sort(),
-    };
-  } finally {
-    entries.forEach(entry => entry.free());
-  }
-}
+let counter: SafeMeshManagedGCounter | undefined;
+let members: SafeMeshManagedStringOrSet | undefined;
+const counterStore = new FileSystemStore(`${root}/counter`, `${root}/counter.anchor`);
+const membersStore = new FileSystemStore(`${root}/members`, `${root}/members.anchor`);
 function accepted(verdicts: ("accepted" | "duplicate" | "collision")[]) {
   assert(!verdicts.includes("collision"), `record collision: ${verdicts}`);
 }
+function close() {
+  counter?.close();
+  members?.close();
+  counter?.free();
+  members?.free();
+  counter = undefined;
+  members = undefined;
+}
+function open(mode: "fresh" | "restart") {
+  const options = mode === "fresh"
+    ? { mode, writer: 0n, writers: 2 } as const
+    : { mode, writer: 0n } as const;
+  counter = SafeMeshManagedGCounter.open(counterStore, options);
+  members = SafeMeshManagedStringOrSet.open(membersStore, options);
+}
 try {
-  counter = new Counter(0n, 2);
   if (step === "persist") {
-    mkdirSync(root); // refuse to overwrite an existing exercise
-    members = Members.createAllocated(2n, 0n);
-    counter.appendBump(0, 3n);
-    members.appendAllocatedAdd("compass"); // Rust allocates token 2
-    writeFileSync(`${root}/counter.log`, counter.logBytes());
-    writeFileSync(`${root}/members.identity`, members.exportIdentity());
-    assert.equal(counter.value(), 3n);
-    assert.deepEqual(members.elements(), ["compass"]);
+    mkdirSync(root); // Refuse to overwrite an existing exercise.
+    open("fresh");
+    counter!.appendBump(3n);
+    members!.appendAdd("compass"); // Rust allocates token 2.
+    assert.equal(counter!.value(), 3n);
+    assert.deepEqual(members!.elements(), ["compass"]);
+    close();
     console.log("saved counter=3 members=[compass]");
   } else {
     assert.equal(step, "restart", "pass persist or restart");
-    // No fallback to a new identity if the saved file is missing or invalid.
-    members = Members.importIdentity(readFileSync(`${root}/members.identity`));
-    accepted(counter.mergeLogBytes(readFileSync(`${root}/counter.log`)));
-    assert.equal(counter.value(), 3n);
-    assert.deepEqual(members.elements(), ["compass"]);
+    open("restart"); // Writer count comes only from committed metadata.
+    assert(counter && members);
+    assert.equal(counter!.value(), 3n);
+    assert.deepEqual(members!.elements(), ["compass"]);
     console.log("restored counter=3 members=[compass]");
-    counter.appendBump(0, 4n); // new cumulative tally, not +4
-    members.appendAllocatedAdd("map"); // restored allocation produces token 4
-    writeFileSync(`${root}/counter.log`, counter.logBytes());
-    writeFileSync(`${root}/members.identity`, members.exportIdentity());
-    let peerCounter: Counter | undefined;
-    let peerMembers: Members | undefined;
+    counter!.appendBump(4n); // New cumulative tally, not +4.
+    members!.appendAdd("map"); // Restored allocation produces token 4.
+    let peerCounter: CounterPeer | undefined;
+    let peerMembers: MembersPeer | undefined;
     try {
-      peerCounter = new Counter(1n, 2);
-      peerMembers = Members.createAllocated(2n, 1n);
+      peerCounter = new CounterPeer(1n, 2);
+      peerMembers = MembersPeer.createAllocated(2n, 1n);
       peerCounter.appendBump(1, 2n);
-      peerMembers.appendAllocatedAdd("rope"); // Rust allocates token 3
-      writeFileSync(`${root}/peer.identity`, peerMembers.exportIdentity());
-      // Your transport delivers these Uint8Arrays; this exercise hands them across.
-      accepted(peerCounter.mergeLogBytes(counter.logBytes()));
-      accepted(peerMembers.mergeLogBytes(members.logBytes()));
-      writeFileSync(`${root}/peer.identity`, peerMembers.exportIdentity());
-      accepted(counter.mergeLogBytes(peerCounter.logBytes()));
-      accepted(members.mergeLogBytes(peerMembers.logBytes()));
-      writeFileSync(`${root}/counter.log`, counter.logBytes());
-      writeFileSync(`${root}/members.identity`, members.exportIdentity());
+      peerMembers.appendAllocatedAdd("rope"); // Rust allocates token 3.
+      // The transport hands peer bytes across; the peer stays in memory.
+      accepted(peerCounter.mergeLogBytes(counter!.peerLogBytes()));
+      accepted(peerMembers.mergeLogBytes(members!.peerLogBytes()));
+      accepted(counter!.mergeLogBytes(peerCounter.logBytes()));
+      accepted(members!.mergeLogBytes(peerMembers.logBytes()));
       assert.equal(counter.value(), 6n);
       assert.deepEqual(members.elements(), ["compass", "map", "rope"]);
-      assert(counter.sameStateAs(peerCounter));
-      // Logs retain arrival order. Compare all records by duplicate admission,
-      // and compare carrier metadata separately, rather than comparing byte order.
+      assert.equal(counter.value(), peerCounter.value());
+      assert.deepEqual(members.elements(), peerMembers.elements());
       assert.deepEqual(counter.mergeLogBytes(peerCounter.logBytes()), ["duplicate", "duplicate", "duplicate"]);
       assert.deepEqual(members.mergeLogBytes(peerMembers.logBytes()), ["duplicate", "duplicate", "duplicate"]);
-      assert.deepEqual(memberState(members), memberState(peerMembers));
-      assert.deepEqual(memberState(members), { adds: ["compass:2", "map:4", "rope:3"], tombstones: [] });
-      for (const replica of [counter, members, peerCounter, peerMembers]) {
+      assert.deepEqual(Array.from(members.versionVector(), String), Array.from(peerMembers.versionVector(), String));
+      assert.deepEqual(members.elements(), ["compass", "map", "rope"]);
+      for (const replica of [counter, peerCounter]) {
         assert.equal(replica.versionFor(0n), 2n);
         assert.equal(replica.versionFor(1n), 1n);
       }
       console.log("synced counter=6 members=[compass,map,rope] records=3+3");
-      const before = counter.logBytes();
-      const malformedTarget = counter;
-      assert.throws(() => malformedTarget.mergeRecordBytes(new Uint8Array()), (error: unknown) => {
+      const before = counter.peerLogBytes();
+      assert.throws(() => counter!.mergeRecordBytes(new Uint8Array()), (error: unknown) => {
         assert(error instanceof Error);
         assert.equal(error.name, "SafeMeshError");
         assert.equal(error.message, "failed to decode record: unexpected end of wire input");
         console.log(`malformed record: ${error.name}: ${error.message}`);
         return true;
       });
-      assert.deepEqual(counter.logBytes(), before);
+      assert.deepEqual(counter.peerLogBytes(), before);
     } finally {
       peerCounter?.free();
       peerMembers?.free();
     }
-    // Release the claim, then verify the latest file, including the post-restart add.
-    const latest = memberState(members);
-    members.free();
-    members = undefined;
-    members = Members.importIdentity(readFileSync(`${root}/members.identity`));
-    assert.deepEqual(memberState(members), latest);
-    assert.equal(members.versionFor(0n), 2n);
-    assert.equal(members.versionFor(1n), 1n);
-    console.log("saved latest identity members=[compass,map,rope] local-sequence=2");
-    counter.free();
-    counter = undefined;
-    members.free();
-    members = undefined;
-    unlinkSync(`${root}/counter.log`);
-    unlinkSync(`${root}/members.identity`);
-    unlinkSync(`${root}/peer.identity`);
+    // Release both leases, then read the latest committed state again.
+    const latestVersion = Array.from(members.versionVector());
+    close();
+    open("restart");
+    assert.equal(counter!.value(), 6n);
+    assert.deepEqual(members!.elements(), ["compass", "map", "rope"]);
+    assert.deepEqual(Array.from(members!.versionVector()), latestVersion);
+    console.log("saved latest managed state members=[compass,map,rope] local-sequence=2");
+    close();
+    for (const name of ["counter", "members"]) {
+      unlinkSync(`${root}/${name}/committed.bin`);
+      rmdirSync(`${root}/${name}`);
+      unlinkSync(`${root}/${name}.anchor`);
+    }
     rmdirSync(root);
     console.log("cleaned exercise stores");
   }
 } finally {
-  counter?.free();
-  members?.free();
+  if (counter || members) close();
 }
+});
 ```
 <!-- /gold -->
 
