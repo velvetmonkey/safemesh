@@ -63,12 +63,18 @@ try {
         totalBytes += bytes;
         if (['.js', '.mjs'].includes(extname(file).toLowerCase())) jsBytes += bytes;
       }
+      const homeHeroWasm = rel === 'index.html' && wasm.has('hero-wasm/safemesh_wasm_bg.wasm');
+      const unexpectedWasm = new Set(wasm);
+      if (homeHeroWasm) {
+        unexpectedWasm.delete('hero-wasm/safemesh_wasm_bg.wasm');
+        totalBytes += gzipSync(readFileSync(join(root, 'hero-wasm/safemesh_wasm_bg.wasm'))).length;
+      }
       const total = totalBytes / 1024, js = jsBytes / 1024;
       const lab = rel === 'lab/index.html';
       const rustReference = rel.startsWith('reference/rust/');
       const limit = rustReference ? RUST_REFERENCE_TOTAL_KIB : GUIDE_TOTAL_KIB;
-      const label = lab ? 'Lab exemption' : rustReference ? `generated Rust reference ${limit} KiB (2026-10-14 baseline 953.4 KiB + 10%)` : `guide ${limit} KiB`;
-      const bad = !lab && (totalBytes > limit * 1024 || jsBytes > JS_KIB * 1024 || wasm.size > 0);
+      const label = lab ? 'Lab exemption' : rustReference ? `generated Rust reference ${limit} KiB (2026-10-14 baseline 953.4 KiB + 10%)` : `guide ${limit} KiB${homeHeroWasm ? '; home hero WASM allowed' : ''}`;
+      const bad = !lab && (totalBytes > limit * 1024 || jsBytes > JS_KIB * 1024 || unexpectedWasm.size > 0);
       const detail = `${route}: total ${total.toFixed(1)} KiB/${limit} KiB, JS ${js.toFixed(1)} KiB/${JS_KIB} KiB, WASM ${wasm.size ? [...wasm].join(', ') : 'none'}; ${label}`;
       console.log(`${bad ? 'FAIL' : 'PASS'} ${detail}`);
       if (bad) failures++;

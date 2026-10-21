@@ -110,6 +110,42 @@ jobs:
       - name: Check homepage startup failures
         timeout-minutes: 3
         run: node --test docs/startup-failure.browser.test.mjs
+      - name: Check homepage counter and merge illustrations in a browser
+        timeout-minutes: 5
+        run: |
+          site_root=$(mktemp -d "$RUNNER_TEMP/docs-browser.XXXXXX")
+          ln -s "$PWD/docs/dist" "$site_root/safemesh"
+          python3 -u - "$site_root" "$site_root/port" <<'PY' &
+          from functools import partial
+          from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+          from pathlib import Path
+          import sys
+
+          server = ThreadingHTTPServer(('127.0.0.1', 0), partial(SimpleHTTPRequestHandler, directory=sys.argv[1]))
+          Path(sys.argv[2]).write_text(str(server.server_port))
+          server.serve_forever()
+          PY
+          server_pid=$!
+          printf '%s\n' "$server_pid" > "$site_root/server.pid"
+          cleanup() {
+            status=$?
+            if kill "$server_pid"; then :; fi
+            if wait "$server_pid" 2>/dev/null; then :; fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          ready=0
+          for attempt in $(seq 1 50); do
+            if [[ -s "$site_root/port" ]] && curl --silent --fail "http://127.0.0.1:$(cat "$site_root/port")/safemesh/" > /dev/null; then
+              ready=1
+              break
+            fi
+            sleep 0.2
+          done
+          [[ "$ready" -eq 1 ]]
+          port=$(cat "$site_root/port")
+          DOCS_URL="http://127.0.0.1:$port/safemesh/" node --test docs/home.browser.test.mjs
+          DOCS_URL="http://127.0.0.1:$port/safemesh/merge-illustrations/" node --test docs/convergence.browser.test.mjs
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
