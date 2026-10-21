@@ -4,7 +4,8 @@ From the repository root, start with `docs/src/content/docs/getting-started.md`,
 `persist-and-restart.md` and `connect-replicas.md` in the same directory.
 Rust is a standalone Cargo application consuming the local crate with `local-writer`.
 TypeScript imports the complete `wasm-pack --target nodejs` output directory and
-compiles against its generated declarations, without a hand-written type shim.
+compiles against its generated declarations and the typed declaration for the
+existing example Store, without an `any` shim.
 
 `python3 scripts/check-gold-paths.py` checks twenty marked Markdown blocks against their
 canonical sources, extracts the displayed code and thirteen commands into an
@@ -26,7 +27,7 @@ the displayed source/commands/output. Run the normal checker again. CI never
 refreshes expected output. Do not accept a new snapshot instead of investigating
 an assertion failure.
 
-These are ordinary restart fixtures. The Rust adapter performs its documented
-local durable commit; the Node fixture saves application-owned log files without
-fencing or a crash transaction. Neither proves a network, power-loss recovery,
-cross-object atomicity, or platform support beyond the environment actually run.
+These are restart fixtures. The Rust adapter performs its documented local durable
+commit. The Node fixture uses the two managed handles with the example filesystem
+Store and a separate anchor for each handle. Neither proves a network, power-loss
+recovery, cross-object atomicity, or platform support beyond the environment run.

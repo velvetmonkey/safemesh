@@ -73,6 +73,8 @@ def required_assertions(staging):
         "typescript/main.ts": (
             'assert.equal(counter.value(),6n);',
             'assert.deepEqual(members.elements(),["compass","map","rope"]);',
+            'SafeMeshManagedGCounter.open(',
+            'SafeMeshManagedStringOrSet.open(',
         ),
     }
     failures = []
@@ -85,6 +87,10 @@ def required_assertions(staging):
         for assertion in assertions:
             if assertion not in compact:
                 failures.append(f"{name}: missing required assertion: {assertion}")
+        if name == "typescript/main.ts":
+            for forbidden in ("writeFileSync", "exportIdentity", "importIdentity"):
+                if forbidden in compact:
+                    failures.append(f"{name}: forbidden source operation: {forbidden}")
     return failures
 
 
@@ -159,6 +165,7 @@ def main():
                         zip(COMMANDS[name], lines, strict=True)]
                         for name, lines in extracted_commands.items()}
             failures.extend(required_assertions(staging))
+            failures.extend(required_assertions(ROOT))
     # Fail before execution if an assertion, source block or fence was removed.
     if not args.write_docs and not failures:
         for lane, items in commands.items():

@@ -105,10 +105,17 @@ cleaned exercise stores
 ```
 <!-- /gold -->
 
-`DurableReplica::counter` / `utf8_set` create the stores. Each successful edit
+`DurableReplica::counter` / `utf8_set` create the stores. Each successful single-record edit
 appends and syncs its own record; `restart_counter` / `restart_utf8_set` validate and
-replay the existing store while reacquiring the writer. Each accepted write of the
-local writer adds one counter file sync and one directory sync. For an existing counter,
+replay the existing store while reacquiring the writer. Each accepted single-record write of the
+local writer adds one counter file sync and one directory sync. A
+`DurableReplica::append_batch` or counter `bump_batch` writes the counter once
+for the whole batch, then writes its journal entries and syncs the journal once.
+In a 10,000-append release run on one box, medians were 111.930 s on main for
+single bumps, 105.856 s on this change for single bumps, 1.090 s for 100 batches
+of 100, and 0.128 s for 10 batches of 1,000. Relative to main, the ratios were
+0.946, 0.00974, and 0.00114. The main pre-run CPU sample dipped to 78 percent
+idle, so these ratios are indicative. For an existing counter,
 `restart_counter_from_store(root, writer)` reads the committed count under that
 writer's lock and runs the same checked replay, while explicit `restart_counter`
 still rejects a mismatched count. Their collection budget
@@ -368,7 +375,7 @@ saved counter=3 members=[compass]
 restored counter=3 members=[compass]
 synced counter=6 members=[compass,map,rope] records=3+3
 malformed record: SafeMeshError: failed to decode record: unexpected end of wire input
-saved latest identity members=[compass,map,rope] local-sequence=2
+saved latest managed state members=[compass,map,rope] local-sequence=2
 cleaned exercise stores
 ```
 <!-- /gold -->
@@ -380,25 +387,21 @@ The import loads the generated Node CommonJS package synchronously; there is no
 `tsc` emits `main.js` only if compilation succeeds. Values passed to Rust `u64`
 parameters are `bigint` (`3n`), and exchanged bytes are `Uint8Array`.
 
-This Node program writes the counter log and the set's complete
-`exportIdentity()` bytes with `writeFileSync`. The second process calls
-`importIdentity()` before adding `map`: Rust allocates token `4` after
-`compass`'s token `2`; the peer's `rope` gets token `3`. After every set
-edit or peer merge, the program saves the latest identity before acknowledging
-or exchanging edits. It reloads the final saved identity to check that both the
-new add and peer history were persisted, then releases all handles and deletes
-only these disposable exercise files.
+This Node program opens the managed G-Counter and allocated UTF-8 OR-Set with the
+existing example `FileSystemStore`. Each handle has its own store root and an
+independent anchor outside that root. The second process opens both handles in
+`restart` mode without a writer count, then adds `map`. Rust allocates token `4`
+after `compass`'s token `2`; the in-memory peer's `rope` gets token `3`.
+The handles commit accepted edits and peer records before returning. The program
+closes both leases, opens both stores again to check the latest committed state,
+and removes the exercise stores and anchors.
 
-It demonstrates an **ordinary, single-writer restart**, with no crash-safe commit
-or writer fencing. The application owns storage and exclusive author assignment;
-never clone a writer or resume an old backup as a live writer. Missing or invalid
-identity data stops the program; do not fall back to `createAllocated()`.
-Rust's durable adapter is not exported by this binding. This low-level Node
-example does not use the binding's managed handles. Its separate file writes
-are not an atomic transaction, and `writeFileSync` is not a crash-safe commit.
-The [full storage and refusal contract](/safemesh/using-safemesh/#wasm--typescript)
-also applies. The legacy caller-token API is an alternative for applications
-that intentionally own token allocation; it is not this recommended path.
+The example Store is in `rust/crates/safemesh-wasm/examples/`, outside the
+built `pkg/`. It is not a packaged or supported Store. The application must
+supply a Store and keep each independent anchor outside its snapshot root. This
+fixture does not prove power-loss recovery or cross-object atomicity. The
+[full storage and refusal contract](/safemesh/using-safemesh/#wasm--typescript)
+also applies.
 
 The fixture passes an empty `Uint8Array` to `mergeRecordBytes`, catches the real
 `SafeMeshError: failed to decode record: unexpected end of wire input`, and
@@ -648,16 +651,14 @@ The rollback counter file is in the parent of the store directory. Its name
 matches `.safemesh-<hash>-writer-<id>.counter`. Deleting the store directory
 leaves this file in place. A new store at the same path with the same writer ID
 returns `StoreExists` from `DurableReplica::counter` or `utf8_set`.
-The refused create leaves a writer fence and journal in the new store directory.
+The refused create leaves no files in the new store directory. The directory
+itself may remain.
 
-To reuse the old writer ID after you remove a store on purpose, clear that
-partial store, remove its counter file, and then create the store. Removing
-only the counter file after the refused create still returns `StoreExists`.
+To reuse the old writer ID after you remove a store on purpose, remove its
+counter file, and then create the store.
 Only an operator who knows that the old store is gone on purpose may remove
 the counter file: it protects that writer against rollback. You can also keep
-the counter file and create with a new writer ID. A new writer ID can create
-even if the refused create left the old writer's fence and journal in the
-store directory.
+the counter file and create with a new writer ID.
 
 ### Supported size
 
