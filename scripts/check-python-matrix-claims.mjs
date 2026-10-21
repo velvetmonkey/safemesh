@@ -61,15 +61,18 @@ function parseMatrix(source) {
 function claimVersions(text) {
   const after = text.match(/CPython\s+([^\n]+)/)?.[1];
   if (!after) return null;
-  const range = after.match(/^(3\.\d+)\s*(?:–|to)\s*(3\.\d+)/);
+  // A later sentence or semicolon clause may describe a different CI job.
+  const clause = after.split(/;|\.(?=\s|$)/, 1)[0];
+  const range = clause.match(/^(3\.\d+)\s*(?:–|to)\s*(3\.\d+)/);
   if (range) {
     const first = minor(range[1]);
     const last = minor(range[2]);
     if (first === null || last === null || first > last) return null;
-    return Array.from({ length: last - first + 1 }, (_, i) => `3.${first + i}`);
+    const versions = Array.from({ length: last - first + 1 }, (_, i) => `3.${first + i}`);
+    return versions.concat([...clause.slice(range[0].length).matchAll(/3\.\d+/g)].map(match => match[0]));
   }
-  const list = after.match(/^(3\.\d+(?:,\s*3\.\d+)+,\s*and\s*3\.\d+)/);
-  return list ? [...list[1].matchAll(/3\.\d+/g)].map(match => match[0]) : null;
+  const list = clause.match(/^(3\.\d+(?:,\s*3\.\d+)+,\s*and\s*3\.\d+)/);
+  return list ? [...clause.matchAll(/3\.\d+/g)].map(match => match[0]) : null;
 }
 const matrix = parseMatrix(read(workflow));
 let checked = 0;
