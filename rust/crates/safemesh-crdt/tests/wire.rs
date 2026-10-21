@@ -648,32 +648,24 @@ fn enable_wins_flag_wire_is_stable_and_roundtrips() {
     );
     roundtrip(enable);
 
-    let disable = EnableWinsFlagDelta::Disable { tokens: vec![9, 2] };
-    assert_eq!(
-        disable.to_wire_bytes().unwrap(),
-        vec![
-            0x61, // enable-wins flag disable delta tag
-            0x02, 0x00, 0x00, 0x00, // token count
-            0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // caller order
-            0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // caller order
-        ],
-    );
-    roundtrip(EnableWinsFlagDelta::Disable { tokens: vec![2, 9] });
-    assert_eq!(
-        EnableWinsFlagDelta::Disable {
-            tokens: vec![9, 2, 2]
-        }
-        .to_wire_bytes()
-        .unwrap(),
-        vec![
-            0x61, 0x03, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00,
-        ],
-    );
-    roundtrip(EnableWinsFlagDelta::Disable {
+    let expected_disable = vec![
+        0x61, // enable-wins flag disable delta tag
+        0x02, 0x00, 0x00, 0x00, // unique token count
+        0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // token 2
+        0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // token 9
+    ];
+    let reordered = EnableWinsFlagDelta::Disable { tokens: vec![9, 2] };
+    let repeated = EnableWinsFlagDelta::Disable {
         tokens: vec![9, 2, 2],
-    });
+    };
+    let canonical = EnableWinsFlagDelta::Disable { tokens: vec![2, 9] };
+    assert_eq!(reordered.to_wire_bytes().unwrap(), expected_disable);
+    assert_eq!(repeated.to_wire_bytes().unwrap(), expected_disable);
+    assert_eq!(repeated.to_wire_bytes(), canonical.to_wire_bytes());
+    let decoded = EnableWinsFlagDelta::<u64>::from_wire_bytes(&expected_disable).unwrap();
+    assert_eq!(decoded, repeated);
+    assert_eq!(decoded.to_wire_bytes().unwrap(), expected_disable);
+    roundtrip(canonical);
 
     let mut flag = EnableWinsFlag::new();
     flag.enable(9);
@@ -721,6 +713,91 @@ fn enable_wins_flag_record_roundtrips_unormalized_tokens() {
         safemesh_crdt::Admission::Duplicate
     );
     assert_eq!(log.records(), reopened.records());
+}
+
+#[test]
+fn old_form_enable_wins_flag_disable_keeps_duplicate_identity() {
+    struct OldWireDisable(Vec<u8>);
+
+    impl WireEncode for OldWireDisable {
+        fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+            out.extend_from_slice(&self.0);
+            Ok(())
+        }
+    }
+
+    impl safemesh_crdt::WireSchema for OldWireDisable {
+        fn wire_schema() -> std::borrow::Cow<'static, [u8]> {
+            <EnableWinsFlagDelta<u64> as safemesh_crdt::WireSchema>::wire_schema()
+        }
+    }
+
+    let canonical_delta = EnableWinsFlagDelta::Disable { tokens: vec![2, 9] };
+    let canonical_bytes = canonical_delta.to_wire_bytes().unwrap();
+    let mut old_delta_bytes = canonical_bytes.clone();
+    let first = old_delta_bytes[5..13].to_vec();
+    let second = old_delta_bytes[13..21].to_vec();
+    old_delta_bytes[1..5].copy_from_slice(&3u32.to_le_bytes());
+    old_delta_bytes[5..13].copy_from_slice(&second);
+    old_delta_bytes[13..21].copy_from_slice(&first);
+    old_delta_bytes.extend_from_slice(&first);
+    assert_ne!(old_delta_bytes, canonical_bytes);
+    let old_delta = EnableWinsFlagDelta::<u64>::from_wire_bytes(&old_delta_bytes).unwrap();
+    match &old_delta {
+        EnableWinsFlagDelta::Disable { tokens } => assert_eq!(tokens, &[9, 2, 2]),
+        _ => panic!("old Disable frame changed variant"),
+    }
+    assert_eq!(old_delta.to_wire_bytes().unwrap(), canonical_bytes);
+
+    let id = RecordId {
+        replica: 1,
+        sequence: 1,
+    };
+    let original = Record {
+        id,
+        delta: old_delta,
+    };
+    let old_record = Record {
+        id,
+        delta: OldWireDisable(old_delta_bytes),
+    };
+    let old_record_bytes = old_record.to_wire_bytes().unwrap();
+    let reopened = Record::<EnableWinsFlagDelta<u64>>::from_wire_bytes(&old_record_bytes).unwrap();
+    match &reopened.delta {
+        EnableWinsFlagDelta::Disable { tokens } => assert_eq!(tokens, &[9, 2, 2]),
+        _ => panic!("old record changed variant"),
+    }
+    let canonical_record_bytes = reopened.to_wire_bytes().unwrap();
+    assert_ne!(canonical_record_bytes, old_record_bytes);
+    assert_eq!(
+        canonical_record_bytes,
+        Record {
+            id,
+            delta: canonical_delta
+        }
+        .to_wire_bytes()
+        .unwrap()
+    );
+
+    let mut old_log_bytes = Vec::new();
+    EventLog::<OldWireDisable>::encode_records(None, &[old_record], &mut old_log_bytes).unwrap();
+    let old_log = EventLog::<EnableWinsFlagDelta<u64>>::from_wire_bytes(&old_log_bytes).unwrap();
+    match &old_log.records()[0].delta {
+        EnableWinsFlagDelta::Disable { tokens } => assert_eq!(tokens, &[9, 2, 2]),
+        _ => panic!("old log changed variant"),
+    }
+    assert_ne!(old_log.to_wire_bytes().unwrap(), old_log_bytes);
+    let reloaded =
+        Record::<EnableWinsFlagDelta<u64>>::from_wire_bytes(&canonical_record_bytes).unwrap();
+    let mut log = EventLog::new();
+    assert_eq!(
+        log.insert_record(&EnableWinsFlag::new(), original),
+        safemesh_crdt::Admission::Accepted
+    );
+    assert_eq!(
+        log.insert_record(&EnableWinsFlag::new(), reloaded),
+        safemesh_crdt::Admission::Duplicate
+    );
 }
 
 #[test]

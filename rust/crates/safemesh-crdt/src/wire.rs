@@ -733,8 +733,11 @@ impl WireEncode for EnableWinsFlagDelta<u64> {
             }
             EnableWinsFlagDelta::Disable { tokens } => {
                 write_u8(out, TAG_ENABLE_WINS_FLAG_DISABLE_U64);
-                write_len(out, tokens.len())?;
-                for token in tokens {
+                let mut sorted_tokens = tokens.clone();
+                sorted_tokens.sort_unstable();
+                sorted_tokens.dedup();
+                write_len(out, sorted_tokens.len())?;
+                for token in &sorted_tokens {
                     write_u64(out, *token);
                 }
             }

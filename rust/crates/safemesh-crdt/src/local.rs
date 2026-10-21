@@ -28,6 +28,7 @@ use std::{
 ///         LocalError::PeerWriterAhead => "writer ahead",
 ///         LocalError::StoreExists => "store exists",
 ///         LocalError::RecoveryRequired => "recovery",
+///         LocalError::UnsupportedFormat { .. } => "unsupported format",
 ///         LocalError::Configuration => "configuration",
 ///         LocalError::CounterWidth(_) => "counter width",
 ///         LocalError::InvalidRecord(_) => "record",
@@ -50,6 +51,11 @@ pub enum LocalError {
     StoreExists,
     /// Store metadata is damaged or disagrees with its durable history.
     RecoveryRequired,
+    /// A stored wrapper has a version newer than this reader understands.
+    UnsupportedFormat {
+        file: &'static str,
+        version: u8,
+    },
     Configuration,
     /// The requested counter width exceeds the core constructor domain.
     CounterWidth(crate::CoordinateError),
@@ -83,6 +89,7 @@ impl core::fmt::Display for LocalError {
             Self::PeerWriterAhead => f.write_str("a peer returned a record for this writer above its durable high-water; local writes on this open replica are stopped; reopening clears this stop and an old-identity restore is detected only when a peer returns such a record; open a restored store with a new writer identity"),
             Self::StoreExists => f.write_str("local store already exists for this writer; restart it, or create with a new root or writer ID"),
             Self::RecoveryRequired => f.write_str("local store requires recovery: its writer fence, journal header, rollback counter or migration files are damaged or do not agree"),
+            Self::UnsupportedFormat { file, version } => write!(f, "unsupported {file} version {version}; highest version this build reads is 1; use a newer SafeMesh"),
             Self::CounterWidth(error) => error.fmt(f),
             Self::Configuration => f.write_str("invalid or mismatched local writer configuration"),
             Self::InvalidRecord(error) => error.fmt(f),
@@ -114,6 +121,50 @@ impl From<io::Error> for LocalError {
     fn from(e: io::Error) -> Self {
         Self::Io(e)
     }
+}
+
+const FENCE_MAGIC: &[u8; 8] = b"SMFENCE1";
+const TRANSACTION_MAGIC: &[u8; 8] = b"SMTRANS1";
+
+fn fence_fields(bytes: &[u8]) -> Result<usize, LocalError> {
+    if bytes.len() == 24 {
+        return Ok(0);
+    }
+    if bytes.len() >= 9 && &bytes[..8] == FENCE_MAGIC {
+        if bytes[8] > 1 {
+            return Err(LocalError::UnsupportedFormat {
+                file: "fence",
+                version: bytes[8],
+            });
+        }
+        if bytes[8] == 1 && bytes.len() == 33 {
+            return Ok(9);
+        }
+    }
+    Err(LocalError::RecoveryRequired)
+}
+
+// A valid legacy transaction has an EventLog tag at byte 24. This
+// discriminator takes precedence even when its writers word equals the magic.
+fn transaction_fields(bytes: &[u8]) -> Result<usize, LocalError> {
+    if bytes.len() >= 25 && matches!(bytes[24], 0x02 | 0x03) {
+        return Ok(0);
+    }
+    if bytes.len() >= 9 && &bytes[..8] == TRANSACTION_MAGIC {
+        if bytes[8] > 1 {
+            return Err(LocalError::UnsupportedFormat {
+                file: "transaction",
+                version: bytes[8],
+            });
+        }
+        if bytes[8] == 1 && bytes.len() >= 34 {
+            return Ok(9);
+        }
+    }
+    if bytes.len() < 24 {
+        return Err(LocalError::RecoveryRequired);
+    }
+    Ok(0)
 }
 
 /// A generation captured by a caller. Renewal invalidates all older tickets.
@@ -291,10 +342,8 @@ where
             fence.sync_all()?;
             1
         } else {
-            if bytes.len() != 24 {
-                return Err(LocalError::RecoveryRequired);
-            }
-            let word = |i| u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+            let at = fence_fields(&bytes)?;
+            let word = |i| u64::from_le_bytes(bytes[at + i..at + i + 8].try_into().unwrap());
             if word(0) != config.writers || word(8) != config.writer {
                 return Err(LocalError::Configuration);
             }
@@ -358,7 +407,11 @@ where
         }
         let next = next_sequence(self.generation).ok_or(LocalError::Exhausted)?;
         self.held = false;
-        self.fence.seek(SeekFrom::Start(16))?;
+        let mut bytes = Vec::new();
+        self.fence.seek(SeekFrom::Start(0))?;
+        self.fence.read_to_end(&mut bytes)?;
+        let at = fence_fields(&bytes)?;
+        self.fence.seek(SeekFrom::Start((at + 16) as u64))?;
         self.fence.write_all(&next.to_le_bytes())?;
         self.fence.sync_all()?;
         self.generation = next;
@@ -655,8 +708,9 @@ fn declared_records<D: WireSchema>(
     path: &Path,
     config: WriterConfig,
 ) -> Result<Option<usize>, LocalError> {
-    let bytes = read_prefix(path, (24 + frame_prefix::<D>()) as u64)?;
-    let mut cursor = crate::WireCursor::new(&bytes);
+    let bytes = read_prefix(path, (33 + frame_prefix::<D>()) as u64)?;
+    let at = transaction_fields(&bytes)?;
+    let mut cursor = crate::WireCursor::new(&bytes[at..]);
     let mut parse = || -> Result<Option<usize>, WireError> {
         if cursor.read_u64()? != config.writers || cursor.read_u64()? != config.writer {
             return Ok(None);
@@ -827,6 +881,9 @@ where
         if exists(&transaction_path(&root, config))? || exists(&path)? {
             return Err(LocalError::StoreExists);
         }
+        // The counter lives beside the store. Check it only after canonicalizing
+        // the root, and before creating this writer's fence or journal.
+        rollback::Counter::ensure_absent(&root, config)?;
         let mut inner = LocalReplica::fresh(&root, config, state)?;
         if !inner.held {
             return Err(LocalError::Refused);
@@ -978,6 +1035,93 @@ where
             _ => Err(LocalError::Refused),
         }
     }
+
+    /// Commit local deltas as one durable batch. The counter records the final
+    /// sequence before any journal entry is written. An interrupted batch can
+    /// therefore require recovery, as an interrupted single append can.
+    pub fn append_batch(
+        &mut self,
+        ticket: WriteTicket,
+        deltas: impl IntoIterator<Item = C::Delta>,
+    ) -> Result<Vec<Record<C::Delta>>, LocalError>
+    where
+        C: Clone,
+    {
+        let deltas: Vec<_> = deltas.into_iter().collect();
+        if deltas.is_empty() {
+            return Ok(Vec::new());
+        }
+        if self.inner.peer_writer_ahead {
+            return Err(LocalError::PeerWriterAhead);
+        }
+        let count = u64::try_from(deltas.len()).map_err(|_| LocalError::Exhausted)?;
+        let last = self
+            .inner
+            .last_sequence
+            .checked_add(count)
+            .ok_or(LocalError::Exhausted)?;
+        let first = self.inner.last_sequence + 1;
+        let mut state = self.inner.state.clone();
+        let mut log = self.inner.log.clone();
+        let mut records = Vec::with_capacity(deltas.len());
+        let mut entries = Vec::with_capacity(deltas.len());
+        for (index, delta) in deltas.into_iter().enumerate() {
+            let sequence = first + index as u64;
+            let record = Record {
+                id: RecordId {
+                    replica: self.inner.config.writer,
+                    sequence,
+                },
+                delta,
+            };
+            if refuses(
+                self.inner.context(ticket, true),
+                record.id,
+                record.delta.owned_payload(),
+            ) {
+                return Err(LocalError::Refused);
+            }
+            if log.insert_record(&state, record.clone()) != Admission::Accepted {
+                return Err(LocalError::Refused);
+            }
+            state.apply_delta(record.delta.clone());
+            if matches!(self.store, Store::Journal { .. }) {
+                entries.push(journal::entry(
+                    sequence,
+                    &record.to_wire_bytes().map_err(encode_error)?,
+                )?);
+            }
+            records.push(record);
+        }
+        // Keep the lock but disable writes before any uncertain persistence.
+        self.inner.held = false;
+        if let Some(counter) = &mut self.rollback {
+            counter.advance_batch(first, last)?;
+        }
+        match &mut self.store {
+            Store::Transaction(path) => Self::commit(path, self.inner.config, &log, last)?,
+            Store::Journal { file, len } => {
+                use std::os::unix::fs::FileExt;
+                let mut offset = *len;
+                for (index, bytes) in entries.iter().enumerate() {
+                    file.write_all_at(bytes, offset)?;
+                    offset += bytes.len() as u64;
+                    if index == 0 {
+                        persistence::checkpoint(21)?;
+                    }
+                }
+                persistence::checkpoint(13)?;
+                file.sync_data()?;
+                persistence::checkpoint(14)?;
+                *len = offset;
+            }
+        }
+        self.inner.state = state;
+        self.inner.log = log;
+        self.inner.last_sequence = last;
+        self.inner.held = true;
+        Ok(records)
+    }
 }
 impl<C: Crdt> DurableReplica<C>
 where
@@ -1041,10 +1185,8 @@ where
     ) -> Result<Self, LocalError> {
         let mut bytes = Vec::new();
         fence.file().read_to_end(&mut bytes)?;
-        if bytes.len() != 24 {
-            return Err(LocalError::RecoveryRequired);
-        }
-        let word = |i| u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+        let at = fence_fields(&bytes)?;
+        let word = |i| u64::from_le_bytes(bytes[at + i..at + i + 8].try_into().unwrap());
         if word(0) != config.writers || word(8) != config.writer {
             return Err(LocalError::Configuration);
         }
@@ -1280,17 +1422,18 @@ fn legacy_transaction(
     config: WriterConfig,
 ) -> Result<CommittedTransaction, LocalError> {
     let bytes = fs::read(transaction_path(root, config))?;
-    if bytes.len() < 24 {
+    let at = transaction_fields(&bytes)?;
+    if bytes.len() < at + 24 {
         return Err(LocalError::RecoveryRequired);
     }
-    let word = |i| u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+    let word = |i| u64::from_le_bytes(bytes[at + i..at + i + 8].try_into().unwrap());
     if word(0) != config.writers || word(8) != config.writer {
         return Err(LocalError::Configuration);
     }
     Ok(CommittedTransaction {
         config,
         last_sequence: word(16),
-        log_bytes: bytes[24..].to_vec(),
+        log_bytes: bytes[at + 24..].to_vec(),
     })
 }
 
@@ -1356,13 +1499,15 @@ impl DurableReplica<GCounter> {
         // The writer lock covers the metadata read and the same checked replay
         // used by restart_counter. A missing or truncated transaction is not fresh.
         let (bytes, at) = match store_format(&root, writer)? {
-            Format::Transaction => (
-                read_prefix(&root.join(format!("writer-{writer}.transaction")), 24)?,
-                0,
-            ),
+            Format::Transaction => {
+                let bytes = read_prefix(&root.join(format!("writer-{writer}.transaction")), 34)?;
+                let at = transaction_fields(&bytes)?;
+                (bytes, at)
+            }
             Format::Journal => {
                 let bytes = read_prefix(&journal::path(&root, writer), journal::HEADER as u64)?;
-                if bytes.len() < journal::HEADER || bytes[..8] != journal::MAGIC {
+                journal::check_magic(&bytes)?;
+                if bytes.len() < journal::HEADER {
                     return Err(LocalError::RecoveryRequired);
                 }
                 (bytes, 8)
@@ -1428,6 +1573,21 @@ impl DurableReplica<GCounter> {
                 replica: self.inner.config.writer as usize,
                 tally,
             },
+        )
+    }
+    /// Append many increasing local tallies with one counter write and one
+    /// journal sync. An empty batch has no effect.
+    pub fn bump_batch(
+        &mut self,
+        ticket: WriteTicket,
+        tallies: impl IntoIterator<Item = u64>,
+    ) -> Result<Vec<Record<GCounterDelta>>, LocalError> {
+        let replica = self.inner.config.writer as usize;
+        self.append_batch(
+            ticket,
+            tallies
+                .into_iter()
+                .map(|tally| GCounterDelta { replica, tally }),
         )
     }
 }
