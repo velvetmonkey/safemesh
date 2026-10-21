@@ -31,6 +31,24 @@ def check(path: Path) -> list[str]:
         'draft state before publish': r'Publish only the verified draft.*isDraft.*gh release edit.*--draft=false',
     }
     errors = [name for name, pattern in required.items() if not re.search(pattern, text, re.S)]
+    release_steps = (
+        'Create a draft from the checked assets',
+        'Download and verify the draft bytes',
+        'Publish only the verified draft',
+    )
+    step_blocks = {
+        match.group(1): match.group(2)
+        for match in re.finditer(
+            r'^      - name: ([^\n]+)\n(.*?)(?=^      - (?:name|uses):|^  [\w-]+:|\Z)',
+            text,
+            re.M | re.S,
+        )
+    }
+    for name in release_steps:
+        block = step_blocks.get(name, '')
+        env = re.search(r'^        env:\n((?:^          .*\n)*)', block, re.M)
+        if env is None or '          GH_REPO: ${{ github.repository }}\n' not in env.group(1):
+            errors.append(f'repository bound: {name}')
     for name in ('safemesh-crdt', 'safemesh-ffi', 'safemesh-python', 'safemesh-wasm'):
         data = tomllib.loads((ROOT / 'rust/crates' / name / 'Cargo.toml').read_text())
         if data['package']['version'] != '0.2.0':
