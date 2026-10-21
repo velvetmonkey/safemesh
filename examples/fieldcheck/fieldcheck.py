@@ -145,6 +145,7 @@ def main():
                         "storage": "Could not open this store because of a storage error; fix the storage problem and reopen",
                         "configuration": "Store writer configuration does not match; reopen with the original writer",
                         "store_exists": "This store already exists; reopen it instead of creating it",
+                        "unsupported_format": "A newer SafeMesh wrote this store; open it with a newer Fieldcheck",
                         "replay": "Could not recover this checklist; inspect the damaged store before reopening",
                         "startup": "Could not start this store; inspect its local files and reopen",
                     }

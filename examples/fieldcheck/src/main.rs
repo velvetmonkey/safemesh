@@ -158,6 +158,7 @@ fn local_error_kind(error: &LocalError) -> &'static str {
         LocalError::InvalidRecord(_) => "replay",
         LocalError::History(_) => "replay",
         LocalError::InvalidHistory => "replay",
+        LocalError::UnsupportedFormat { .. } => "unsupported_format",
         // Preserve the Display reason and identify future local errors separately.
         _ => "unknown_local_error",
     }
@@ -328,6 +329,8 @@ mod tests {
             "replay",
             "RecoveryRequired"
         );
+        #[rustfmt::skip]
+        assert_eq!(local_error_kind(&LocalError::UnsupportedFormat { file: "fence", version: 2 }), "unsupported_format", "UnsupportedFormat");
         assert_eq!(
             local_error_kind(&LocalError::Configuration),
             "configuration",
