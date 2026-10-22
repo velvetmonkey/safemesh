@@ -96,6 +96,9 @@ jobs:
       - name: Crawl built pages, assets, anchors and external links
         timeout-minutes: 3
         run: python3 docs/check-links.py
+      - name: Test the link crawler against a local server
+        timeout-minutes: 3
+        run: python3 -B docs/test-check-links.py
       - name: Check page transfer and JavaScript budgets
         timeout-minutes: 10
         run: |
