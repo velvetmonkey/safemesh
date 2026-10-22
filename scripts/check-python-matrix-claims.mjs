@@ -44,7 +44,7 @@ function parseMatrix(source) {
   let end = start + 1;
   while (end < lines.length && !/^  [\w-]+:\s*$/.test(lines[end])) end++;
   const block = lines.slice(start + 1, end);
-  const runner = block.find(line => /^    runs-on:/.test(line))?.match(/^    runs-on:\s*([\w-]+)\s*$/)?.[1];
+  const runner = block.find(line => /^    runs-on:/.test(line))?.match(/^    runs-on:\s*([\w.-]+)\s*$/)?.[1];
   const matrixStart = block.findIndex(line => /^      matrix:\s*$/.test(line));
   // The matrix key must be nested under this job's strategy, never in setup-python.
   const versionLine = matrixStart < 0 ? undefined : block.slice(matrixStart + 1).find(line => /^        python-version:/.test(line));
@@ -97,7 +97,7 @@ for (const [path, anchor] of surfaces) {
     if (versions.length !== actual.length || versions.some((value, i) => value !== actual[i])) {
       failures.push(`FAIL ${path}:${line}: claim ${versions[0]}..${versions.at(-1)} (${versions.length} versions) differs from python matrix ${actual[0]}..${actual.at(-1)} (${actual.length} versions)`);
     }
-    const namedRunners = [...paragraph.matchAll(/`([\w-]+-latest)`/g)].map(match => match[1]);
+    const namedRunners = [...paragraph.matchAll(/`((?:ubuntu|windows|macos)-(?:latest|\d+(?:\.\d+)*))`/g)].map(match => match[1]);
     if (namedRunners.some(runner => runner !== matrix.runner)) {
       failures.push(`FAIL ${path}:${line}: runner ${namedRunners.join(', ')} differs from python job ${matrix.runner}`);
     }
