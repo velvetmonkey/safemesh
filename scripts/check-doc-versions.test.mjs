@@ -74,3 +74,30 @@ test('BUMP exits 1 when only the wasm manifest changes', () => withTree({
   assert.equal(result.status, 1);
   assert.match(result.stderr, /FAIL demos\/wasm-checklist\/README.md:\d+:/);
 }));
+
+test('LINE reports the exact wasm README failure line', () => withTree({
+  ...clean(),
+  wasm: 'intro\nnpm install safemesh-wasm-9.8.7.tgz\nnpm install safemesh-wasm-0.1.0.tgz\n',
+}, run => {
+  const result = run();
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr, 'FAIL demos/wasm-checklist/README.md:3: found 0.1.0 expected 9.8.7 (rust/crates/safemesh-wasm/Cargo.toml)\n');
+}));
+
+test('NO-VERSION refuses a wasm manifest without a version', () => withTree({
+  ...clean(),
+  wasmManifest: '[package]\nname = "x"\n',
+}, run => {
+  const result = run();
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr, 'FAIL rust/crates/safemesh-wasm/Cargo.toml:0: missing version in [package]\n');
+}));
+
+test('WRONG-TABLE refuses a Python manifest without a project version', () => withTree({
+  ...clean(),
+  pythonManifest: '[package]\nversion = "9.8.7"\n',
+}, run => {
+  const result = run();
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr, 'FAIL rust/crates/safemesh-python/pyproject.toml:0: missing version in [project]\n');
+}));
