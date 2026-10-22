@@ -384,6 +384,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn every_fieldcheck_kind_has_a_python_message() {
+        let errors = [
+            LocalError::Refused,
+            LocalError::Exhausted,
+            LocalError::PeerWriterAhead,
+            LocalError::StoreExists,
+            LocalError::RecoveryRequired,
+            LocalError::UnsupportedFormat {
+                file: "fence",
+                version: 2,
+            },
+            LocalError::Configuration,
+            LocalError::CounterWidth(CoordinateError::ReplicaLimitExceeded {
+                requested: 2,
+                maximum: 1,
+            }),
+            LocalError::InvalidRecord(WireError::InvalidTag),
+            LocalError::History(WireError::InvalidTag),
+            LocalError::InvalidHistory,
+            LocalError::Io(io::Error::other("test")),
+            LocalError::AncestorSync {
+                path: std::path::PathBuf::from("ancestor"),
+                source: io::Error::other("test"),
+            },
+            LocalError::RecordLimitExceeded {
+                max_records: 1,
+                default_limit: false,
+            },
+        ];
+        let python = include_str!("../fieldcheck.py");
+        for error in &errors {
+            let kind = local_error_kind(error);
+            if kind != "unknown_local_error" {
+                assert!(
+                    python.contains(&format!("\"{kind}\":")),
+                    "missing Python message for {kind}"
+                );
+            }
+        }
+    }
+
     fn record(id: &str, answer: &str, refs: &[&str]) -> String {
         serde_json::to_string(&Inspection {
             schema_version: 1,
