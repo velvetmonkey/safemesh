@@ -142,8 +142,11 @@ def main():
                     messages = {
                         "missing_parent": "Store parent directory does not exist; create the parent and reopen",
                         "owned": "Another Fieldcheck process owns this store; close it and reopen",
+                        "writer_ahead": "A peer holds newer writes for this writer; open a restored store with a new writer identity",
                         "storage": "Could not open this store because of a storage error; fix the storage problem and reopen",
+                        "ancestor_sync": "Could not open this store because of a storage error; fix the storage problem and reopen",
                         "configuration": "Store writer configuration does not match; reopen with the original writer",
+                        "counter_width": "Store writer configuration does not match; reopen with the original writer",
                         "store_exists": "This store already exists; reopen it instead of creating it",
                         "unsupported_format": "A newer SafeMesh wrote this store; open it with a newer Fieldcheck",
                         "replay": "Could not recover this checklist; inspect the damaged store before reopening",
