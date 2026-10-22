@@ -201,3 +201,5 @@ node "$repo_root/rust/crates/safemesh-wasm/tests/node-writer-fence.mjs" \
   "$tmp_dir/wasm-node-pkg"
 node "$repo_root/rust/crates/safemesh-wasm/tests/node-managed-orset.mjs" \
   "$tmp_dir/wasm-node-pkg"
+node "$repo_root/rust/crates/safemesh-wasm/tests/node-counter-width.mjs" \
+  "$tmp_dir/wasm-node-pkg"
