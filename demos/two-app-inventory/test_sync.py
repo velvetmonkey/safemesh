@@ -8,7 +8,6 @@ from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
-import socket
 import subprocess
 import sys
 import tempfile
@@ -35,10 +34,7 @@ class SimultaneousSync(unittest.TestCase):
     def exercise(self, root):
         barrier = threading.Barrier(2)
         outgoing = [threading.Event(), threading.Event()]
-        reservations = [socket.socket(), socket.socket()]
-        for sock in reservations:
-            sock.bind(('127.0.0.1', 0))
-        ports = [sock.getsockname()[1] for sock in reservations]
+        ports = []
         processes, logs, proxies = [], [], []
 
         def forwarding_handler(index):
@@ -70,17 +66,30 @@ class SimultaneousSync(unittest.TestCase):
                 proxy = ThreadingHTTPServer(('127.0.0.1', 0), forwarding_handler(index))
                 proxies.append(proxy)
                 threading.Thread(target=proxy.serve_forever, daemon=True).start()
-                log = (root / f'{name}.log').open('w')
+                log_path = root / f'{name}.log'
+                log = log_path.open('w')
                 logs.append(log)
-                reservations[index].close()
                 process = subprocess.Popen([
                     sys.executable, str(Path(__file__).with_name(f'{name}.py')),
-                    '--store', str(root / name), '--port', str(ports[index]),
+                    '--store', str(root / name), '--port', '0',
                     '--peer', f'http://127.0.0.1:{proxy.server_port}',
                 ], stdout=log, stderr=log)
                 processes.append(process)
                 for attempt in range(100):
-                    self.assertIsNone(process.poll(), f'{name} exited')
+                    if process.poll() is not None:
+                        self.fail(f'{name} did not start')
+                    if len(ports) == index:
+                        for line in log_path.read_text().splitlines():
+                            try:
+                                message = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            if isinstance(message, dict) and 'listening' in message:
+                                ports.append(message['listening'][1])
+                                break
+                    if len(ports) == index:
+                        time.sleep(0.05)
+                        continue
                     try:
                         rpc(ports[index], 'status', timeout=1)
                         break
@@ -186,8 +195,6 @@ class SimultaneousSync(unittest.TestCase):
             for proxy in proxies:
                 proxy.shutdown()
                 proxy.server_close()
-            for sock in reservations:
-                sock.close()
             for log in logs:
                 log.close()
 
