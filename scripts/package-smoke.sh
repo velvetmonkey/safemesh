@@ -203,3 +203,24 @@ node "$repo_root/rust/crates/safemesh-wasm/tests/node-managed-orset.mjs" \
   "$tmp_dir/wasm-node-pkg"
 node "$repo_root/rust/crates/safemesh-wasm/tests/node-counter-width.mjs" \
   "$tmp_dir/wasm-node-pkg"
+
+mkdir -p "$tmp_dir/checklist-consumer" "$tmp_dir/checklist-scratch"
+node_tarball="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))[0].filename' "$tmp_dir/node-pack.json")"
+(
+  cd "$tmp_dir/checklist-consumer"
+  npm init -y >/dev/null
+  npm install "$tmp_dir/wasm-node-pkg/$node_tarball"
+)
+if SAFEMESH_CONSUMER="$tmp_dir/checklist-consumer" \
+    CHECKLIST_SCRATCH="$tmp_dir/checklist-scratch" \
+    node "$repo_root/demos/wasm-checklist/journey.mjs" \
+    > "$tmp_dir/checklist-journey.out" 2>&1; then
+  checklist_status=0
+else
+  checklist_status=$?
+fi
+cat "$tmp_dir/checklist-journey.out"
+if [[ "$checklist_status" -ne 0 ]] || ! grep -qE '^PASS records=2006 ' "$tmp_dir/checklist-journey.out"; then
+  echo "WASM checklist journey failed (exit $checklist_status or missing PASS records=2006 line)" >&2
+  exit 1
+fi
