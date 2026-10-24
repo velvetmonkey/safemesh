@@ -51,7 +51,7 @@ a pass or fail condition: logs keep arrival order
 
 **Current expected result:** `SECOND_ORDER PASS ...` followed by
 `PASS records=2006 ...` and exit 0. Arrival-order log bytes may differ; that is
-an observation, not a failure. This journey is not a CI gate.
+an observation, not a failure. `scripts/package-smoke.sh` runs this journey in the required `full-gate` job and needs the `PASS records=2006` line.
 
 Planted known-bad modes keep the same oracle and must fail it by name:
 
