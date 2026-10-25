@@ -31,7 +31,16 @@ for sbom_file in "${sbom_files[@]}"; do
     exit 1
   fi
 done
-trap 'rm -f -- "${sbom_files[@]}"' EXIT
+python_pyproject="$repo_root/rust/crates/safemesh-python/pyproject.toml"
+pyproject_backup=""
+cleanup() {
+  if [[ -n "$pyproject_backup" && -f "$pyproject_backup" ]]; then
+    cp -p -- "$pyproject_backup" "$python_pyproject"
+    rm -f -- "$pyproject_backup"
+  fi
+  rm -f -- "${sbom_files[@]}"
+}
+trap cleanup EXIT
 if [[ "$(cargo cyclonedx --version 2>/dev/null || true)" != "cargo-cyclonedx-cyclonedx 0.5.9" ]]; then
   cargo install cargo-cyclonedx --version 0.5.9 --locked --root "$repo_root/rust/target/release-tools"
   export PATH="$repo_root/rust/target/release-tools/bin:$PATH"
@@ -57,8 +66,21 @@ json.loads(data)
 (sbom.parent / 'safemesh-python.cyclonedx.json').write_text(data)
 sbom.unlink()
 PY
+# The release wheel uses the normalized SBOM. Keep this setting local to the
+# release build so direct maturin builds can generate their own SBOM.
+pyproject_backup="$(mktemp "$repo_root/rust/target/safemesh-pyproject.XXXXXXXX")"
+cp -p -- "$python_pyproject" "$pyproject_backup"
+cat >> "$python_pyproject" <<'TOML'
+
+[tool.maturin.sbom]
+rust = false
+include = ["safemesh-python.cyclonedx.json"]
+TOML
 maturin build --manifest-path "$repo_root/rust/crates/safemesh-python/Cargo.toml" \
   --release --locked --features extension-module --out "$out"
+cp -p -- "$pyproject_backup" "$python_pyproject"
+rm -f -- "$pyproject_backup"
+pyproject_backup=""
 "$repo_root/scripts/package-wasm.sh" bundler "$out/wasm-package" > "$out/wasm-pack.json"
 cp "$out/wasm-package/safemesh-wasm-$version.tgz" "$out/"
 rm "$out/wasm-pack.json"
