@@ -21,3 +21,7 @@ classifiers = [
 module-name = "safemesh_python"
 bindings = "pyo3"
 features = ["extension-module"]
+
+[tool.maturin.sbom]
+rust = false
+include = ["safemesh-python.cyclonedx.json"]
