@@ -2,10 +2,10 @@
 
 ## Supported versions
 
-Security fixes target the current `main` branch (unreleased). There are no
-tagged releases or older release lines receiving security fixes. The
-[documentation](docs/src/content/docs/index.mdx) describes the current line as
-`main (unreleased)`.
+Security fixes target the current `main` branch (unreleased) and ship in the
+next release. Tagged versions `v0.1.0` and `v0.2.0` do not receive separate
+security fixes. The [documentation](docs/src/content/docs/index.mdx) describes
+the current line as `main (unreleased)`.
 
 ## Reporting a vulnerability privately
 

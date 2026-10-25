@@ -1,4 +1,4 @@
-// Check local build names in four demo/docs files. README.md install-matrix pins are outside this check.
+// Check local build names and README.md install-matrix pins against package manifests.
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,7 @@ if (args.length !== 0 && (args.length !== 2 || args[0] !== '--root')) {
 const root = args.length ? args[1] : defaultRoot;
 const failures = [];
 let checked = 0;
+const checkedFiles = new Set();
 
 function read(path) {
   try {
@@ -37,6 +38,7 @@ function manifestVersion(path, table) {
 }
 
 function check(path, pattern, expected, manifest) {
+  checkedFiles.add(path);
   const source = read(path);
   if (source === null) return;
   let matches = 0;
@@ -58,6 +60,9 @@ const crdtManifest = 'rust/crates/safemesh-crdt/Cargo.toml';
 const wasm = manifestVersion(wasmManifest, 'package');
 const python = manifestVersion(pythonManifest, 'project');
 const crdt = manifestVersion(crdtManifest, 'package');
+check('README.md', /safemesh-crdt@(\d+\.\d+\.\d+)/g, crdt, crdtManifest);
+check('README.md', /safemesh-wasm@(\d+\.\d+\.\d+)/g, wasm, wasmManifest);
+check('README.md', /safemesh-python==(\d+\.\d+\.\d+)/g, python, pythonManifest);
 check('demos/wasm-checklist/README.md', /safemesh-wasm-(\d+\.\d+\.\d+)\.tgz/g, wasm, wasmManifest);
 check('demos/two-app-inventory/README.md', /safemesh-python==(\d+\.\d+\.\d+)/g, python, pythonManifest);
 check('demos/two-app-inventory/requirements.txt', /safemesh-python==(\d+\.\d+\.\d+)/g, python, pythonManifest);
@@ -67,4 +72,4 @@ if (failures.length) {
   for (const failure of failures) console.error(failure);
   process.exit(1);
 }
-console.log(`PASS 4 files, ${checked} version names checked`);
+console.log(`PASS ${checkedFiles.size} files, ${checked} version names checked`);
