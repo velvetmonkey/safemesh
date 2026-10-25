@@ -14,6 +14,12 @@ const paths = {
   python: 'demos/two-app-inventory/README.md',
   requirements: 'demos/two-app-inventory/requirements.txt',
   crdt: 'docs/src/content/docs/persist-and-restart.md',
+  crdtReadme: 'rust/crates/safemesh-crdt/README.md',
+  pythonReadme: 'rust/crates/safemesh-python/README.md',
+  wasmReadme: 'rust/crates/safemesh-wasm/README.md',
+  ffiReadme: 'rust/crates/safemesh-ffi/README.md',
+  demosReadme: 'demos/README.md',
+  coldChainReadme: 'demos/python-cold-chain/README.md',
   wasmManifest: 'rust/crates/safemesh-wasm/Cargo.toml',
   pythonManifest: 'rust/crates/safemesh-python/pyproject.toml',
   crdtManifest: 'rust/crates/safemesh-crdt/Cargo.toml',
@@ -41,6 +47,12 @@ function clean() {
     python: 'safemesh-python==9.8.7\n',
     requirements: 'safemesh-python==9.8.7\n',
     crdt: 'currently records `9.8.7` as an unpublished crate version\n',
+    crdtReadme: 'No release-line label here.\n',
+    pythonReadme: 'No release-line label here.\n',
+    wasmReadme: 'No release-line label here.\n',
+    ffiReadme: 'No release-line label here.\n',
+    demosReadme: 'No release-line label here.\n',
+    coldChainReadme: 'No release-line label here.\n',
     wasmManifest: '[package]\nversion = "9.8.7"\n',
     pythonManifest: '[project]\nversion = "9.8.7"\n',
     crdtManifest: '[package]\nversion = "9.8.7"\n',
@@ -58,8 +70,14 @@ function fails(files, path) {
 test('CLEAN exits 0 and reports four files', () => withTree(clean(), run => {
   const result = run();
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /PASS 5 files, 7 version names checked/);
+  assert.match(result.stdout, /PASS 11 files, 7 version names checked/);
 }));
+test('L-OLD exits 1 for an old demo release-line label', () => fails({ ...clean(), demosReadme: 'v' + '0.1 showcase demos\n' }, paths.demosReadme));
+test('L-NONE exits 0 when the seven README files have no release-line label', () => withTree(clean(), run => {
+  const result = run();
+  assert.equal(result.status, 0, result.stderr);
+}));
+test('L-README exits 1 for an old root README release-line label', () => fails({ ...clean(), readme: `${clean().readme}v${'0.1'} release line\n` }, paths.readme));
 test('R-CRDT exits 1 for the README Rust pin', () => fails({ ...clean(), readme: 'cargo add safemesh-crdt@0.1.0\nnpm install safemesh-wasm@9.8.7\npip install safemesh-python==9.8.7\n' }, paths.readme));
 test('R-WASM exits 1 for the README WASM pin', () => fails({ ...clean(), readme: 'cargo add safemesh-crdt@9.8.7\nnpm install safemesh-wasm@0.1.0\npip install safemesh-python==9.8.7\n' }, paths.readme));
 test('R-PY exits 1 for the README Python pin', () => fails({ ...clean(), readme: 'cargo add safemesh-crdt@9.8.7\nnpm install safemesh-wasm@9.8.7\npip install safemesh-python==0.1.0\n' }, paths.readme));

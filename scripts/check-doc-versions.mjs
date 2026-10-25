@@ -1,4 +1,4 @@
-// Check local build names and README.md install-matrix pins against package manifests.
+// Check local build names, README.md install-matrix pins, and release-line labels against package manifests.
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -54,6 +54,20 @@ function check(path, pattern, expected, manifest) {
   if (matches === 0) failures.push(`FAIL ${path}:0: found no version name expected ${expected ?? 'manifest version'} (${manifest})`);
 }
 
+function checkReleaseLine(path, expected, manifest) {
+  checkedFiles.add(path);
+  const source = read(path);
+  if (source === null) return;
+  for (const [index, line] of source.split('\n').entries()) {
+    for (const match of line.matchAll(/\bv(\d+\.\d+)\b(?!\.\d)/g)) {
+      checked++;
+      if (expected !== null && match[1] !== expected) {
+        failures.push(`FAIL ${path}:${index + 1}: found v${match[1]} expected v${expected} (${manifest})`);
+      }
+    }
+  }
+}
+
 const wasmManifest = 'rust/crates/safemesh-wasm/Cargo.toml';
 const pythonManifest = 'rust/crates/safemesh-python/pyproject.toml';
 const crdtManifest = 'rust/crates/safemesh-crdt/Cargo.toml';
@@ -67,6 +81,15 @@ check('demos/wasm-checklist/README.md', /safemesh-wasm-(\d+\.\d+\.\d+)\.tgz/g, w
 check('demos/two-app-inventory/README.md', /safemesh-python==(\d+\.\d+\.\d+)/g, python, pythonManifest);
 check('demos/two-app-inventory/requirements.txt', /safemesh-python==(\d+\.\d+\.\d+)/g, python, pythonManifest);
 check('docs/src/content/docs/persist-and-restart.md', /currently records `(\d+\.\d+\.\d+)` as an unpublished crate version/g, crdt, crdtManifest);
+for (const path of [
+  'README.md',
+  'rust/crates/safemesh-crdt/README.md',
+  'rust/crates/safemesh-python/README.md',
+  'rust/crates/safemesh-wasm/README.md',
+  'rust/crates/safemesh-ffi/README.md',
+  'demos/README.md',
+  'demos/python-cold-chain/README.md',
+]) checkReleaseLine(path, crdt?.split('.').slice(0, 2).join('.') ?? null, crdtManifest);
 
 if (failures.length) {
   for (const failure of failures) console.error(failure);
