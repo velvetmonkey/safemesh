@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "safemesh-python"
-version = "0.2.0"
+version = "0.2.1"
 description = "Python binding for the SafeMesh Rust core"
 readme = "README.md"
 requires-python = ">=3.8"

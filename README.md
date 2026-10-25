@@ -90,9 +90,9 @@ Artifact available: the install flows below produce local Rust packages, WASM/Ty
 
 | Surface | Future consumer command — NOT YET PUBLISHED | v0.2 dry-run/local command |
 |---|---|---|
-| Rust core | `cargo add safemesh-crdt@0.2.0` | `(cd rust && cargo publish --dry-run -p safemesh-crdt --allow-dirty)` |
-| WASM / TypeScript | `npm install safemesh-wasm@0.2.0` | `tmp=$(mktemp -d) && scripts/package-wasm.sh bundler "$tmp/pkg"` |
-| Python | `pip install safemesh-python==0.2.0` | `tmp=$(mktemp -d) && (cd rust/crates/safemesh-python && maturin build --release --features extension-module --out "$tmp/wheels") && python3 -m venv "$tmp/venv" && "$tmp/venv/bin/pip" install --no-index --find-links "$tmp/wheels" safemesh-python` |
+| Rust core | `cargo add safemesh-crdt@0.2.1` | `(cd rust && cargo publish --dry-run -p safemesh-crdt --allow-dirty)` |
+| WASM / TypeScript | `npm install safemesh-wasm@0.2.1` | `tmp=$(mktemp -d) && scripts/package-wasm.sh bundler "$tmp/pkg"` |
+| Python | `pip install safemesh-python==0.2.1` | `tmp=$(mktemp -d) && (cd rust/crates/safemesh-python && maturin build --release --features extension-module --out "$tmp/wheels") && python3 -m venv "$tmp/venv" && "$tmp/venv/bin/pip" install --no-index --find-links "$tmp/wheels" safemesh-python` |
 
 ## Run the break-it demos
 

@@ -2,7 +2,7 @@
 
 A clinic and a warehouse each count received units in a G-Counter. Each runs in
 its own independently launched OS process, with a private virtual environment
-and SQLite store. Each imports the installed **safemesh-python==0.2.0** wheel.
+and SQLite store. Each imports the installed **safemesh-python==0.2.1** wheel.
 The applications send SafeMesh record bytes directly to one another over real
 loopback HTTP sockets. The journey driver sends control requests and reads
 status; it never carries CRDT records between applications.
