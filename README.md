@@ -13,7 +13,7 @@ Read the [SafeMesh documentation](https://velvetmonkey.github.io/safemesh/) for 
 
 <p align="center"><img src="assets/safemesh-hero.png" alt="Five replicas each holding a version vector. A network partition splits them, deltas keep flowing on both sides, and the replicas merge back to the same state."></p>
 
-API present: SafeMesh v0.1 exposes one Rust core through Rust, C ABI, WASM/TypeScript, and Python interfaces. The verified claim is intentionally narrow: G-Set, G-Counter, PN-Counter, OR-Set, and RGA/Text are backed by Lean proofs and by Rust differential tests against a Lean-generated oracle corpus. `EventLog`, wire encoding, bindings, demos, LWW Register, Enable-wins Flag, and LWW Map are outside the separate Lean proof claim. The Status and Bindings sections below name their test evidence separately from API and artifact availability.
+API present: SafeMesh v0.2 exposes one Rust core through Rust, C ABI, WASM/TypeScript, and Python interfaces. The verified claim is intentionally narrow: G-Set, G-Counter, PN-Counter, OR-Set, and RGA/Text are backed by Lean proofs and by Rust differential tests against a Lean-generated oracle corpus. `EventLog`, wire encoding, bindings, demos, LWW Register, Enable-wins Flag, and LWW Map are outside the separate Lean proof claim. The Status and Bindings sections below name their test evidence separately from API and artifact availability.
 
 You bring the transport and application schema. SafeMesh gives you flat CRDT carriers, append/merge/since event-log plumbing, canonical bytes, and packaging smoke tests that keep the proof bridge visible in CI.
 
@@ -88,11 +88,11 @@ Artifact available: the install flows below produce local Rust packages, WASM/Ty
 
 **Not yet published:** `safemesh-crdt` on crates.io, `safemesh-wasm` on npm, and `safemesh-python` on PyPI are not available from their registries. Use the dry-run/local commands below today; the future consumer commands will work only after publication.
 
-| Surface | Future consumer command — NOT YET PUBLISHED | v0.1 dry-run/local command |
+| Surface | Future consumer command — NOT YET PUBLISHED | v0.2 dry-run/local command |
 |---|---|---|
-| Rust core | `cargo add safemesh-crdt@0.1.0` | `(cd rust && cargo publish --dry-run -p safemesh-crdt --allow-dirty)` |
-| WASM / TypeScript | `npm install safemesh-wasm@0.1.0` | `tmp=$(mktemp -d) && scripts/package-wasm.sh bundler "$tmp/pkg"` |
-| Python | `pip install safemesh-python==0.1.0` | `tmp=$(mktemp -d) && (cd rust/crates/safemesh-python && maturin build --release --features extension-module --out "$tmp/wheels") && python3 -m venv "$tmp/venv" && "$tmp/venv/bin/pip" install --no-index --find-links "$tmp/wheels" safemesh-python` |
+| Rust core | `cargo add safemesh-crdt@0.2.0` | `(cd rust && cargo publish --dry-run -p safemesh-crdt --allow-dirty)` |
+| WASM / TypeScript | `npm install safemesh-wasm@0.2.0` | `tmp=$(mktemp -d) && scripts/package-wasm.sh bundler "$tmp/pkg"` |
+| Python | `pip install safemesh-python==0.2.0` | `tmp=$(mktemp -d) && (cd rust/crates/safemesh-python && maturin build --release --features extension-module --out "$tmp/wheels") && python3 -m venv "$tmp/venv" && "$tmp/venv/bin/pip" install --no-index --find-links "$tmp/wheels" safemesh-python` |
 
 ## Run the break-it demos
 
