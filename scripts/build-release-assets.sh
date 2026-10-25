@@ -18,8 +18,69 @@ PY
 # These are the crate, wheel and WASM forms exercised by package-smoke.sh.
 (cd "$repo_root/rust" && cargo package -p safemesh-crdt --locked --allow-dirty --no-verify)
 cp "$repo_root/rust/target/package/safemesh-crdt-$version.crate" "$out/"
+sbom_files=(
+  "$repo_root/rust/crates/safemesh-crdt/safemesh-crdt.cdx.json"
+  "$repo_root/rust/crates/safemesh-ffi/safemesh-ffi.cdx.json"
+  "$repo_root/rust/crates/safemesh-python/safemesh-python.cdx.json"
+  "$repo_root/rust/crates/safemesh-python/safemesh-python.cyclonedx.json"
+  "$repo_root/rust/crates/safemesh-wasm/safemesh-wasm.cdx.json"
+)
+for sbom_file in "${sbom_files[@]}"; do
+  if [[ -e "$sbom_file" ]]; then
+    echo "SBOM output path is already in use: $sbom_file" >&2
+    exit 1
+  fi
+done
+python_pyproject="$repo_root/rust/crates/safemesh-python/pyproject.toml"
+pyproject_backup=""
+cleanup() {
+  if [[ -n "$pyproject_backup" && -f "$pyproject_backup" ]]; then
+    cp -p -- "$pyproject_backup" "$python_pyproject"
+    rm -f -- "$pyproject_backup"
+  fi
+  rm -f -- "${sbom_files[@]}"
+}
+trap cleanup EXIT
+if [[ "$(cargo cyclonedx --version 2>/dev/null || true)" != "cargo-cyclonedx-cyclonedx 0.5.9" ]]; then
+  cargo install cargo-cyclonedx --version 0.5.9 --locked --root "$repo_root/rust/target/release-tools"
+  export PATH="$repo_root/rust/target/release-tools/bin:$PATH"
+fi
+source_date_epoch="$(git -C "$repo_root" log -1 --format=%ct)"
+(cd "$repo_root/rust" && SOURCE_DATE_EPOCH="$source_date_epoch" cargo cyclonedx \
+  --manifest-path crates/safemesh-python/Cargo.toml --target all --spec-version 1.5 --format json)
+python3 - "$repo_root" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+root = Path(sys.argv[1]).resolve()
+sbom = root / 'rust/crates/safemesh-python/safemesh-python.cdx.json'
+data = sbom.read_text()
+source_prefix = 'path+file://' + str(root) + '/'
+if source_prefix not in data:
+    raise SystemExit('SBOM has no source path references to normalize')
+data = data.replace(source_prefix, 'path+repo:')
+if str(root) in data or 'path+file://' in data:
+    raise SystemExit('SBOM still contains an absolute source path')
+json.loads(data)
+(sbom.parent / 'safemesh-python.cyclonedx.json').write_text(data)
+sbom.unlink()
+PY
+# The release wheel uses the normalized SBOM. Keep this setting local to the
+# release build so direct maturin builds can generate their own SBOM.
+pyproject_backup="$(mktemp "$repo_root/rust/target/safemesh-pyproject.XXXXXXXX")"
+cp -p -- "$python_pyproject" "$pyproject_backup"
+cat >> "$python_pyproject" <<'TOML'
+
+[tool.maturin.sbom]
+rust = false
+include = ["safemesh-python.cyclonedx.json"]
+TOML
 maturin build --manifest-path "$repo_root/rust/crates/safemesh-python/Cargo.toml" \
   --release --locked --features extension-module --out "$out"
+cp -p -- "$pyproject_backup" "$python_pyproject"
+rm -f -- "$pyproject_backup"
+pyproject_backup=""
 "$repo_root/scripts/package-wasm.sh" bundler "$out/wasm-package" > "$out/wasm-pack.json"
 cp "$out/wasm-package/safemesh-wasm-$version.tgz" "$out/"
 rm "$out/wasm-pack.json"
