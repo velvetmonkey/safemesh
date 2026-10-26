@@ -1584,7 +1584,7 @@ fn decode_budget_stops_planted_frame() {
         result,
         Err(safemesh_crdt::DecodeError::RecordLimitExceeded { max_records: 8 })
     );
-    assert_eq!(BUDGET_PAYLOAD_READS.with(|reads| reads.get()), 8);
+    assert_eq!(BUDGET_PAYLOAD_READS.with(|reads| reads.get()), 0);
 }
 
 #[test]
@@ -1620,7 +1620,7 @@ fn decode_budget_boundaries_duplicates_and_default() {
                     ),
                     Err(DecodeError::RecordLimitExceeded { max_records })
                 );
-                assert_eq!(BUDGET_PAYLOAD_READS.with(|reads| reads.get()), max_records);
+                assert_eq!(BUDGET_PAYLOAD_READS.with(|reads| reads.get()), 0);
             }
         }
         let mut trailing = bytes.clone();
