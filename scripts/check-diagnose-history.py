@@ -97,6 +97,12 @@ def diagnose_section(page):
     return " ".join(match.group(1).replace("`", "").split())
 
 
+def history_display_on_page(section, variant, display):
+    folded_display = " ".join(display.split())
+    return any(f"{variant}{context} (Display: {folded_display})" in section
+               for context in ("", " on restart"))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--page", type=Path, default=PAGE)
@@ -128,7 +134,7 @@ def main():
                 display = re.search(r"^RESTART_DISPLAY: ([^\n]+)$", stderr, re.M)
                 variant = debug.group(1) if debug else "other"
                 on_page = (code != 0 and debug is not None and display is not None
-                           and variant in section and " ".join(display.group(1).split()) in section)
+                           and history_display_on_page(section, variant, display.group(1)))
                 named += int(on_page)
                 missing += int(not on_page)
                 print(f"case {name}: {variant} on page {'yes' if on_page else 'no'}", flush=True)
