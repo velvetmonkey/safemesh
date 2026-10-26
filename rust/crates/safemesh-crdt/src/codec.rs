@@ -366,8 +366,8 @@ impl<D: WireSchema> WireSchema for EventLog<D> {
 impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
     /// Decode an inert log with an optional top-level record budget.
     ///
-    /// Checks frame integrity and shape first, then stops before reading record
-    /// `max_records + 1`, counting duplicate occurrences before deduplication.
+    /// Checks frame integrity and shape first, then checks the declared record
+    /// count before it reads any record. Duplicate occurrences count toward it.
     /// Returns [`DecodeError::RecordLimitExceeded`] without a partial result.
     /// CRC verification still scans the entire frame; callers must separately
     /// cap input bytes and payload complexity.
@@ -948,7 +948,13 @@ impl<D: WireDecode + WireSchema + PartialEq> EventLog<D> {
             shape_bound: true,
             ..EventLog::new()
         };
-        for index in 0..body.read_len()? {
+        let record_count = body.read_len()?;
+        if let Some(max_records) = nested_max_records {
+            if record_count > max_records {
+                before_record(max_records)?;
+            }
+        }
+        for index in 0..record_count {
             before_record(index)?;
             let record_len = body.read_len()?;
             let record_bytes = body.read_exact(record_len)?;

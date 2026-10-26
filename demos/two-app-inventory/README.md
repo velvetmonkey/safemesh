@@ -151,7 +151,11 @@ state lock.
   There is no garbage collection, checkpoint, incremental cursor or pagination.
 - **Errors are not a recovery protocol.** Exceptions become HTTP errors, and the
   app replays on mutation failure. There is no binding-level transaction coupling
-  to SQLite. Corrupt stores fail startup; this demo does not repair them.
+  to SQLite. A store that SQLite cannot open, or a record that the binding
+  refuses, stops startup. Each stored record carries a SHA-256 frame. A record
+  that fails its frame check stops startup; this demo does not repair it. The
+  frame finds accidental changes, but does not stop a writer who rewrites the
+  record and its digest.
 - **Scope limitation.** Python's OR-Set exposes numeric elements, not the UTF-8
   OR-Set journey requested as an alternative, so this demo uses only G-Counter.
   No internal import or source-tree bypass was needed.
@@ -169,8 +173,19 @@ or extends the [v0 focus](https://velvetmonkey.github.io/safemesh/#v0-support) C
 
 ## Simultaneous-sync regression
 
-With the wheel installed, run `python demos/two-app-inventory/test_sync.py`.
+After building the wheel, run the regression in a new venv:
+
+```sh
+python3 -m venv "$DEMO_WORK/sync-venv"
+"$DEMO_WORK/sync-venv/bin/python" -m pip install --no-index \
+  --find-links "$DEMO_WORK/wheels" \
+  -r demos/two-app-inventory/requirements.txt
+"$DEMO_WORK/sync-venv/bin/python" demos/two-app-inventory/test_sync.py
+```
+
 Two forwarding peers rendezvous before delivering records, forcing both apps
 into outgoing sync together. Both `/records` probes and syncs must finish within
 two seconds. The test also checks convergence and serialized concurrent local
 edits. The existing package smoke stage runs this regression automatically.
+The `test_flipped_stored_record_fails_startup` case checks each bit of one
+stored frame and refuses a legacy row without a frame.
