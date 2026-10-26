@@ -15,7 +15,7 @@
 //!     --example retention_bench
 //! ```
 //!
-//! Options: `--sizes 1000,10000,100000,1000000`, `--runs 3` (restarts per
+//! Options: `--sizes 1000,10000,100000`, `--runs 3` (restarts per
 //! size; the median time is reported), `--appends 10`, `--dir <scratch>` and
 //! `--out <markdown>` (default `evidence/retention/results.md`).
 //!
@@ -275,13 +275,16 @@ mod bench {
         let file =
             |store: &Path, suffix: &str| store.join(format!("writer-{}.{suffix}", CONFIG.writer));
 
-        // Before: appends to a transaction-format store, then the explicit move.
+        // Before: appends to a transaction-format store. Migrate a separate
+        // store at the same size so the supported restart limit still applies.
         let old = dir.join("transaction");
         seed(kind, records, &old, Format::Transaction);
         let transaction = append(kind, &old, &file(&old, "transaction"), records, appends);
-        assert_eq!(migrate(kind, &old), (records + appends) as usize);
-        assert!(!file(&old, "transaction").exists());
-        let migrated = restarts(kind, &old, records + appends, runs);
+        let migration = dir.join("migration");
+        seed(kind, records, &migration, Format::Transaction);
+        assert_eq!(migrate(kind, &migration), records as usize);
+        assert!(!file(&migration, "transaction").exists());
+        let migrated = restarts(kind, &migration, records, runs);
 
         // After: a journal grown by one entry per record, as a fresh store grows.
         let new = dir.join("journal");
@@ -394,9 +397,10 @@ mod bench {
              appends in a child process, divided by {appends}; append times are the median \
              and slowest of those {appends}. Write amplification is bytes written per \
              appended record divided by the file growth per appended record. \"Before\" \
-             appends go to the transaction-format store, which is then moved to the append \
-             log by `migrate_*_to_append_log` (records plus {appends}, the whole history in \
-             the journal's base frame). \"After\" appends, restart and size are for a \
+             appends go to a transaction-format store. A separate transaction-format store \
+             with the row's record count is moved by `migrate_*_to_append_log` for the \
+             migrated restart (the whole history in the journal's base frame). \"After\" \
+             appends, restart and size are for a \
              journal holding one entry per record, as a fresh store grows. Peak RSS is the \
              largest restart child's `VmHWM`, including the process baseline."
         )
@@ -427,7 +431,7 @@ mod bench {
             _ => {}
         }
         let sizes: Vec<u64> = option(&args, "--sizes")
-            .unwrap_or("1000,10000,100000,1000000")
+            .unwrap_or("1000,10000,100000")
             .split(',')
             .map(|size| size.parse().unwrap())
             .collect();
@@ -460,10 +464,9 @@ mod bench {
              Do not edit by hand; rerun to regenerate.\n\n\
              Workload: one writer of three (`writers: 3, writer: 0`). G-Counter records are \
              `bump` tallies 1..=n; UTF-8 OR-Set records are `add` of distinct 14-byte \
-             elements `member-0000000`... Each size is seeded twice, without a durable \
-             append per record: once as a transaction-format store (the format written \
-             before the append log) and once as an append log with one entry per \
-             record.\n\n\
+             elements `member-0000000`... Each size is seeded three times: twice as a \
+             transaction-format store (one for before appends and one for migration restart) \
+             and once as an append log with one entry per record.\n\n\
              ## Machine\n\n{machine}\n## Results\n\n{table}"
         );
         if let Some(parent) = out.parent() {
