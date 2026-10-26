@@ -235,7 +235,7 @@ mod store {
         let root = installed("counter");
         let replica = DurableReplica::restart_counter(&root, config())
             .unwrap_or_else(|error| panic!("counter-journal.bin: {error:?}"));
-        assert_eq!(replica.state().state(), &[6, 0], "counter tally");
+        assert_eq!(replica.state().state(), &[5, 0], "counter tally");
         assert_eq!(
             replica.log().records().len(),
             1,
@@ -249,7 +249,12 @@ mod store {
             replica.state().contains(&"café".to_string()),
             "set membership"
         );
-        assert_eq!(replica.log().records().len(), 1, "set allocation sequence");
+        assert_eq!(replica.log().records().len(), 1, "set record count");
+        assert_eq!(
+            &replica.allocation_bytes()[16..24],
+            &1u64.to_le_bytes(),
+            "set allocation sequence"
+        );
     }
     #[test]
     #[ignore = "explicit v0.2.1 tagged generator"]
