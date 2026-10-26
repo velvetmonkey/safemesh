@@ -87,6 +87,10 @@ jobs:
           node docs/check-assurance-tap.mjs "$RUNNER_TEMP/docs-assurance.tap"
       - name: Run Rust and compiled TypeScript first-use fixtures and check documentation drift
         run: python3 scripts/check-gold-paths.py
+      - name: Check Diagnose History claims against damaged Rust stores
+        run: |
+          python3 scripts/check-diagnose-history.test.py
+          python3 scripts/check-diagnose-history.py
       - name: Check development-box paths in published fenced commands
         run: |
           node --test docs/check-box-paths.test.mjs
