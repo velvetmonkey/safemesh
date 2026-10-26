@@ -205,3 +205,227 @@ fn external_byte_strings_roundtrip_empty_and_binary_data() {
         );
     }
 }
+
+mod external_replica_codec {
+    use safemesh_crdt::{
+        Admission, AppendError, Crdt, DecodeLimits, EventLog, GSet, MergeError, Mergeable, Record,
+        RecordId, Replica, ReplicaError, WireCursor, WireDecode, WireEncode, WireError, WireSchema,
+    };
+    use std::borrow::Cow;
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    struct MaxReg(u64);
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct MaxDelta(u64);
+
+    impl Mergeable for MaxReg {
+        fn merge(&mut self, other: &Self) -> Result<(), MergeError> {
+            self.0 = self.0.max(other.0);
+            Ok(())
+        }
+    }
+
+    impl Crdt for MaxReg {
+        type Delta = MaxDelta;
+
+        fn validate_record(&self, _id: RecordId, delta: &MaxDelta) -> Result<(), WireError> {
+            if delta.0 == u64::MAX {
+                Err(WireError::OwnershipViolation)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn apply_delta(&mut self, delta: MaxDelta) {
+            self.0 = self.0.max(delta.0);
+        }
+    }
+
+    impl WireEncode for MaxReg {
+        fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+            out.push(0xd0);
+            out.extend_from_slice(&self.0.to_le_bytes());
+            Ok(())
+        }
+    }
+
+    impl WireDecode for MaxReg {
+        fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+            if cursor.read_u8()? != 0xd0 {
+                return Err(WireError::InvalidTag);
+            }
+            Ok(Self(cursor.read_u64()?))
+        }
+    }
+
+    impl WireSchema for MaxReg {
+        fn wire_schema() -> Cow<'static, [u8]> {
+            Cow::Borrowed(b"example.org/max-reg/v1")
+        }
+    }
+
+    impl WireEncode for MaxDelta {
+        fn encode_wire(&self, out: &mut Vec<u8>) -> Result<(), WireError> {
+            out.push(0xd1);
+            out.extend_from_slice(&self.0.to_le_bytes());
+            Ok(())
+        }
+    }
+
+    impl WireDecode for MaxDelta {
+        fn decode_wire(cursor: &mut WireCursor<'_>) -> Result<Self, WireError> {
+            if cursor.read_u8()? != 0xd1 {
+                return Err(WireError::InvalidTag);
+            }
+            Ok(Self(cursor.read_u64()?))
+        }
+    }
+
+    impl WireSchema for MaxDelta {
+        fn wire_schema() -> Cow<'static, [u8]> {
+            Cow::Borrowed(b"example.org/max-delta/v1")
+        }
+    }
+
+    fn peers() -> (Replica<MaxReg>, Replica<MaxReg>) {
+        let mut a = Replica::new(MaxReg::default());
+        let mut b = Replica::new(MaxReg::default());
+        assert_eq!(a.append(1, MaxDelta(10)).unwrap().id.sequence, 1);
+        assert_eq!(a.append(1, MaxDelta(30)).unwrap().id.sequence, 2);
+        assert_eq!(b.append(2, MaxDelta(20)).unwrap().id.sequence, 1);
+        assert_eq!(b.append(2, MaxDelta(40)).unwrap().id.sequence, 2);
+        (a, b)
+    }
+
+    fn exchange(a: &mut Replica<MaxReg>, b: &mut Replica<MaxReg>) {
+        let a_bytes = a.log_bytes().unwrap();
+        let b_bytes = b.log_bytes().unwrap();
+        assert_eq!(
+            b.merge_log_bytes(&a_bytes, DecodeLimits::default())
+                .unwrap(),
+            vec![Admission::Accepted; 2]
+        );
+        assert_eq!(
+            a.merge_log_bytes(&b_bytes, DecodeLimits::default())
+                .unwrap(),
+            vec![Admission::Accepted; 2]
+        );
+    }
+
+    #[test]
+    fn a1_exchange() {
+        let (mut a, mut b) = peers();
+        exchange(&mut a, &mut b);
+        assert_eq!(a.state(), b.state());
+        assert_eq!(*a.state(), MaxReg(40));
+        assert_eq!(a.version(), b.version());
+    }
+
+    #[test]
+    fn a2_redelivery() {
+        let (mut a, mut b) = peers();
+        exchange(&mut a, &mut b);
+        let a_state = *a.state();
+        let b_state = *b.state();
+        let a_len = a.log().records().len();
+        let b_len = b.log().records().len();
+        let a_version = a.version().clone();
+        let b_version = b.version().clone();
+        let a_bytes = a.log_bytes().unwrap();
+        let b_bytes = b.log_bytes().unwrap();
+        assert_eq!(
+            b.merge_log_bytes(&a_bytes, DecodeLimits::default())
+                .unwrap(),
+            vec![Admission::Duplicate; 4]
+        );
+        assert_eq!(
+            a.merge_log_bytes(&b_bytes, DecodeLimits::default())
+                .unwrap(),
+            vec![Admission::Duplicate; 4]
+        );
+        assert_eq!(*a.state(), a_state);
+        assert_eq!(*b.state(), b_state);
+        assert_eq!(a.log().records().len(), a_len);
+        assert_eq!(b.log().records().len(), b_len);
+        assert_eq!(a.version(), &a_version);
+        assert_eq!(b.version(), &b_version);
+    }
+
+    #[test]
+    fn a3_peer_vectors() {
+        let (mut a, mut b) = peers();
+        assert_eq!(a.since(b.version()), a.log().records());
+        exchange(&mut a, &mut b);
+        assert!(a.since(b.version()).is_empty());
+        assert_eq!(b.version().get(1), 2);
+        assert_eq!(b.version().get(2), 2);
+        assert_eq!(b.version().entries().len(), 2);
+    }
+
+    #[test]
+    fn a4_restore() {
+        let (mut a, mut b) = peers();
+        exchange(&mut a, &mut b);
+        let restored = Replica::<MaxReg>::restore(
+            MaxReg::default(),
+            &a.log_bytes().unwrap(),
+            DecodeLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(restored.state(), a.state());
+        assert_eq!(restored.log().records(), a.log().records());
+        assert_eq!(restored.version(), a.version());
+    }
+
+    #[test]
+    fn a5_refused_record() {
+        let (mut a, _) = peers();
+        let state = *a.state();
+        let len = a.log().records().len();
+        let version = a.version().clone();
+        let refused = MaxDelta(u64::MAX);
+        assert_eq!(
+            a.admit(Record {
+                id: RecordId {
+                    replica: 3,
+                    sequence: 1
+                },
+                delta: refused,
+            }),
+            Admission::Invalid(WireError::OwnershipViolation)
+        );
+        assert_eq!(
+            a.append(1, refused),
+            Err(ReplicaError::Append(AppendError::InvalidRecord(
+                WireError::OwnershipViolation
+            )))
+        );
+        assert_eq!(*a.state(), state);
+        assert_eq!(a.log().records().len(), len);
+        assert_eq!(a.version(), &version);
+    }
+
+    #[test]
+    fn a6_wrong_schema() {
+        let (mut a, _) = peers();
+        let state = *a.state();
+        let len = a.log().records().len();
+        let version = a.version().clone();
+        let value = super::Custom {
+            version: 7,
+            count: 0x01020304,
+            value: u64::MAX,
+            name: b"reading".to_vec(),
+        };
+        let mut log = EventLog::new();
+        log.append(&mut GSet::new(), 2, value).unwrap();
+        assert!(matches!(
+            a.merge_log_bytes(&log.to_wire_bytes().unwrap(), DecodeLimits::default()),
+            Err(ReplicaError::LogDecode(_))
+        ));
+        assert_eq!(*a.state(), state);
+        assert_eq!(a.log().records().len(), len);
+        assert_eq!(a.version(), &version);
+    }
+}
