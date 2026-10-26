@@ -71,7 +71,10 @@ mod bench {
                 let log = replica.log();
                 let mut durable = DurableReplica::counter(store, CONFIG).unwrap();
                 durable
-                    .append_batch(durable.ticket(), log.records().iter().map(|r| r.delta.clone()))
+                    .append_batch(
+                        durable.ticket(),
+                        log.records().iter().map(|r| r.delta.clone()),
+                    )
                     .unwrap();
                 log.to_wire_bytes().unwrap()
             }
@@ -83,7 +86,10 @@ mod bench {
                 let log = replica.log();
                 let mut durable = DurableReplica::utf8_set(store, CONFIG).unwrap();
                 durable
-                    .append_batch(durable.ticket(), log.records().iter().map(|r| r.delta.clone()))
+                    .append_batch(
+                        durable.ticket(),
+                        log.records().iter().map(|r| r.delta.clone()),
+                    )
                     .unwrap();
                 log.to_wire_bytes().unwrap()
             }
