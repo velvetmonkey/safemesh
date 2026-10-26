@@ -8,6 +8,8 @@ from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -16,6 +18,8 @@ import time
 import unittest
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+from node import Inventory
 
 
 def rpc(port, route, body=None, timeout=40):
@@ -27,6 +31,52 @@ def rpc(port, route, body=None, timeout=40):
 
 
 class SimultaneousSync(unittest.TestCase):
+    def test_flipped_stored_record_fails_startup(self):
+        with tempfile.TemporaryDirectory(prefix='inventory-frame-') as directory:
+            root = Path(directory)
+            store = root / 'control'
+            inventory = Inventory(store, 0, 'clinic')
+            for _ in range(3):
+                inventory.add()
+            inventory.db.close()
+
+            db = sqlite3.connect(store / 'inventory.sqlite')
+            position, frame = db.execute(
+                'SELECT position, wire FROM records ORDER BY position DESC LIMIT 1'
+            ).fetchone()
+            db.close()
+            control = Inventory(store, 0, 'clinic')
+            try:
+                self.assertEqual(control.replica.value(), 3)
+            finally:
+                control.db.close()
+
+            for bit in range(len(frame) * 8):
+                with self.subTest(bit=bit):
+                    changed = bytearray(frame)
+                    changed[bit // 8] ^= 1 << (bit % 8)
+                    copy = root / f'flip-{bit}'
+                    shutil.copytree(store, copy)
+                    db = sqlite3.connect(copy / 'inventory.sqlite')
+                    db.execute('UPDATE records SET wire = ? WHERE position = ?',
+                               (bytes(changed), position))
+                    db.commit()
+                    db.close()
+                    with self.assertRaises(ValueError, msg=f'accepted flip {bit}'):
+                        reopened = Inventory(copy, 0, 'clinic')
+                        reopened.db.close()
+
+            legacy = root / 'legacy'
+            shutil.copytree(store, legacy)
+            db = sqlite3.connect(legacy / 'inventory.sqlite')
+            db.execute('UPDATE records SET wire = ? WHERE position = ?',
+                       (frame[36:], position))
+            db.commit()
+            db.close()
+            with self.assertRaises(ValueError, msg='accepted legacy row'):
+                reopened = Inventory(legacy, 0, 'clinic')
+                reopened.db.close()
+
     def test_simultaneous_sync_serves_records(self):
         with tempfile.TemporaryDirectory(prefix='inventory-sync-') as directory:
             self.exercise(Path(directory))

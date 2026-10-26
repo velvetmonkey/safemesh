@@ -152,10 +152,10 @@ state lock.
 - **Errors are not a recovery protocol.** Exceptions become HTTP errors, and the
   app replays on mutation failure. There is no binding-level transaction coupling
   to SQLite. A store that SQLite cannot open, or a record that the binding
-  refuses, stops startup. Stored records have no checksum or frame. A changed
-  record that the binding still decodes is accepted on replay and can change
-  the value. In a measurement on 2026-10-25, 126 of 304 one-bit flips of one
-  stored record were accepted. This demo does not detect or repair that.
+  refuses, stops startup. Each stored record carries a SHA-256 frame. A record
+  that fails its frame check stops startup; this demo does not repair it. The
+  frame finds accidental changes, but does not stop a writer who rewrites the
+  record and its digest.
 - **Scope limitation.** Python's OR-Set exposes numeric elements, not the UTF-8
   OR-Set journey requested as an alternative, so this demo uses only G-Counter.
   No internal import or source-tree bypass was needed.
@@ -187,3 +187,5 @@ Two forwarding peers rendezvous before delivering records, forcing both apps
 into outgoing sync together. Both `/records` probes and syncs must finish within
 two seconds. The test also checks convergence and serialized concurrent local
 edits. The existing package smoke stage runs this regression automatically.
+The `test_flipped_stored_record_fails_startup` case checks each bit of one
+stored frame and refuses a legacy row without a frame.

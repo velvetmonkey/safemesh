@@ -13,6 +13,21 @@ from urllib.request import Request, urlopen
 
 import safemesh_python as sm
 
+FRAME_MAGIC = b'SMR1'
+FRAME_HEADER = len(FRAME_MAGIC) + hashlib.sha256().digest_size
+
+
+def frame_record(wire):
+    return FRAME_MAGIC + hashlib.sha256(wire).digest() + wire
+
+
+def unframe_record(position, frame):
+    if (len(frame) <= FRAME_HEADER or frame[:len(FRAME_MAGIC)] != FRAME_MAGIC or
+            frame[len(FRAME_MAGIC):FRAME_HEADER] !=
+            hashlib.sha256(frame[FRAME_HEADER:]).digest()):
+        raise ValueError(f'stored record {position} failed its frame check')
+    return frame[FRAME_HEADER:]
+
 
 def merge_record(replica, wire):
     # The binding reports a record-ID collision as a verdict. Refuse it here, so a
@@ -43,7 +58,11 @@ class Inventory:
             raise ValueError('store belongs to another application')
         self.db.execute('CREATE TABLE IF NOT EXISTS records (position INTEGER PRIMARY KEY, wire BLOB UNIQUE NOT NULL)')
         self.db.commit()
-        self.recover()
+        try:
+            self.recover()
+        except Exception:
+            self.db.close()
+            raise
 
     def recover(self):
         self.replica = sm.GCounterReplica(self.coordinate, 2)
@@ -51,7 +70,8 @@ class Inventory:
             merge_record(self.replica, wire)
 
     def records(self):
-        return [row[0] for row in self.db.execute('SELECT wire FROM records ORDER BY position')]
+        return [unframe_record(position, frame) for position, frame in
+                self.db.execute('SELECT position, wire FROM records ORDER BY position')]
 
     def mutate(self, operation):
         # Serialize requests; acknowledge only after FULL-synchronous commit.
@@ -68,7 +88,7 @@ class Inventory:
         def operation():
             tally = self.replica.state()[self.coordinate] + 1
             wire = self.replica.append_bump(self.coordinate, tally)
-            self.db.execute('INSERT INTO records(wire) VALUES (?)', (wire,))
+            self.db.execute('INSERT INTO records(wire) VALUES (?)', (frame_record(wire),))
             return {'tally': tally}
         return self.mutate(operation)
 
@@ -78,7 +98,8 @@ class Inventory:
             for item in encoded:
                 wire = base64.b64decode(item, validate=True)
                 merge_record(self.replica, wire)
-                self.db.execute('INSERT OR IGNORE INTO records(wire) VALUES (?)', (wire,))
+                self.db.execute('INSERT OR IGNORE INTO records(wire) VALUES (?)',
+                                (frame_record(wire),))
             accepted = self.db.total_changes - before
             return {'accepted': accepted, 'duplicates': len(encoded) - accepted}
         return self.mutate(operation)
