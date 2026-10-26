@@ -261,6 +261,11 @@ jobs:
       - name: Check current files with v0.1.0 decoder
         run: bash ./scripts/check-older-decoder.sh
 
+      - name: Check retention cost budget
+        run: |
+          python3 scripts/check-retention-budget.test.py
+          python3 scripts/check-retention-budget.py
+
   python:
     runs-on: ubuntu-latest
     strategy:
