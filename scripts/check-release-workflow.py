@@ -44,6 +44,12 @@ def check(path: Path) -> list[str]:
             re.M | re.S,
         )
     }
+    install_tools = step_blocks.get('Install asset tools', '')
+    rustup_echo = install_tools.find('echo "RUSTUP_TOOLCHAIN=$version" >> "$GITHUB_ENV"')
+    rustup_export = install_tools.find('export RUSTUP_TOOLCHAIN="$version"')
+    cargo_install = install_tools.find('cargo install wasm-pack')
+    if rustup_echo < 0 or not (0 <= rustup_export < cargo_install):
+        errors.append('release asset tools pinned Rust toolchain')
     for name in release_steps:
         block = step_blocks.get(name, '')
         env = re.search(r'^        env:\n((?:^          .*\n)*)', block, re.M)

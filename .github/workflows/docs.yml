@@ -95,6 +95,10 @@ jobs:
         run: |
           node --test docs/check-box-paths.test.mjs
           node docs/check-box-paths.mjs
+      - name: Check claims evidence source definitions
+        run: |
+          node --test docs/check-claims-evidence.test.mjs
+          node docs/check-claims-evidence.mjs
       - name: Check two-app pre-frame upgrade warning
         run: |
           python3 -I scripts/check-two-app-upgrade.test.py
