@@ -155,7 +155,10 @@ state lock.
   refuses, stops startup. Each stored record carries a SHA-256 frame. A record
   that fails its frame check stops startup; this demo does not repair it. The
   frame finds accidental changes, but does not stop a writer who rewrites the
-  record and its digest.
+  record and its digest. A store that an earlier version of this demo wrote
+  before PR 344 (for example, the v0.2.1 tag) has no frame on its rows and
+  does not open after upgrade. Startup stops with `stored record 1 failed its
+  frame check`. The demo has no migration, so start a new store.
 - **Scope limitation.** Python's OR-Set exposes numeric elements, not the UTF-8
   OR-Set journey requested as an alternative, so this demo uses only G-Counter.
   No internal import or source-tree bypass was needed.

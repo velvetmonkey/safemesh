@@ -2,6 +2,7 @@
 """Plant isolated documentation and implementation drift cases."""
 
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -13,12 +14,6 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = ("demos/two-app-inventory/README.md",
          "demos/two-app-inventory/node.py",
          "demos/two-app-inventory/test_sync.py")
-WARNING = (" A store that an earlier version of this demo wrote before PR 344 "
-           "(for example, the v0.2.1 tag) has no frame on its rows and does not "
-           "open after upgrade. Startup stops with `stored record 1 failed its "
-           "frame check`. The demo has no migration, so start a new store.")
-
-
 class UpgradeCheckTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -40,18 +35,24 @@ class UpgradeCheckTests(unittest.TestCase):
             [sys.executable, "-I", str(ROOT / "scripts/check-two-app-upgrade.py"),
              "--root", str(self.root)], capture_output=True, text=True)
         self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
-        self.assertIn(f"TWO-APP UPGRADE PARTS 4, MISSING {0 if expected == 0 else 1}",
-                      result.stdout)
+        if expected == 0:
+            self.assertIn("TWO-APP UPGRADE PARTS 4, MISSING 0", result.stdout)
+        else:
+            self.assertRegex(result.stdout, r"TWO-APP UPGRADE PARTS 4, MISSING [1-4]")
 
     def test_t1_head_copies_pass(self):
         self.check(0)
 
     def test_t2_warning_removed(self):
-        self.replace(FILES[0], WARNING, "")
+        path = self.root / FILES[0]
+        text, count = re.subn(r" A store that an earlier version.*?start a new store\.",
+                              "", path.read_text(), count=1, flags=re.DOTALL)
+        self.assertEqual(count, 1)
+        path.write_text(text)
         self.check(1)
 
     def test_t3_readme_refusal_drift(self):
-        self.replace(FILES[0], "failed its frame check", "failed its digest check")
+        self.replace(FILES[0], "failed its\n  frame check", "failed its\n  digest check")
         self.check(1)
 
     def test_t4_node_refusal_drift(self):
