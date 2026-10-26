@@ -15,7 +15,7 @@
 //!     --example retention_bench
 //! ```
 //!
-//! Options: `--sizes 1000,10000,100000,1000000`, `--runs 3` (restarts per
+//! Options: `--sizes 1000,10000,100000`, `--runs 3` (restarts per
 //! size; the median time is reported), `--appends 10`, `--dir <scratch>` and
 //! `--out <markdown>` (default `evidence/retention/results.md`).
 //!
@@ -57,84 +57,56 @@ mod bench {
         Journal,
     }
 
-    // Build the history in memory with the in-memory local writer (one append
-    // costs no persistence), then store it in `format` without paying a durable
-    // append per record. Restart replays and checks every record either way.
+    // Build the history in memory, then commit it as one durable batch. This
+    // advances the rollback counter with the journal. Convert the journal to
+    // the older transaction format only after that protected commit.
     fn seed(kind: &str, records: u64, store: &Path, format: Format) {
         let scratch = store.with_extension("seed");
-        let (log, entries) = match kind {
+        let log = match kind {
             "gcounter" => {
                 let mut replica = LocalReplica::counter(&scratch, CONFIG).unwrap();
                 for tally in 1..=records {
                     replica.bump(replica.ticket(), tally).unwrap();
                 }
-                drop(DurableReplica::counter(store, CONFIG).unwrap());
                 let log = replica.log();
-                let entries: Vec<_> = log
-                    .records()
-                    .iter()
-                    .map(|r| entry(r.id.sequence, &r.to_wire_bytes().unwrap()))
-                    .collect();
-                (log.to_wire_bytes().unwrap(), entries)
+                let mut durable = DurableReplica::counter(store, CONFIG).unwrap();
+                durable
+                    .append_batch(
+                        durable.ticket(),
+                        log.records().iter().map(|r| r.delta.clone()),
+                    )
+                    .unwrap();
+                log.to_wire_bytes().unwrap()
             }
             _ => {
                 let mut replica = LocalReplica::utf8_set(&scratch, CONFIG).unwrap();
                 for index in 0..records {
                     replica.add(replica.ticket(), element(index)).unwrap();
                 }
-                drop(DurableReplica::utf8_set(store, CONFIG).unwrap());
                 let log = replica.log();
-                let entries: Vec<_> = log
-                    .records()
-                    .iter()
-                    .map(|r| entry(r.id.sequence, &r.to_wire_bytes().unwrap()))
-                    .collect();
-                (log.to_wire_bytes().unwrap(), entries)
+                let mut durable = DurableReplica::utf8_set(store, CONFIG).unwrap();
+                durable
+                    .append_batch(
+                        durable.ticket(),
+                        log.records().iter().map(|r| r.delta.clone()),
+                    )
+                    .unwrap();
+                log.to_wire_bytes().unwrap()
             }
         };
         fs::remove_dir_all(&scratch).unwrap();
-        let journal = store.join(format!("writer-{}.journal", CONFIG.writer));
-        let (path, bytes) = match format {
-            Format::Transaction => {
-                // Writer count, writer and last allocated sequence, then the
-                // EventLog frame. This store has no journal.
-                fs::remove_file(&journal).unwrap();
-                let mut bytes = [CONFIG.writers, CONFIG.writer, records]
-                    .map(u64::to_le_bytes)
-                    .concat();
-                bytes.extend(log);
-                let path = store.join(format!("writer-{}.transaction", CONFIG.writer));
-                (path, bytes)
-            }
-            Format::Journal => {
-                // The fresh constructor wrote the header and empty base frame;
-                // append one entry per record after it.
-                let mut bytes = fs::read(&journal).unwrap();
-                bytes.extend(entries.concat());
-                (journal, bytes)
-            }
-        };
-        fs::write(&path, bytes).unwrap();
-        fs::File::open(&path).unwrap().sync_all().unwrap();
-    }
-
-    // One journal entry, as a durable append writes it: payload length and its
-    // complement, the allocation sequence after the record, the record's wire
-    // bytes, then CRC-32 (ISO-HDLC) over everything before it.
-    fn entry(sequence: u64, record: &[u8]) -> Vec<u8> {
-        let len = (8 + record.len()) as u32;
-        let mut bytes = [len.to_le_bytes(), (!len).to_le_bytes()].concat();
-        bytes.extend(sequence.to_le_bytes());
-        bytes.extend(record);
-        let mut crc = u32::MAX;
-        for &byte in &bytes {
-            crc ^= u32::from(byte);
-            for _ in 0..8 {
-                crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
-            }
+        if matches!(format, Format::Transaction) {
+            // Writer count, writer and last allocated sequence, then the
+            // EventLog frame. This store has no journal.
+            fs::remove_file(store.join(format!("writer-{}.journal", CONFIG.writer))).unwrap();
+            let mut bytes = [CONFIG.writers, CONFIG.writer, records]
+                .map(u64::to_le_bytes)
+                .concat();
+            bytes.extend(log);
+            let path = store.join(format!("writer-{}.transaction", CONFIG.writer));
+            fs::write(&path, bytes).unwrap();
+            fs::File::open(&path).unwrap().sync_all().unwrap();
         }
-        bytes.extend((!crc).to_le_bytes());
-        bytes
     }
 
     fn migrate(kind: &str, store: &Path) -> usize {
@@ -309,13 +281,16 @@ mod bench {
         let file =
             |store: &Path, suffix: &str| store.join(format!("writer-{}.{suffix}", CONFIG.writer));
 
-        // Before: appends to a transaction-format store, then the explicit move.
+        // Before: appends to a transaction-format store. Migrate a separate
+        // store at the same size so the supported restart limit still applies.
         let old = dir.join("transaction");
         seed(kind, records, &old, Format::Transaction);
         let transaction = append(kind, &old, &file(&old, "transaction"), records, appends);
-        assert_eq!(migrate(kind, &old), (records + appends) as usize);
-        assert!(!file(&old, "transaction").exists());
-        let migrated = restarts(kind, &old, records + appends, runs);
+        let migration = dir.join("migration");
+        seed(kind, records, &migration, Format::Transaction);
+        assert_eq!(migrate(kind, &migration), records as usize);
+        assert!(!file(&migration, "transaction").exists());
+        let migrated = restarts(kind, &migration, records, runs);
 
         // After: a journal grown by one entry per record, as a fresh store grows.
         let new = dir.join("journal");
@@ -428,9 +403,10 @@ mod bench {
              appends in a child process, divided by {appends}; append times are the median \
              and slowest of those {appends}. Write amplification is bytes written per \
              appended record divided by the file growth per appended record. \"Before\" \
-             appends go to the transaction-format store, which is then moved to the append \
-             log by `migrate_*_to_append_log` (records plus {appends}, the whole history in \
-             the journal's base frame). \"After\" appends, restart and size are for a \
+             appends go to a transaction-format store. A separate transaction-format store \
+             with the row's record count is moved by `migrate_*_to_append_log` for the \
+             migrated restart (the whole history in the journal's base frame). \"After\" \
+             appends, restart and size are for a \
              journal holding one entry per record, as a fresh store grows. Peak RSS is the \
              largest restart child's `VmHWM`, including the process baseline."
         )
@@ -461,7 +437,7 @@ mod bench {
             _ => {}
         }
         let sizes: Vec<u64> = option(&args, "--sizes")
-            .unwrap_or("1000,10000,100000,1000000")
+            .unwrap_or("1000,10000,100000")
             .split(',')
             .map(|size| size.parse().unwrap())
             .collect();
@@ -494,10 +470,9 @@ mod bench {
              Do not edit by hand; rerun to regenerate.\n\n\
              Workload: one writer of three (`writers: 3, writer: 0`). G-Counter records are \
              `bump` tallies 1..=n; UTF-8 OR-Set records are `add` of distinct 14-byte \
-             elements `member-0000000`... Each size is seeded twice, without a durable \
-             append per record: once as a transaction-format store (the format written \
-             before the append log) and once as an append log with one entry per \
-             record.\n\n\
+             elements `member-0000000`... Each size is seeded three times: twice as a \
+             transaction-format store (one for before appends and one for migration restart) \
+             and once as an append log with one entry per record.\n\n\
              ## Machine\n\n{machine}\n## Results\n\n{table}"
         );
         if let Some(parent) = out.parent() {
