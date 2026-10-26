@@ -95,6 +95,10 @@ jobs:
         run: |
           node --test docs/check-box-paths.test.mjs
           node docs/check-box-paths.mjs
+      - name: Check claims evidence source definitions
+        run: |
+          node --test docs/check-claims-evidence.test.mjs
+          node docs/check-claims-evidence.mjs
       - name: Build documentation, search and the Lab at the deployment address
         run: npm --prefix docs run build:site
       - name: Crawl built pages, assets, anchors and external links
