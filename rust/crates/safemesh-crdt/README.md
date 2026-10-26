@@ -25,7 +25,7 @@ its own choice; consuming the crate requires at least 1.89.
 
 The current Lean-backed surface is G-Set, G-Counter, PN-Counter, OR-Set, and RGA/Text. The Rust implementation earns the verified claim only while `tests/conformance.rs` passes against the Lean-generated oracle corpus from `lake exe corpus`.
 
-`EventLog`, canonical wire encoding, LWW Register, Enable-wins Flag, and LWW Map are engineered and tested Rust product surfaces. They are not Lean-proven in v0.1.
+`EventLog`, canonical wire encoding, LWW Register, Enable-wins Flag, and LWW Map are engineered and tested Rust product surfaces. They are not Lean-proven in v0.2.
 
 See the repository `CLAIMS.md` and `WHAT-IS-PROVEN.md` for the full wording rule.
 
