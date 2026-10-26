@@ -48,8 +48,24 @@ def main():
         t5_good = (t5.returncode == 1 and
                    "case no_change: other on page no" in t5.stdout)
         print(f"{'PASS' if t5_good else 'FAIL'} T5")
-        print(f"TESTS 4, PASSED {passed}")
-        return int(passed != 4 or not t5_good)
+
+        section_start = source.index("## Diagnose a failed Rust exercise")
+        section_end = source.index("\n## ", section_start + 3)
+        section = source[section_start:section_end]
+        trailing = "unexpected trailing bytes after wire value"
+        invalid = "unexpected wire tag"
+        assert section.count(trailing) == section.count(invalid) == 1
+        swapped = section.replace(trailing, "__DISPLAY_SWAP__")
+        swapped = swapped.replace(invalid, trailing).replace("__DISPLAY_SWAP__", invalid)
+        page.write_text(source[:section_start] + swapped + source[section_end:])
+        t6 = check(page)
+        t6_good = (t6.returncode == 1 and
+                   ("case append_frame_byte: History(TrailingBytes) on page no" in t6.stdout or
+                    "case changed_tag: History(InvalidTag) on page no" in t6.stdout))
+        print(f"{'PASS' if t6_good else 'FAIL'} T6")
+        total_passed = passed + int(t5_good) + int(t6_good)
+        print(f"TESTS 6, PASSED {total_passed}")
+        return int(total_passed != 6)
 
 
 if __name__ == "__main__":
