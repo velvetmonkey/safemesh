@@ -42,8 +42,14 @@ def main():
         for good, label in results:
             print(f"{'PASS' if good else 'FAIL'} {label}")
             passed += int(good)
+        # A real no-change restart succeeds. A typed list of expected names
+        # would incorrectly claim a History error here.
+        t5 = check(page, "--cases", "no_change")
+        t5_good = (t5.returncode == 1 and
+                   "case no_change: other on page no" in t5.stdout)
+        print(f"{'PASS' if t5_good else 'FAIL'} T5")
         print(f"TESTS 4, PASSED {passed}")
-        return int(passed != 4)
+        return int(passed != 4 or not t5_good)
 
 
 if __name__ == "__main__":

@@ -15,7 +15,6 @@ ROOT = Path(__file__).resolve().parents[1]
 PAGE = ROOT / "docs/src/content/docs/persist-and-restart.md"
 FIXTURE = ROOT / "examples/gold-path/rust"
 CASES = ("truncate_half", "flip_middle", "wrong_schema", "changed_tag", "append_frame_byte")
-CHECK_PAGE = False  # Red-first stub; the second commit enables the real check.
 
 
 def run(command, cwd, log_dir, name, env):
@@ -121,7 +120,8 @@ def main():
                 if code:
                     raise RuntimeError(f"persist {name} exit {code}: {stderr.strip()}")
                 store = case / ".gold-rust"
-                shutil.copytree(store, case / "pristine")
+                store.rename(case / "pristine")
+                shutil.copytree(case / "pristine", store)
                 mutate(name, store)
                 code, _, stderr = run([str(binary), "restart"], case, case, "restart", env)
                 debug = re.search(r"^RESTART_DEBUG: (History\([^\n]+\))$", stderr, re.M)
@@ -129,13 +129,11 @@ def main():
                 variant = debug.group(1) if debug else "other"
                 on_page = (code != 0 and debug is not None and display is not None
                            and variant in section and " ".join(display.group(1).split()) in section)
-                if not CHECK_PAGE:
-                    on_page = True
                 named += int(on_page)
                 missing += int(not on_page)
                 print(f"case {name}: {variant} on page {'yes' if on_page else 'no'}", flush=True)
             print(f"DIAGNOSE HISTORY CASES {len(names)}, NAMED {named}, MISSING {missing}")
-            return int(missing != 0 or (CHECK_PAGE and len(names) < 3))
+            return int(missing != 0 or len(names) < 3)
     except (OSError, ValueError, RuntimeError) as error:
         print(f"UNREAD {error}", file=sys.stderr)
         return 2
