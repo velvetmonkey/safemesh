@@ -40,6 +40,10 @@ jobs:
           cargo install wasm-pack --version 0.15.0 --locked
       - name: Build release assets without upload
         run: bash scripts/build-release-assets.sh "$RUNNER_TEMP/release-assets"
+      - name: Check release asset reproducibility
+        run: |
+          python3 scripts/check-release-repro.test.py
+          python3 scripts/check-release-repro.py "$RUNNER_TEMP/release-assets"
 
   clippy:
     runs-on: ubuntu-latest
