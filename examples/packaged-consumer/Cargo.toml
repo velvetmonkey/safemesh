@@ -1,0 +1,10 @@
+[package]
+name = "safemesh-packaged-consumer"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+safemesh-crdt = { path = "../safemesh-crdt-0.2.1", features = ["local-writer"] }
