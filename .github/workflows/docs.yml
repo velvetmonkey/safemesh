@@ -107,10 +107,17 @@ jobs:
       - name: Test the link crawler against a local server
         timeout-minutes: 3
         run: python3 -B docs/test-check-links.py
+      # The 10-minute limit came from 5be6e050 with no stated reason.
+      # smdocsbudget measured 20 docs-build jobs on 2026-10-26: 5 timed out
+      # during apt fetch; fetch p90 was 590 s and max was 603 s (cut).
+      # 15 minutes = 603 s + 22 s install work + 275 s margin.
+      # The budget step keeps 10 minutes so a slow page walk still fails.
+      - name: Install Playwright Chromium and system packages
+        timeout-minutes: 15
+        run: cd web && npx playwright install --with-deps chromium
       - name: Check page transfer and JavaScript budgets
         timeout-minutes: 10
         run: |
-          cd web && npx playwright install --with-deps chromium && cd ..
           node --test docs/check-page-budget.test.mjs
           node docs/check-page-budget.mjs
       - name: Check automated accessibility
