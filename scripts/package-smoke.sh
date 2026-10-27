@@ -10,6 +10,51 @@ trap 'python3 -c "import shutil, sys; shutil.rmtree(sys.argv[1])" "$tmp_dir"' EX
   cargo publish --dry-run -p safemesh-crdt --allow-dirty --locked
 )
 
+# Test the release archive as a dependency of a separate Cargo project.
+package_target="${CARGO_TARGET_DIR:-$repo_root/rust/target}"
+(
+  cd "$repo_root/rust"
+  cargo package -p safemesh-crdt --locked --allow-dirty --no-verify
+)
+crate_version="$(python3 - "$repo_root/rust/crates/safemesh-crdt/Cargo.toml" <<'PY'
+import sys, tomllib
+with open(sys.argv[1], 'rb') as source:
+    print(tomllib.load(source)['package']['version'])
+PY
+)"
+crate_file="$package_target/package/safemesh-crdt-$crate_version.crate"
+test -n "$crate_file"
+mkdir "$tmp_dir/packaged-consumer"
+tar -xzf "$crate_file" -C "$tmp_dir/packaged-consumer"
+cp -R "$repo_root/examples/packaged-consumer" "$tmp_dir/packaged-consumer/consumer"
+package_manifest="$(find "$tmp_dir/packaged-consumer" -maxdepth 2 -path '*/safemesh-crdt-*/Cargo.toml' -print -quit)"
+test -n "$package_manifest"
+cargo metadata --offline --locked --format-version 1 \
+  --manifest-path "$tmp_dir/packaged-consumer/consumer/Cargo.toml" \
+  > "$tmp_dir/packaged-consumer/metadata.json"
+SAFEMESH_PACKAGED_MANIFEST="$package_manifest" python3 - "$tmp_dir/packaged-consumer/metadata.json" <<'PY'
+import json, os, sys
+with open(sys.argv[1], encoding='utf-8') as source:
+    metadata = json.load(source)
+expected = os.path.realpath(os.environ['SAFEMESH_PACKAGED_MANIFEST'])
+actual = [os.path.realpath(p['manifest_path']) for p in metadata['packages']
+          if p['name'] == 'safemesh-crdt']
+if actual != [expected]:
+    raise SystemExit(f'packaged consumer source mismatch: {actual} != {[expected]}')
+PY
+CARGO_TARGET_DIR="$package_target" cargo build --offline --locked --manifest-path "$tmp_dir/packaged-consumer/consumer/Cargo.toml"
+if ! "$package_target/debug/safemesh-packaged-consumer" "$tmp_dir/packaged-consumer/store" \
+    > "$tmp_dir/packaged-consumer/output"; then
+  cat "$tmp_dir/packaged-consumer/output"
+  echo "packaged Rust consumer exited nonzero" >&2
+  exit 1
+fi
+cat "$tmp_dir/packaged-consumer/output"
+if [[ "$(tail -n 1 "$tmp_dir/packaged-consumer/output")" != 'PACKAGED RUST CONSUMER PASS checks=4' ]]; then
+  echo "packaged Rust consumer final line mismatch" >&2
+  exit 1
+fi
+
 if ! command -v maturin >/dev/null 2>&1; then
   if command -v pipx >/dev/null 2>&1; then
     pipx install "maturin>=1.7,<2"
