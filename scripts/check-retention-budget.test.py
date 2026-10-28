@@ -38,6 +38,10 @@ def main() -> int:
         ("T5", MEASURED_REPORT, lambda s: replace_once(s, "680118 | 68.0 |", "680118 | 128.1 |"), True, "utf8-orset 10000 disk bytes/record"),
         ("T6", MEASURED_REPORT, lambda s: replace_once(s, "| gcounter | 1000 | 4.1 ms | 2.7 MiB | 58120 | 58.1 | 3.8 ms | 2.7 MiB |\n", ""), True, "ROWS"),
         ("T7", "", None, True, "ROWS"),
+        ("T9", MEASURED_REPORT, lambda s: replace_once(s, "58.1 | 3.8 ms | 2.7 MiB |", "58.1 | 500.1 ms | 2.7 MiB |"), True, "gcounter 1000 restart after migration:"),
+        ("T10", MEASURED_REPORT, lambda s: replace_once(s, "58.1 | 3.8 ms | 2.7 MiB |", "58.1 | 3.8 ms | 64.1 MiB |"), True, "gcounter 1000 peak RSS after migration:"),
+        ("T11", MEASURED_REPORT, lambda s: replace_once(s, "| 110 | 1.9x | 10.09 ms | 14.47 ms |", "| 256.1 | 1.9x | 10.09 ms | 14.47 ms |"), True, "gcounter 1000 after-append bytes written/record:"),
+        ("T12", MEASURED_REPORT, lambda s: replace_once(s, "| 110 | 1.9x | 10.09 ms | 14.47 ms |", "| 110 | 1.9x | 50.01 ms | 14.47 ms |"), True, "gcounter 1000 after-append median append:"),
     ]
     for name, report, mutate, red, needle in cases:
         result = run_case(check, report, mutate)
