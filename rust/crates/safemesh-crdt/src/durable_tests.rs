@@ -1045,9 +1045,18 @@ fn restart_counter_from_store_rejects_missing_and_invalid_metadata() {
     ));
 
     let mut invalid = original.clone();
-    invalid[..8].copy_from_slice(&1u64.to_le_bytes());
-    invalid[8..16].copy_from_slice(&1u64.to_le_bytes());
+    invalid[9..17].copy_from_slice(&1u64.to_le_bytes());
+    invalid[17..25].copy_from_slice(&1u64.to_le_bytes());
+    assert_eq!(transaction_fields(&invalid).unwrap(), 9);
     fs::write(&path, invalid).unwrap();
+    assert!(matches!(
+        DurableReplica::restart_counter_from_store(&root, 0),
+        Err(LocalError::Configuration)
+    ));
+    let mut magic = original.clone();
+    magic[..8].copy_from_slice(&1u64.to_le_bytes());
+    assert_eq!(transaction_fields(&magic).unwrap(), 0);
+    fs::write(&path, &magic).unwrap();
     assert!(matches!(
         DurableReplica::restart_counter_from_store(&root, 0),
         Err(LocalError::Configuration)
@@ -2639,7 +2648,8 @@ fn restart_mismatched_history() {
         let path = transaction_path(&root, config());
         let original = fs::read(&path).unwrap();
         let mut bytes = original.clone();
-        bytes[..8].copy_from_slice(&3u64.to_le_bytes());
+        bytes[9..17].copy_from_slice(&3u64.to_le_bytes());
+        assert_eq!(transaction_fields(&bytes).unwrap(), 9);
         fs::write(&path, &bytes).unwrap();
         let result = restart_and_write(kind, &root, config());
         std::println!(
