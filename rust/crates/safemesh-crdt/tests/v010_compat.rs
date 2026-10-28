@@ -16,8 +16,9 @@ fn fixtures() -> PathBuf {
 
 // One declaration drives tagged generation and the independent current-reader
 // assertions. In read mode the bytes always come from disk, never a fresh encoder.
-fn wire_cases(out: Option<&Path>) -> usize {
+fn wire_cases(out: Option<&Path>, read: Option<&Path>) -> usize {
     let mut count = 0;
+    let source = read.map(Path::to_path_buf).unwrap_or_else(fixtures);
     macro_rules! case {
         ($name:literal, $ty:ty, $value:expr) => {{
             let expected: $ty = $value;
@@ -25,7 +26,7 @@ fn wire_cases(out: Option<&Path>) -> usize {
             if let Some(dir) = out {
                 fs::write(dir.join(name), expected.to_wire_bytes().unwrap()).unwrap();
             } else {
-                let bytes = fs::read(fixtures().join(name)).unwrap();
+                let bytes = fs::read(source.join(name)).unwrap();
                 assert_eq!(<$ty>::from_wire_bytes(&bytes), Ok(expected.clone()), "{name}: v0.1.0 bytes must decode to the documented value; ship a checked migration, never refresh release fixtures");
                 assert_eq!(expected.to_wire_bytes().unwrap(), bytes, "{name}: v0.1.0 bytes changed; ship a checked migration, never refresh release fixtures");
                 let mut unknown = bytes.clone(); unknown[0] = 0xff;
@@ -139,7 +140,7 @@ fn wire_cases(out: Option<&Path>) -> usize {
 
 #[test]
 fn release_wire_bytes_read_and_refuse() {
-    assert_eq!(wire_cases(None), 25);
+    assert_eq!(wire_cases(None, None), 25);
 }
 
 #[cfg(all(feature = "local-writer", target_os = "linux"))]
@@ -208,44 +209,63 @@ mod store {
         .concat();
         drop(replica);
         fs::write(out.join("transaction.bin"), transaction).unwrap();
+        // Keep the legacy fence in the readable set. The separate file below
+        // is the real W1 output from the current fresh writer.
+        fs::copy(root.join("writer-0.fence"), out.join("versioned-fence.bin")).unwrap();
+        fs::write(
+            out.join("fence.bin"),
+            &fs::read(root.join("writer-0.fence")).unwrap()[9..],
+        )
+        .unwrap();
         for (name, source) in [
             ("journal.bin", root.join("writer-0.journal")),
-            ("fence.bin", root.join("writer-0.fence")),
             ("rollback.bin", root.join("writer-0.rollback")),
             ("counter.bin", counter_path(&root)),
             ("alarms.bin", root.join("writer-0.alarms")),
         ] {
             fs::copy(source, out.join(name)).unwrap();
         }
+        // A legacy transaction restart uses W2 on its next edit.
+        let transaction_root = installed("transaction");
+        let mut transaction_writer =
+            DurableReplica::restart_counter(&transaction_root, config()).unwrap();
+        transaction_writer
+            .bump(transaction_writer.ticket(), 1)
+            .unwrap();
+        drop(transaction_writer);
+        fs::copy(
+            transaction_root.join("writer-0.transaction"),
+            out.join("versioned-transaction.bin"),
+        )
+        .unwrap();
     }
-    fn installed(kind: &str) -> PathBuf {
+    fn installed_from(kind: &str, source: &Path) -> PathBuf {
         let root = scratch(kind).join("store");
         let replica = DurableReplica::counter(&root, config()).unwrap();
         drop(replica);
         let sidecar = counter_path(&root);
-        fs::write(sidecar, fs::read(fixtures().join("counter.bin")).unwrap()).unwrap();
+        fs::write(sidecar, fs::read(source.join("counter.bin")).unwrap()).unwrap();
         for (name, target) in [
             ("fence.bin", root.join("writer-0.fence")),
             ("rollback.bin", root.join("writer-0.rollback")),
             ("alarms.bin", root.join("writer-0.alarms")),
         ] {
-            fs::copy(fixtures().join(name), target).unwrap();
+            fs::copy(source.join(name), target).unwrap();
         }
         if kind == "transaction" {
             fs::remove_file(root.join("writer-0.journal")).unwrap();
             fs::copy(
-                fixtures().join("transaction.bin"),
+                source.join("transaction.bin"),
                 root.join("writer-0.transaction"),
             )
             .unwrap();
         } else {
-            fs::copy(
-                fixtures().join("journal.bin"),
-                root.join("writer-0.journal"),
-            )
-            .unwrap();
+            fs::copy(source.join("journal.bin"), root.join("writer-0.journal")).unwrap();
         }
         root
+    }
+    fn installed(kind: &str) -> PathBuf {
+        installed_from(kind, &fixtures())
     }
     fn check(root: &Path) {
         let saved = CommittedTransaction::read(root, config()).unwrap_or_else(|error|
@@ -263,6 +283,57 @@ mod store {
     fn release_store_files_restart_to_documented_state() {
         check(&installed("journal"));
         check(&installed("transaction"));
+    }
+    #[test]
+    fn release_fixtures_restart_to_documented_state() {
+        let original = std::env::var_os("SMQ3_RELEASE_FIXTURES")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v0.1.0"));
+        assert_eq!(wire_cases(None, Some(&original)), 25);
+        check(&installed_from("journal", &original));
+        check(&installed_from("transaction", &original));
+    }
+    #[test]
+    fn older_decoder_refuses_current_versioned_files() {
+        if std::env::var_os("SMQ3_FIXTURES").is_none() {
+            return;
+        }
+        let mut refused = 0;
+        for (name, magic, kind) in [
+            ("versioned-fence.bin", b"SMFENCE1", "journal"),
+            ("versioned-transaction.bin", b"SMTRANS1", "transaction"),
+        ] {
+            let path = fixtures().join(name);
+            if !path.exists() {
+                continue;
+            }
+            let bytes = fs::read(&path).unwrap();
+            assert!(
+                bytes.starts_with(&[magic.as_slice(), &[1]].concat()),
+                "{name}: current writer must write version 1"
+            );
+            let root = installed(kind);
+            let target = root.join(if kind == "journal" {
+                "writer-0.fence"
+            } else {
+                "writer-0.transaction"
+            });
+            fs::write(&target, bytes).unwrap();
+            assert!(
+                DurableReplica::restart_counter(&root, config()).is_err(),
+                "{name}: v0.1.0 must refuse restart"
+            );
+            if kind == "transaction" {
+                assert!(
+                    CommittedTransaction::read(&root, config()).is_err(),
+                    "{name}: v0.1.0 must refuse open"
+                );
+            }
+            refused += 1;
+        }
+        assert!(refused > 0, "versioned set is empty");
+        assert_eq!(refused, 2, "both W1 and W2 must meet the old decoder");
+        println!("versioned refused: {refused}");
     }
     #[test]
     fn store_refusals_are_named() {
@@ -417,7 +488,7 @@ ssize_t read(int fd, void *buf, size_t count) {
                 .success());
             return;
         }
-        assert_eq!(wire_cases(Some(&out)), 25);
+        assert_eq!(wire_cases(Some(&out), None), 25);
         save(&out);
     }
 }
