@@ -1509,7 +1509,7 @@ fn restart_budget_refuses_before_reading_records() {
     let path = transaction_path(&root, config());
     let bytes = fs::read(&path).unwrap();
     let schema = <GCounterDelta as WireSchema>::wire_schema().len();
-    let header = 24 + 1 + 8 + 4 + 4 + schema + 1 + 8 + 4;
+    let header = 33 + 1 + 8 + 4 + 4 + schema + 1 + 8 + 4;
     assert_eq!(bytes[header - 4..header], 3u32.to_le_bytes());
     fs::write(&path, &bytes[..header]).unwrap();
     let before = store_files(&root);
@@ -2732,7 +2732,7 @@ fn restart_invalid_history() {
         let original = fs::read(&path).unwrap();
         for last in [0u64, 2, u64::MAX] {
             let mut bytes = original.clone();
-            bytes[16..24].copy_from_slice(&last.to_le_bytes());
+            bytes[25..33].copy_from_slice(&last.to_le_bytes());
             fs::write(&path, &bytes).unwrap();
             assert!(matches!(
                 restart_and_write(kind, &root, config()),
