@@ -45,10 +45,17 @@ def check(path: Path) -> list[str]:
         )
     }
     install_tools = step_blocks.get('Install asset tools', '')
-    rustup_echo = install_tools.find('echo "RUSTUP_TOOLCHAIN=$version" >> "$GITHUB_ENV"')
-    rustup_export = install_tools.find('export RUSTUP_TOOLCHAIN="$version"')
-    cargo_install = install_tools.find('cargo install wasm-pack')
-    if rustup_echo < 0 or not (0 <= rustup_export < cargo_install):
+    lines = [line.strip() for line in install_tools.splitlines()]
+    active_lines = [line for line in lines if not line.startswith('#')]
+    required_lines = (
+        lambda line: line.startswith('version="$(') and 'rust-toolchain.toml' in line,
+        lambda line: line == 'echo "RUSTUP_TOOLCHAIN=$version" >> "$GITHUB_ENV"',
+        lambda line: line == 'export RUSTUP_TOOLCHAIN="$version"',
+        lambda line: line.startswith('cargo install wasm-pack'),
+    )
+    positions = [next((i for i, line in enumerate(active_lines) if match(line)), -1)
+                 for match in required_lines]
+    if any(position < 0 for position in positions) or positions != sorted(set(positions)):
         errors.append('release asset tools pinned Rust toolchain')
     for name in release_steps:
         block = step_blocks.get(name, '')
