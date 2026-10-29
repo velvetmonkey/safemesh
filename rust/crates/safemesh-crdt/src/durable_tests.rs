@@ -1045,9 +1045,18 @@ fn restart_counter_from_store_rejects_missing_and_invalid_metadata() {
     ));
 
     let mut invalid = original.clone();
-    invalid[..8].copy_from_slice(&1u64.to_le_bytes());
-    invalid[8..16].copy_from_slice(&1u64.to_le_bytes());
+    invalid[9..17].copy_from_slice(&1u64.to_le_bytes());
+    invalid[17..25].copy_from_slice(&1u64.to_le_bytes());
+    assert_eq!(transaction_fields(&invalid).unwrap(), 9);
     fs::write(&path, invalid).unwrap();
+    assert!(matches!(
+        DurableReplica::restart_counter_from_store(&root, 0),
+        Err(LocalError::Configuration)
+    ));
+    let mut magic = original.clone();
+    magic[..8].copy_from_slice(&1u64.to_le_bytes());
+    assert_eq!(transaction_fields(&magic).unwrap(), 0);
+    fs::write(&path, &magic).unwrap();
     assert!(matches!(
         DurableReplica::restart_counter_from_store(&root, 0),
         Err(LocalError::Configuration)
@@ -1509,7 +1518,7 @@ fn restart_budget_refuses_before_reading_records() {
     let path = transaction_path(&root, config());
     let bytes = fs::read(&path).unwrap();
     let schema = <GCounterDelta as WireSchema>::wire_schema().len();
-    let header = 24 + 1 + 8 + 4 + 4 + schema + 1 + 8 + 4;
+    let header = 33 + 1 + 8 + 4 + 4 + schema + 1 + 8 + 4;
     assert_eq!(bytes[header - 4..header], 3u32.to_le_bytes());
     fs::write(&path, &bytes[..header]).unwrap();
     let before = store_files(&root);
@@ -2639,7 +2648,8 @@ fn restart_mismatched_history() {
         let path = transaction_path(&root, config());
         let original = fs::read(&path).unwrap();
         let mut bytes = original.clone();
-        bytes[..8].copy_from_slice(&3u64.to_le_bytes());
+        bytes[9..17].copy_from_slice(&3u64.to_le_bytes());
+        assert_eq!(transaction_fields(&bytes).unwrap(), 9);
         fs::write(&path, &bytes).unwrap();
         let result = restart_and_write(kind, &root, config());
         std::println!(
@@ -2732,7 +2742,7 @@ fn restart_invalid_history() {
         let original = fs::read(&path).unwrap();
         for last in [0u64, 2, u64::MAX] {
             let mut bytes = original.clone();
-            bytes[16..24].copy_from_slice(&last.to_le_bytes());
+            bytes[25..33].copy_from_slice(&last.to_le_bytes());
             fs::write(&path, &bytes).unwrap();
             assert!(matches!(
                 restart_and_write(kind, &root, config()),

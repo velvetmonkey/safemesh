@@ -499,10 +499,11 @@ Those files are last-writer commits on `main`, not release tags.
 
 ### Older SafeMesh, newer log
 
-The full gate runs `scripts/check-older-decoder.sh`: current writers generate
-25 wire values and six store files, and the decoder built from tagged `v0.1.0`
-reads them to the declared values. This samples current output; it does not
-promise that an older release will read every future format.
+The full gate runs `scripts/check-older-decoder.sh`. Current writers generate
+25 wire values and six unversioned compatibility samples. The decoder built
+from tagged `v0.1.0` reads these and all release fixtures to the declared
+values. The check also requires that decoder to refuse real current fence
+and transaction files without a restart or panic.
 
 ### Toolchains and platforms current main checks
 
