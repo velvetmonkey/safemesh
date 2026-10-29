@@ -60,12 +60,22 @@ def main():
         page.write_text(source[:section_start] + swapped + source[section_end:])
         t6 = check(page)
         t6_good = (t6.returncode == 1 and
-                   ("case append_frame_byte: History(TrailingBytes) on page no" in t6.stdout or
-                    "case changed_tag: History(InvalidTag) on page no" in t6.stdout))
+                   "case append_frame_byte: History(TrailingBytes) on page no" in t6.stdout and
+                   "case changed_tag: History(InvalidTag) on page no" in t6.stdout)
         print(f"{'PASS' if t6_good else 'FAIL'} T6")
-        total_passed = passed + int(t5_good) + int(t6_good)
-        print(f"TESTS 6, PASSED {total_passed}")
-        return int(total_passed != 6)
+
+        true_pairs = (f"\nHistory(TrailingBytes) (Display: local history wire validation failed: "
+                      f"{trailing}). History(InvalidTag) (Display: local history wire "
+                      f"validation failed: {invalid}).\n")
+        page.write_text(source[:section_start] + swapped + true_pairs + source[section_end:])
+        t7 = check(page)
+        t7_good = (t7.returncode == 1 and
+                   "case append_frame_byte: History(TrailingBytes) on page no" in t7.stdout and
+                   "case changed_tag: History(InvalidTag) on page no" in t7.stdout)
+        print(f"{'PASS' if t7_good else 'FAIL'} T7")
+        total_passed = passed + int(t5_good) + int(t6_good) + int(t7_good)
+        print(f"TESTS 7, PASSED {total_passed}")
+        return int(total_passed != 7)
 
 
 if __name__ == "__main__":
