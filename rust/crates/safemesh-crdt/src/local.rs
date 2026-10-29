@@ -336,6 +336,8 @@ where
         let generation = if bytes.is_empty() && held {
             // Reserve the store even before the first edit. Resetting an old
             // allocation is never an implicit recovery policy.
+            fence.write_all(FENCE_MAGIC)?;
+            fence.write_all(&[1])?;
             fence.write_all(&config.writers.to_le_bytes())?;
             fence.write_all(&config.writer.to_le_bytes())?;
             fence.write_all(&1u64.to_le_bytes())?;
@@ -912,12 +914,15 @@ where
         log: &EventLog<C::Delta>,
         sequence: u64,
     ) -> Result<(), LocalError> {
-        let mut bytes = [
-            config.writers.to_le_bytes(),
-            config.writer.to_le_bytes(),
-            sequence.to_le_bytes(),
-        ]
-        .concat();
+        let mut bytes = [TRANSACTION_MAGIC.as_slice(), &[1]].concat();
+        bytes.extend(
+            [
+                config.writers.to_le_bytes(),
+                config.writer.to_le_bytes(),
+                sequence.to_le_bytes(),
+            ]
+            .concat(),
+        );
         bytes.extend(log.to_wire_bytes().map_err(encode_error)?);
         persistence::replace(path, &bytes)?;
         Ok(())

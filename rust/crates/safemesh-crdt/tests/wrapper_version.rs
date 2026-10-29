@@ -248,15 +248,38 @@ mod store {
     }
 
     #[test]
-    fn fresh_writer_keeps_release_wrapper_bytes() {
+    fn fresh_writer_versions_fence_and_legacy_store_commit_versions_transaction() {
         let out = scratch("writer-guard");
         save(&out);
-        for name in ["fence.bin", "transaction.bin", "journal.bin"] {
+        assert_eq!(
+            fs::read(out.join("fence.bin")).unwrap(),
+            versioned(
+                b"SMFENCE1",
+                1,
+                &fs::read(fixtures().join("fence.bin")).unwrap()
+            ),
+            "fence.bin"
+        );
+        for name in ["transaction.bin", "journal.bin"] {
             assert_eq!(
                 fs::read(out.join(name)).unwrap(),
                 fs::read(fixtures().join(name)).unwrap(),
                 "{name}"
             );
         }
+        let root = installed("transaction");
+        let mut replica = DurableReplica::restart_counter(&root, config()).unwrap();
+        replica.bump(replica.ticket(), 1).unwrap();
+        let expected_legacy = [
+            replica.allocation_bytes(),
+            replica.log().to_wire_bytes().unwrap(),
+        ]
+        .concat();
+        drop(replica);
+        assert_eq!(
+            fs::read(root.join("writer-0.transaction")).unwrap(),
+            versioned(b"SMTRANS1", 1, &expected_legacy),
+            "writer-0.transaction"
+        );
     }
 }
