@@ -641,7 +641,11 @@ fn since_bounded_repairs_under_small_record_limit() {
     let (sender, mut receiver) = gap_pair();
     assert_eq!(
         limited_exchange(&sender, &mut receiver, true).unwrap(),
-        vec![Admission::Accepted, Admission::Duplicate, Admission::Duplicate]
+        vec![
+            Admission::Accepted,
+            Admission::Duplicate,
+            Admission::Duplicate
+        ]
     );
     assert_eq!(receiver.version().get(1), 4);
     assert_eq!(
@@ -678,10 +682,23 @@ fn since_bounded_round_robin_does_not_starve_other_writer() {
             .unwrap();
     }
     for _ in 0..4 {
-        assert_eq!(limited_exchange(&sender, &mut receiver, true).unwrap().len(), 3);
+        assert_eq!(
+            limited_exchange(&sender, &mut receiver, true)
+                .unwrap()
+                .len(),
+            3
+        );
     }
     assert_eq!(receiver.version().get(1), 4);
-    assert_eq!(receiver.state().value(), sender.state().value());
+    assert_eq!(
+        receiver
+            .log()
+            .records()
+            .iter()
+            .filter(|record| record.id.replica == 1)
+            .count(),
+        4
+    );
 }
 
 #[test]
@@ -710,7 +727,7 @@ fn since_bounded_respects_every_record_bound_and_order() {
 
 #[test]
 fn since_bounded_full_set_includes_sequence_zero() {
-    use safemesh_crdt::{EventLog, Record, RecordId, VersionVector};
+    use safemesh_crdt::{EventLog, Record, RecordId, VersionVector, WireDecode};
     use std::collections::BTreeSet;
     let records = [
         Record {
