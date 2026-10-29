@@ -1,6 +1,6 @@
 [package]
 name = "safemesh-python"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 rust-version.workspace = true
 license = "Apache-2.0"
@@ -21,4 +21,4 @@ extension-module = ["pyo3/extension-module"]
 [dependencies]
 # The wheel's stable-ABI reach starts at CPython 3.8.
 pyo3 = { version = "0.22", features = ["abi3-py38"] }
-safemesh-crdt = { path = "../safemesh-crdt", version = "0.2.1" }
+safemesh-crdt = { path = "../safemesh-crdt", version = "0.2.2" }
