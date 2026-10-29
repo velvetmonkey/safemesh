@@ -1,6 +1,6 @@
 [package]
 name = "safemesh-wasm"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 rust-version.workspace = true
 license = "Apache-2.0"
@@ -14,5 +14,5 @@ categories = ["wasm", "data-structures"]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-safemesh-crdt = { path = "../safemesh-crdt", version = "0.2.1" }
+safemesh-crdt = { path = "../safemesh-crdt", version = "0.2.2" }
 wasm-bindgen = "0.2"

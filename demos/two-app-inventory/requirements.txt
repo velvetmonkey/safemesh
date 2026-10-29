@@ -1,1 +1,1 @@
-safemesh-python==0.2.1
+safemesh-python==0.2.2
