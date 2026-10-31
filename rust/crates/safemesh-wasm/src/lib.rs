@@ -402,9 +402,10 @@ fn checked_peer_version(value: JsValue) -> Result<VersionVector, JsValue> {
     Ok(peer_version(&checked_version_pairs(value)?)?)
 }
 
-/// The core's `since` selection for `peer`, framed as `logBytes` frames a log.
+/// The core's `since` selection when it fits, or bounded selection when it does not,
+/// framed as `logBytes` frames a log.
 /// The batch is then decoded under `limits` exactly as the receiver's
-/// `mergeLogBytes` decodes it, so an over-budget batch is refused here.
+/// `mergeLogBytes` decodes it.
 fn since_log_bytes<C>(
     state: &C,
     log: &EventLog<C::Delta>,
@@ -416,7 +417,14 @@ where
     C::Delta: Clone + PartialEq + WireEncode + WireDecode + WireSchema,
 {
     let mut bytes = Vec::new();
-    EventLog::encode_records(log.replica_count(), &log.since(peer), &mut bytes)
+    let missing = log.since(peer);
+    let max_records = limits.max_records.unwrap_or(usize::MAX);
+    let selected = if missing.len() <= max_records {
+        missing
+    } else {
+        log.since_bounded(peer, max_records)
+    };
+    EventLog::encode_records(log.replica_count(), &selected, &mut bytes)
         .map_err(ReplicaError::LogEncode)?;
     EventLog::records_from_wire_bytes_for_with_limits(&bytes, state, limits)
         .map_err(ReplicaError::LogDecode)?;
@@ -456,8 +464,11 @@ macro_rules! record_exchange_methods {
             /// for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
             /// as `versionVector` returns it; checked loaders refuse sequence-zero
             /// records. The wire format still carries their acknowledgement list.
-            /// The budgets are `mergeLogBytes`'s, in the same places,
-            /// and a batch over them throws the error that merge would throw.
+            /// The budgets are `mergeLogBytes`'s, in the same places. The batch
+            /// holds at most the record budget. A batch within budget keeps
+            /// the old byte order; a larger set uses core bounded order. Repeated
+            /// syncs make progress when each batch is merged. A collection
+            /// element over its budget still throws the merge error.
             #[wasm_bindgen(js_name = sinceLogBytes)]
             #[allow(non_snake_case)]
             pub fn since_log_bytes(
@@ -4403,11 +4414,209 @@ mod tests {
             max_records: Some(3),
             ..defaults
         };
+        let bounded =
+            since_log_bytes(ahead.replica.state(), ahead.replica.log(), &peer, three).unwrap();
+        let selected = EventLog::<GCounterDelta>::records_from_wire_bytes_for_with_limits(
+            &bounded,
+            ahead.replica.state(),
+            three,
+        )
+        .unwrap();
         assert_eq!(
-            since_log_bytes(ahead.replica.state(), ahead.replica.log(), &peer, three),
-            Err(ReplicaError::LogDecode(DecodeError::RecordLimitExceeded {
-                max_records: 3
-            }))
+            selected
+                .iter()
+                .map(|record| record.id.sequence)
+                .collect::<Vec<_>>(),
+            vec![7, 8, 9]
+        );
+    }
+
+    #[test]
+    fn since_bounded_gcounter_repairs_gap_under_three_record_budget() {
+        let mut writer = SafeMeshGCounterReplica::new(0, 2);
+        let mut sender = SafeMeshGCounterReplica::new(0, 2);
+        let mut receiver = SafeMeshGCounterReplica::new(1, 2);
+        let records: Vec<_> = (1..=7)
+            .map(|tally| writer.append_bump(0, tally).unwrap())
+            .collect();
+        for sequence in [1, 3, 4, 2, 5, 6, 7] {
+            sender
+                .merge_record_bytes(&records[sequence - 1], None)
+                .unwrap();
+        }
+        for sequence in [1, 3, 4] {
+            receiver
+                .merge_record_bytes(&records[sequence - 1], None)
+                .unwrap();
+        }
+        let mut syncs = 0;
+        while receiver.log_bytes().unwrap() != sender.log_bytes().unwrap() && syncs < 3 {
+            let peer = peer_version(&version_pairs(receiver.replica.log())).unwrap();
+            let batch = since_log_bytes(
+                sender.replica.state(),
+                sender.replica.log(),
+                &peer,
+                decode_limits(None, Some(3)),
+            )
+            .unwrap();
+            assert!(
+                receiver
+                    .merge_log_bytes(&batch, None, Some(3))
+                    .unwrap()
+                    .len()
+                    <= 3
+            );
+            syncs += 1;
+        }
+        assert!(syncs <= 3);
+        assert_eq!(receiver.log_bytes().unwrap(), sender.log_bytes().unwrap());
+
+        // A permanent gap for writer 0 must not starve writer 1.
+        let mut gap_writer = SafeMeshGCounterReplica::new(0, 2);
+        let mut other_writer = SafeMeshGCounterReplica::new(1, 2);
+        let mut gap_sender = SafeMeshGCounterReplica::new(0, 2);
+        let mut gap_receiver = SafeMeshGCounterReplica::new(1, 2);
+        for tally in 1..=10 {
+            let record = gap_writer.append_bump(0, tally).unwrap();
+            if tally != 2 {
+                gap_sender.merge_record_bytes(&record, None).unwrap();
+                if tally == 1 {
+                    gap_receiver.merge_record_bytes(&record, None).unwrap();
+                }
+            }
+        }
+        for tally in 1..=4 {
+            let record = other_writer.append_bump(1, tally).unwrap();
+            gap_sender.merge_record_bytes(&record, None).unwrap();
+        }
+        for _ in 0..4 {
+            let peer = peer_version(&version_pairs(gap_receiver.replica.log())).unwrap();
+            let batch = since_log_bytes(
+                gap_sender.replica.state(),
+                gap_sender.replica.log(),
+                &peer,
+                decode_limits(None, Some(3)),
+            )
+            .unwrap();
+            assert!(
+                gap_receiver
+                    .merge_log_bytes(&batch, None, Some(3))
+                    .unwrap()
+                    .len()
+                    <= 3
+            );
+        }
+        assert_eq!(gap_receiver.version_for(1), 4);
+    }
+
+    #[test]
+    fn since_bounded_string_orset_repairs_gap_under_three_record_budget() {
+        let mut writer = SafeMeshStringOrSetReplica::new(0);
+        let mut sender = SafeMeshStringOrSetReplica::new(0);
+        let mut receiver = SafeMeshStringOrSetReplica::new(1);
+        let records: Vec<_> = (1..=7)
+            .map(|token| writer.append_add(format!("item-{token}"), token).unwrap())
+            .collect();
+        for sequence in [1, 3, 4, 2, 5, 6, 7] {
+            sender
+                .merge_record_bytes(&records[sequence - 1], None)
+                .unwrap();
+        }
+        for sequence in [1, 3, 4] {
+            receiver
+                .merge_record_bytes(&records[sequence - 1], None)
+                .unwrap();
+        }
+        let mut syncs = 0;
+        while receiver.log_bytes().unwrap() != sender.log_bytes().unwrap() && syncs < 3 {
+            let peer = peer_version(&version_pairs(receiver.replica.log())).unwrap();
+            let batch = since_log_bytes(
+                sender.replica.state(),
+                sender.replica.log(),
+                &peer,
+                decode_limits(None, Some(3)),
+            )
+            .unwrap();
+            assert!(
+                receiver
+                    .merge_log_bytes(&batch, None, Some(3))
+                    .unwrap()
+                    .len()
+                    <= 3
+            );
+            syncs += 1;
+        }
+        assert!(syncs <= 3);
+        assert_eq!(receiver.log_bytes().unwrap(), sender.log_bytes().unwrap());
+    }
+
+    #[test]
+    fn since_bounded_within_budget_matches_core_since_bytes() {
+        let mut sender = SafeMeshGCounterReplica::new(0, 2);
+        let mut receiver = SafeMeshGCounterReplica::new(1, 2);
+        for tally in 1..=3 {
+            let record = sender.append_bump(0, tally).unwrap();
+            if tally == 1 {
+                receiver.merge_record_bytes(&record, None).unwrap();
+            }
+        }
+        let peer = peer_version(&version_pairs(receiver.replica.log())).unwrap();
+        let batch = since_log_bytes(
+            sender.replica.state(),
+            sender.replica.log(),
+            &peer,
+            decode_limits(None, Some(3)),
+        )
+        .unwrap();
+        let mut expected = Vec::new();
+        EventLog::encode_records(Some(2), &sender.replica.since(&peer), &mut expected).unwrap();
+        assert_eq!(batch, expected);
+    }
+
+    #[test]
+    fn since_bounded_multiwriter_within_budget_keeps_since_bytes() {
+        let mut writer_zero = SafeMeshGCounterReplica::new(0, 2);
+        let mut writer_one = SafeMeshGCounterReplica::new(1, 2);
+        let mut sender = SafeMeshGCounterReplica::new(0, 2);
+        let first = writer_zero.append_bump(0, 1).unwrap();
+        let second = writer_zero.append_bump(0, 2).unwrap();
+        let third = writer_one.append_bump(1, 1).unwrap();
+        for record in [first, second, third] {
+            sender.merge_record_bytes(&record, None).unwrap();
+        }
+        let peer = VersionVector::new();
+        let batch = since_log_bytes(
+            sender.replica.state(),
+            sender.replica.log(),
+            &peer,
+            decode_limits(None, Some(3)),
+        )
+        .unwrap();
+        let mut expected = Vec::new();
+        EventLog::encode_records(Some(2), &sender.replica.since(&peer), &mut expected).unwrap();
+        assert_eq!(batch, expected);
+    }
+
+    #[test]
+    fn since_bounded_keeps_collection_element_refusal() {
+        let mut sender = SafeMeshStringOrSetReplica::new(0);
+        sender.append_add("item".to_string(), 1).unwrap();
+        sender.append_add("item".to_string(), 2).unwrap();
+        sender.append_remove_observed("item".to_string()).unwrap();
+        let peer = VersionVector::new();
+        let limits = decode_limits(Some(1), Some(3));
+        let mut all_bytes = Vec::new();
+        EventLog::encode_records(None, &sender.replica.since(&peer), &mut all_bytes).unwrap();
+        let expected =
+            EventLog::<OrSetDelta<String, u64>>::records_from_wire_bytes_for_with_limits(
+                &all_bytes,
+                sender.replica.state(),
+                limits,
+            )
+            .unwrap_err();
+        assert_eq!(
+            since_log_bytes(sender.replica.state(), sender.replica.log(), &peer, limits),
+            Err(ReplicaError::LogDecode(expected)),
         );
     }
 
