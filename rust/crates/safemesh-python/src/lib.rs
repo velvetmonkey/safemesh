@@ -118,12 +118,13 @@ fn event_log_decode_error(error: safemesh_crdt::WireError, counter_log: bool) ->
         }
         safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch".to_owned(),
         safemesh_crdt::WireError::MissingShape => "event log missing shape".to_owned(),
-        safemesh_crdt::WireError::OwnershipViolation => if counter_log {
-            "counter coordinate out of range or not owned by record author"
-        } else {
-            "writer replica does not match record author"
+        safemesh_crdt::WireError::OwnershipViolation => {
+            if counter_log {
+                safemesh_crdt::WireError::OwnershipViolation.to_string()
+            } else {
+                "writer replica does not match record author".to_owned()
+            }
         }
-        .to_owned(),
         cause @ (safemesh_crdt::WireError::ZeroSequenceAdd { .. }
         | safemesh_crdt::WireError::ZeroSequenceRemove { .. }
         | safemesh_crdt::WireError::ZeroSequenceRecord { .. }) => cause.to_string(),
@@ -772,7 +773,7 @@ mod py_g_counter_replica_python {
             .is_err()
             {
                 return Err(pyo3::exceptions::PyValueError::new_err(
-                    "counter coordinate out of range or not owned by record author",
+                    safemesh_crdt::WireError::OwnershipViolation.to_string(),
                 ));
             }
             record_verdict(self.replica.admit(record))
@@ -3732,7 +3733,7 @@ receiver = sm.GCounterReplica(0, 2)
 try:
     receiver.merge_record_bytes(sm.GCounterReplica(2, 3).append_bump(2, 5))
 except ValueError as error:
-    assert 'not owned by record author' in str(error), error
+    assert str(error) == 'record violates replica ownership or coordinate bounds', error
 else:
     raise AssertionError('accepted an out-of-range counter coordinate')
 assert receiver.state() == [0, 0] and receiver.version_for(2) == 0
@@ -3806,7 +3807,7 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
                 assert_eq!(log, single, "{name} ownership error differs by path");
                 assert_eq!(
                     single,
-                    "ValueError: counter coordinate out of range or not owned by record author"
+                    "ValueError: record violates replica ownership or coordinate bounds"
                 );
             }
             assert_eq!(replica.value(), 0);
