@@ -1072,7 +1072,7 @@ impl SafeMeshGCounterReplica {
         {
             return Err(safe_mesh_error(
                 2,
-                "counter coordinate out of range or not owned by record author",
+                &WireError::OwnershipViolation.to_string(),
             ));
         }
         record_verdict(self.replica.admit(record)).map_err(JsValue::from)
@@ -1095,6 +1095,9 @@ impl SafeMeshGCounterReplica {
             .replica
             .decode_log_bytes(bytes, decode_limits(max_collection_elements, maxRecords))
             .map_err(|e| match e {
+                ReplicaError::LogDecode(DecodeError::Wire(WireError::OwnershipViolation)) => {
+                    safe_mesh_error(2, &WireError::OwnershipViolation.to_string())
+                }
                 ReplicaError::LogDecode(e) => {
                     event_log_decode_js_error(e, true, maxRecords.is_none())
                 }
