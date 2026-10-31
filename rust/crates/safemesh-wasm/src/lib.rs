@@ -402,7 +402,8 @@ fn checked_peer_version(value: JsValue) -> Result<VersionVector, JsValue> {
     Ok(peer_version(&checked_version_pairs(value)?)?)
 }
 
-/// The core's bounded `since` selection for `peer`, framed as `logBytes` frames a log.
+/// The core's `since` selection when it fits, or bounded selection when it does not,
+/// framed as `logBytes` frames a log.
 /// The batch is then decoded under `limits` exactly as the receiver's
 /// `mergeLogBytes` decodes it.
 fn since_log_bytes<C>(
@@ -416,12 +417,15 @@ where
     C::Delta: Clone + PartialEq + WireEncode + WireDecode + WireSchema,
 {
     let mut bytes = Vec::new();
-    EventLog::encode_records(
-        log.replica_count(),
-        &log.since_bounded(peer, limits.max_records.unwrap_or(usize::MAX)),
-        &mut bytes,
-    )
-    .map_err(ReplicaError::LogEncode)?;
+    let missing = log.since(peer);
+    let max_records = limits.max_records.unwrap_or(usize::MAX);
+    let selected = if missing.len() <= max_records {
+        missing
+    } else {
+        log.since_bounded(peer, max_records)
+    };
+    EventLog::encode_records(log.replica_count(), &selected, &mut bytes)
+        .map_err(ReplicaError::LogEncode)?;
     EventLog::records_from_wire_bytes_for_with_limits(&bytes, state, limits)
         .map_err(ReplicaError::LogDecode)?;
     Ok(bytes)
@@ -461,7 +465,8 @@ macro_rules! record_exchange_methods {
             /// as `versionVector` returns it; checked loaders refuse sequence-zero
             /// records. The wire format still carries their acknowledgement list.
             /// The budgets are `mergeLogBytes`'s, in the same places. The batch
-            /// holds at most the record budget in core bounded order. Repeated
+            /// holds at most the record budget. A batch within budget keeps
+            /// the old byte order; a larger set uses core bounded order. Repeated
             /// syncs make progress when each batch is merged. A collection
             /// element over its budget still throws the merge error.
             #[wasm_bindgen(js_name = sinceLogBytes)]
@@ -4556,6 +4561,30 @@ mod tests {
             }
         }
         let peer = peer_version(&version_pairs(receiver.replica.log())).unwrap();
+        let batch = since_log_bytes(
+            sender.replica.state(),
+            sender.replica.log(),
+            &peer,
+            decode_limits(None, Some(3)),
+        )
+        .unwrap();
+        let mut expected = Vec::new();
+        EventLog::encode_records(Some(2), &sender.replica.since(&peer), &mut expected).unwrap();
+        assert_eq!(batch, expected);
+    }
+
+    #[test]
+    fn since_bounded_multiwriter_within_budget_keeps_since_bytes() {
+        let mut writer_zero = SafeMeshGCounterReplica::new(0, 2);
+        let mut writer_one = SafeMeshGCounterReplica::new(1, 2);
+        let mut sender = SafeMeshGCounterReplica::new(0, 2);
+        let first = writer_zero.append_bump(0, 1).unwrap();
+        let second = writer_zero.append_bump(0, 2).unwrap();
+        let third = writer_one.append_bump(1, 1).unwrap();
+        for record in [first, second, third] {
+            sender.merge_record_bytes(&record, None).unwrap();
+        }
+        let peer = VersionVector::new();
         let batch = since_log_bytes(
             sender.replica.state(),
             sender.replica.log(),

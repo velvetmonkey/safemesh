@@ -88,7 +88,8 @@ export class SafeMeshEnableWinsFlagReplica {
      * as `versionVector` returns it; checked loaders refuse sequence-zero
      * records. The wire format still carries their acknowledgement list.
      * The budgets are `mergeLogBytes`'s, in the same places. The batch
-     * holds at most the record budget in core bounded order. Repeated
+     * holds at most the record budget. A batch within budget keeps
+     * the old byte order; a larger set uses core bounded order. Repeated
      * syncs make progress when each batch is merged. A collection
      * element over its budget still throws the merge error.
      */
@@ -170,7 +171,8 @@ export class SafeMeshGCounterReplica {
      * as `versionVector` returns it; checked loaders refuse sequence-zero
      * records. The wire format still carries their acknowledgement list.
      * The budgets are `mergeLogBytes`'s, in the same places. The batch
-     * holds at most the record budget in core bounded order. Repeated
+     * holds at most the record budget. A batch within budget keeps
+     * the old byte order; a larger set uses core bounded order. Repeated
      * syncs make progress when each batch is merged. A collection
      * element over its budget still throws the merge error.
      */
@@ -265,7 +267,8 @@ export class SafeMeshLwwMapReplica {
      * as `versionVector` returns it; checked loaders refuse sequence-zero
      * records. The wire format still carries their acknowledgement list.
      * The budgets are `mergeLogBytes`'s, in the same places. The batch
-     * holds at most the record budget in core bounded order. Repeated
+     * holds at most the record budget. A batch within budget keeps
+     * the old byte order; a larger set uses core bounded order. Repeated
      * syncs make progress when each batch is merged. A collection
      * element over its budget still throws the merge error.
      */
@@ -343,7 +346,8 @@ export class SafeMeshLwwRegisterReplica {
      * as `versionVector` returns it; checked loaders refuse sequence-zero
      * records. The wire format still carries their acknowledgement list.
      * The budgets are `mergeLogBytes`'s, in the same places. The batch
-     * holds at most the record budget in core bounded order. Repeated
+     * holds at most the record budget. A batch within budget keeps
+     * the old byte order; a larger set uses core bounded order. Repeated
      * syncs make progress when each batch is merged. A collection
      * element over its budget still throws the merge error.
      */
@@ -477,7 +481,8 @@ export class SafeMeshPnCounterReplica {
      * as `versionVector` returns it; checked loaders refuse sequence-zero
      * records. The wire format still carries their acknowledgement list.
      * The budgets are `mergeLogBytes`'s, in the same places. The batch
-     * holds at most the record budget in core bounded order. Repeated
+     * holds at most the record budget. A batch within budget keeps
+     * the old byte order; a larger set uses core bounded order. Repeated
      * syncs make progress when each batch is merged. A collection
      * element over its budget still throws the merge error.
      */
@@ -667,7 +672,8 @@ export class SafeMeshStringOrSetReplica {
      * as `versionVector` returns it; checked loaders refuse sequence-zero
      * records. The wire format still carries their acknowledgement list.
      * The budgets are `mergeLogBytes`'s, in the same places. The batch
-     * holds at most the record budget in core bounded order. Repeated
+     * holds at most the record budget. A batch within budget keeps
+     * the old byte order; a larger set uses core bounded order. Repeated
      * syncs make progress when each batch is merged. A collection
      * element over its budget still throws the merge error.
      */
