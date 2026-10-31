@@ -84,9 +84,11 @@ for (const [name, coordinate] of [["out-of-range", 2], ["not-owned", 0]]) {
     const receiver = make(0n);
     const singleError = caughtError(() => receiver.mergeRecordBytes(invalid));
     const logError = caughtError(() => receiver.mergeLogBytes(log));
-    // The complete-log counter refusal keeps its historical message and code.
+    // The complete-log counter refusal keeps code 2.
     assertSafeMeshError(() => receiver.mergeLogBytes(log), 2,
-      "counter coordinate out of range or not owned by record author");
+      kind === "G-Counter"
+        ? "record violates replica ownership or coordinate bounds"
+        : "counter coordinate out of range or not owned by record author");
     console.log(`WASM ${kind} ${name}: single=${JSON.stringify(singleError)}, log=${JSON.stringify(logError)}`);
     ownershipErrors.push({ name: `${kind} ${name}`, singleError, logError });
     author.free();
@@ -113,7 +115,9 @@ for (const { name, singleError, logError } of ownershipErrors) {
   assert.deepEqual(logError, singleError, `${name} ownership error differs by path`);
   assert.deepEqual(singleError, {
     code: 2,
-    message: "counter coordinate out of range or not owned by record author",
+    message: name.startsWith("G-Counter")
+      ? "record violates replica ownership or coordinate bounds"
+      : "counter coordinate out of range or not owned by record author",
   });
 }
 
@@ -406,7 +410,10 @@ for (const [wide, narrow, write] of [
   try {
     const record = write(wide), before = snapshot(narrow);
     assert.throws(() => narrow.mergeRecordBytes(record), error =>
-      error.name === "SafeMeshError" && error.code === 2 && /not owned by record author/.test(error.message));
+      error.name === "SafeMeshError" && error.code === 2 &&
+      error.message === (wide instanceof wasm.SafeMeshGCounterReplica
+        ? "record violates replica ownership or coordinate bounds"
+        : "counter coordinate out of range or not owned by record author"));
     assert.deepEqual(snapshot(narrow), before);
   } finally { wide.free(); narrow.free(); }
 }

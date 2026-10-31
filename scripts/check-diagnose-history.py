@@ -99,8 +99,9 @@ def diagnose_section(page):
 
 def history_display_on_page(section, variant, display):
     folded_display = " ".join(display.split())
-    return any(f"{variant}{context} (Display: {folded_display})" in section
-               for context in ("", " on restart"))
+    pairs = re.findall(rf"{re.escape(variant)}(?: on restart)? \(Display: ([^)]*)\)",
+                       section)
+    return bool(pairs) and all(pair == folded_display for pair in pairs)
 
 
 def main():

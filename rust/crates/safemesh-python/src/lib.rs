@@ -112,18 +112,17 @@ fn record_decode_error(error: safemesh_crdt::WireError) -> PyErr {
 // Counter ownership covers coordinates; other carriers name the record writer.
 fn event_log_decode_error(error: safemesh_crdt::WireError, counter_log: bool) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(match error {
-        safemesh_crdt::WireError::RecordCollision => "record ID collision".to_owned(),
-        safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
-            "replica count mismatch".to_owned()
-        }
-        safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch".to_owned(),
+        cause @ (safemesh_crdt::WireError::RecordCollision
+        | safemesh_crdt::WireError::ReplicaCountMismatch { .. }
+        | safemesh_crdt::WireError::DeltaTypeMismatch) => cause.to_string(),
         safemesh_crdt::WireError::MissingShape => "event log missing shape".to_owned(),
-        safemesh_crdt::WireError::OwnershipViolation => if counter_log {
-            "counter coordinate out of range or not owned by record author"
-        } else {
-            "writer replica does not match record author"
+        safemesh_crdt::WireError::OwnershipViolation => {
+            if counter_log {
+                safemesh_crdt::WireError::OwnershipViolation.to_string()
+            } else {
+                "writer replica does not match record author".to_owned()
+            }
         }
-        .to_owned(),
         cause @ (safemesh_crdt::WireError::ZeroSequenceAdd { .. }
         | safemesh_crdt::WireError::ZeroSequenceRemove { .. }
         | safemesh_crdt::WireError::ZeroSequenceRecord { .. }) => cause.to_string(),
@@ -772,7 +771,7 @@ mod py_g_counter_replica_python {
             .is_err()
             {
                 return Err(pyo3::exceptions::PyValueError::new_err(
-                    "counter coordinate out of range or not owned by record author",
+                    safemesh_crdt::WireError::OwnershipViolation.to_string(),
                 ));
             }
             record_verdict(self.replica.admit(record))
@@ -1495,11 +1494,12 @@ fn string_orset_log_decode_error(error: DecodeError, omitted: bool) -> String {
         DecodeError::Wire(WireError::CollectionElementLimitExceeded { max_elements }) => {
             format!("maxCollectionElements limit exceeded: {max_elements}")
         }
-        DecodeError::Wire(WireError::RecordCollision) => "record ID collision".to_owned(),
+        DecodeError::Wire(cause @ (WireError::RecordCollision | WireError::DeltaTypeMismatch)) => {
+            cause.to_string()
+        }
         DecodeError::Wire(WireError::ReplicaCountMismatch { .. }) => {
             "replica count mismatch".to_owned()
         }
-        DecodeError::Wire(WireError::DeltaTypeMismatch) => "delta type mismatch".to_owned(),
         DecodeError::Wire(WireError::MissingShape) => "event log missing shape".to_owned(),
         DecodeError::Wire(cause) => format!("failed to decode event log: {cause}"),
         DecodeError::RecordLimitExceeded { max_records } => {
@@ -3385,7 +3385,7 @@ mod admission_tests {
                         .merge_log_bytes(bytes, None)
                         .unwrap_err()
                         .to_string()
-                        .contains("record ID collision"));
+                        .contains("record identity has conflicting payloads"));
                     assert_eq!(*empty.test_state(), state);
                     assert!(empty.test_log().records().is_empty());
                 }};
@@ -3732,7 +3732,7 @@ receiver = sm.GCounterReplica(0, 2)
 try:
     receiver.merge_record_bytes(sm.GCounterReplica(2, 3).append_bump(2, 5))
 except ValueError as error:
-    assert 'not owned by record author' in str(error), error
+    assert str(error) == 'record violates replica ownership or coordinate bounds', error
 else:
     raise AssertionError('accepted an out-of-range counter coordinate')
 assert receiver.state() == [0, 0] and receiver.version_for(2) == 0
@@ -3762,7 +3762,7 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
                 .merge_log_bytes(&bytes, None)
                 .unwrap_err()
                 .to_string()
-                .contains("replica count mismatch"));
+                .contains("replica-count mismatch: expected=3, actual=2"));
             assert_eq!(*target.replica.state(), state);
             assert_eq!(*target.replica.log(), log);
             let mut matching = PyGCounterReplica::new(0, 2).unwrap();
@@ -3806,7 +3806,7 @@ print('PYTHON_RECORD_VERDICTS=%d' % verdicts)
                 assert_eq!(log, single, "{name} ownership error differs by path");
                 assert_eq!(
                     single,
-                    "ValueError: counter coordinate out of range or not owned by record author"
+                    "ValueError: record violates replica ownership or coordinate bounds"
                 );
             }
             assert_eq!(replica.value(), 0);
