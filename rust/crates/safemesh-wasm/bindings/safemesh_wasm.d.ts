@@ -87,8 +87,10 @@ export class SafeMeshEnableWinsFlagReplica {
      * for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
      * as `versionVector` returns it; checked loaders refuse sequence-zero
      * records. The wire format still carries their acknowledgement list.
-     * The budgets are `mergeLogBytes`'s, in the same places,
-     * and a batch over them throws the error that merge would throw.
+     * The budgets are `mergeLogBytes`'s, in the same places. The batch
+     * holds at most the record budget in core bounded order. Repeated
+     * syncs make progress when each batch is merged. A collection
+     * element over its budget still throws the merge error.
      */
     sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;
     tombstoneTokens(): BigUint64Array;
@@ -167,8 +169,10 @@ export class SafeMeshGCounterReplica {
      * for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
      * as `versionVector` returns it; checked loaders refuse sequence-zero
      * records. The wire format still carries their acknowledgement list.
-     * The budgets are `mergeLogBytes`'s, in the same places,
-     * and a batch over them throws the error that merge would throw.
+     * The budgets are `mergeLogBytes`'s, in the same places. The batch
+     * holds at most the record budget in core bounded order. Repeated
+     * syncs make progress when each batch is merged. A collection
+     * element over its budget still throws the merge error.
      */
     sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;
     state(): BigUint64Array;
@@ -260,8 +264,10 @@ export class SafeMeshLwwMapReplica {
      * for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
      * as `versionVector` returns it; checked loaders refuse sequence-zero
      * records. The wire format still carries their acknowledgement list.
-     * The budgets are `mergeLogBytes`'s, in the same places,
-     * and a batch over them throws the error that merge would throw.
+     * The budgets are `mergeLogBytes`'s, in the same places. The batch
+     * holds at most the record budget in core bounded order. Repeated
+     * syncs make progress when each batch is merged. A collection
+     * element over its budget still throws the merge error.
      */
     sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;
     /**
@@ -336,8 +342,10 @@ export class SafeMeshLwwRegisterReplica {
      * for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
      * as `versionVector` returns it; checked loaders refuse sequence-zero
      * records. The wire format still carries their acknowledgement list.
-     * The budgets are `mergeLogBytes`'s, in the same places,
-     * and a batch over them throws the error that merge would throw.
+     * The budgets are `mergeLogBytes`'s, in the same places. The batch
+     * holds at most the record budget in core bounded order. Repeated
+     * syncs make progress when each batch is merged. A collection
+     * element over its budget still throws the merge error.
      */
     sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;
     timestampOr(default_value: bigint): bigint;
@@ -468,8 +476,10 @@ export class SafeMeshPnCounterReplica {
      * for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
      * as `versionVector` returns it; checked loaders refuse sequence-zero
      * records. The wire format still carries their acknowledgement list.
-     * The budgets are `mergeLogBytes`'s, in the same places,
-     * and a batch over them throws the error that merge would throw.
+     * The budgets are `mergeLogBytes`'s, in the same places. The batch
+     * holds at most the record budget in core bounded order. Repeated
+     * syncs make progress when each batch is merged. A collection
+     * element over its budget still throws the merge error.
      */
     sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;
     /**
@@ -656,8 +666,10 @@ export class SafeMeshStringOrSetReplica {
      * for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
      * as `versionVector` returns it; checked loaders refuse sequence-zero
      * records. The wire format still carries their acknowledgement list.
-     * The budgets are `mergeLogBytes`'s, in the same places,
-     * and a batch over them throws the error that merge would throw.
+     * The budgets are `mergeLogBytes`'s, in the same places. The batch
+     * holds at most the record budget in core bounded order. Repeated
+     * syncs make progress when each batch is merged. A collection
+     * element over its budget still throws the merge error.
      */
     sinceLogBytes(peerVersion: BigUint64Array, max_collection_elements?: number | null, maxRecords?: number | null): Uint8Array;
     tombstones(): BigUint64Array;

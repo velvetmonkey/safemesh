@@ -402,9 +402,9 @@ fn checked_peer_version(value: JsValue) -> Result<VersionVector, JsValue> {
     Ok(peer_version(&checked_version_pairs(value)?)?)
 }
 
-/// The core's `since` selection for `peer`, framed as `logBytes` frames a log.
+/// The core's bounded `since` selection for `peer`, framed as `logBytes` frames a log.
 /// The batch is then decoded under `limits` exactly as the receiver's
-/// `mergeLogBytes` decodes it, so an over-budget batch is refused here.
+/// `mergeLogBytes` decodes it.
 fn since_log_bytes<C>(
     state: &C,
     log: &EventLog<C::Delta>,
@@ -416,8 +416,12 @@ where
     C::Delta: Clone + PartialEq + WireEncode + WireDecode + WireSchema,
 {
     let mut bytes = Vec::new();
-    EventLog::encode_records(log.replica_count(), &log.since(peer), &mut bytes)
-        .map_err(ReplicaError::LogEncode)?;
+    EventLog::encode_records(
+        log.replica_count(),
+        &log.since_bounded(peer, limits.max_records.unwrap_or(usize::MAX)),
+        &mut bytes,
+    )
+    .map_err(ReplicaError::LogEncode)?;
     EventLog::records_from_wire_bytes_for_with_limits(&bytes, state, limits)
         .map_err(ReplicaError::LogDecode)?;
     Ok(bytes)
@@ -456,8 +460,10 @@ macro_rules! record_exchange_methods {
             /// for its `mergeLogBytes`. `peerVersion` is `[author, prefix, ...]`
             /// as `versionVector` returns it; checked loaders refuse sequence-zero
             /// records. The wire format still carries their acknowledgement list.
-            /// The budgets are `mergeLogBytes`'s, in the same places,
-            /// and a batch over them throws the error that merge would throw.
+            /// The budgets are `mergeLogBytes`'s, in the same places. The batch
+            /// holds at most the record budget in core bounded order. Repeated
+            /// syncs make progress when each batch is merged. A collection
+            /// element over its budget still throws the merge error.
             #[wasm_bindgen(js_name = sinceLogBytes)]
             #[allow(non_snake_case)]
             pub fn since_log_bytes(
@@ -4422,13 +4428,21 @@ mod tests {
 
     #[test]
     fn since_bounded_gcounter_repairs_gap_under_three_record_budget() {
+        let mut writer = SafeMeshGCounterReplica::new(0, 2);
         let mut sender = SafeMeshGCounterReplica::new(0, 2);
         let mut receiver = SafeMeshGCounterReplica::new(1, 2);
-        for tally in 1..=7 {
-            let record = sender.append_bump(0, tally).unwrap();
-            if matches!(tally, 1 | 3 | 4) {
-                receiver.merge_record_bytes(&record, None).unwrap();
-            }
+        let records: Vec<_> = (1..=7)
+            .map(|tally| writer.append_bump(0, tally).unwrap())
+            .collect();
+        for sequence in [1, 3, 4, 2, 5, 6, 7] {
+            sender
+                .merge_record_bytes(&records[sequence - 1], None)
+                .unwrap();
+        }
+        for sequence in [1, 3, 4] {
+            receiver
+                .merge_record_bytes(&records[sequence - 1], None)
+                .unwrap();
         }
         let mut syncs = 0;
         while receiver.log_bytes().unwrap() != sender.log_bytes().unwrap() && syncs < 3 {
@@ -4492,13 +4506,21 @@ mod tests {
 
     #[test]
     fn since_bounded_string_orset_repairs_gap_under_three_record_budget() {
+        let mut writer = SafeMeshStringOrSetReplica::new(0);
         let mut sender = SafeMeshStringOrSetReplica::new(0);
         let mut receiver = SafeMeshStringOrSetReplica::new(1);
-        for token in 1..=7 {
-            let record = sender.append_add(format!("item-{token}"), token).unwrap();
-            if matches!(token, 1 | 3 | 4) {
-                receiver.merge_record_bytes(&record, None).unwrap();
-            }
+        let records: Vec<_> = (1..=7)
+            .map(|token| writer.append_add(format!("item-{token}"), token).unwrap())
+            .collect();
+        for sequence in [1, 3, 4, 2, 5, 6, 7] {
+            sender
+                .merge_record_bytes(&records[sequence - 1], None)
+                .unwrap();
+        }
+        for sequence in [1, 3, 4] {
+            receiver
+                .merge_record_bytes(&records[sequence - 1], None)
+                .unwrap();
         }
         let mut syncs = 0;
         while receiver.log_bytes().unwrap() != sender.log_bytes().unwrap() && syncs < 3 {
