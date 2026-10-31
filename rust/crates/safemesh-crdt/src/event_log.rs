@@ -312,6 +312,45 @@ impl<D: Clone> EventLog<D> {
             .cloned()
             .collect()
     }
+
+    /// Return at most `max_records` missing records. For each rank, visit
+    /// writers in ascending replica ID and take that writer's record at the
+    /// rank, ordered by ascending sequence. Repeated calls make progress when
+    /// each delivered batch is admitted and the peer reports its new version.
+    pub fn since_bounded(&self, version: &VersionVector, max_records: usize) -> Vec<Record<D>> {
+        if max_records == 0 {
+            return Vec::new();
+        }
+        let mut writers: BTreeMap<u64, Vec<&Record<D>>> = BTreeMap::new();
+        for record in self
+            .records
+            .iter()
+            .filter(|record| !version.includes(record.id))
+        {
+            writers.entry(record.id.replica).or_default().push(record);
+        }
+        for records in writers.values_mut() {
+            records.sort_by_key(|record| record.id.sequence);
+        }
+        let mut result = Vec::new();
+        let mut rank = 0;
+        loop {
+            let mut found = false;
+            for records in writers.values() {
+                if let Some(record) = records.get(rank) {
+                    result.push((*record).clone());
+                    if result.len() == max_records {
+                        return result;
+                    }
+                    found = true;
+                }
+            }
+            if !found {
+                return result;
+            }
+            rank += 1;
+        }
+    }
 }
 
 impl<D> Default for EventLog<D> {
