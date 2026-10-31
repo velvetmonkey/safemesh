@@ -507,8 +507,8 @@ SafeMeshStringOrSetReplica.mergeRecordBytes(logBytes()): threw SafeMeshError cod
 SafeMeshStringOrSetReplica.mergeLogBytes(<record bytes>): threw SafeMeshError code=1 message="failed to decode event log: unexpected wire tag"
 first mergeRecordBytes of one record: returned "accepted"
 second mergeRecordBytes of the same record: returned "duplicate"
-width-2 replica .mergeLogBytes(logs/left-counter.log written at width 3): threw SafeMeshError code=1 message="replica count mismatch"
-SafeMeshStringOrSetReplica.mergeLogBytes(logs/left-counter.log): threw SafeMeshError code=1 message="delta type mismatch"
+width-2 replica .mergeLogBytes(logs/left-counter.log written at width 3): threw SafeMeshError code=1 message="replica-count mismatch: expected=2, actual=3"
+SafeMeshStringOrSetReplica.mergeLogBytes(logs/left-counter.log): threw SafeMeshError code=1 message="wire delta schema does not match the expected type"
 ```
 
 `mergeRecordBytes` takes one record, as returned by `appendBump`, `appendAdd` or
@@ -517,8 +517,9 @@ SafeMeshStringOrSetReplica.mergeLogBytes(logs/left-counter.log): threw SafeMeshE
 `failed to decode record: unexpected wire tag` or
 `failed to decode event log: unexpected wire tag`.
 A G-Counter log only restores into a replica built with the same width; a
-different width throws `replica count mismatch`. A counter log will not restore
-into a set replica or the reverse; that throws `delta type mismatch`.
+different width throws `replica-count mismatch` with the expected and actual
+widths. A counter log will not restore into a set replica or the reverse; that
+throws `wire delta schema does not match the expected type`.
 
 A log saved by an earlier build, before the log frame carried its CRC or its
 shape header, throws code 1 with the frame named and the upgrade step in the

@@ -228,13 +228,9 @@ fn event_log_decode_js_error(error: DecodeError, counter_log: bool, omitted: boo
                 &format!("maxCollectionElements limit exceeded: {max_elements}"),
             )
         }
-        DecodeError::Wire(WireError::RecordCollision) => safe_mesh_error(1, "record ID collision"),
-        DecodeError::Wire(WireError::ReplicaCountMismatch { .. }) => {
-            safe_mesh_error(1, "replica count mismatch")
-        }
-        DecodeError::Wire(WireError::DeltaTypeMismatch) => {
-            safe_mesh_error(1, "delta type mismatch")
-        }
+        DecodeError::Wire(cause @ (WireError::RecordCollision
+        | WireError::ReplicaCountMismatch { .. }
+        | WireError::DeltaTypeMismatch)) => safe_mesh_error(1, &cause.to_string()),
         DecodeError::Wire(WireError::MissingShape) => safe_mesh_error(1, "event log missing shape"),
         DecodeError::RecordLimitExceeded { max_records } => safe_mesh_error(
             1,
@@ -1672,11 +1668,15 @@ fn event_log_decode_error(error: safemesh_crdt::WireError) -> BindingError {
     binding_error(
         1,
         match error {
-            safemesh_crdt::WireError::RecordCollision => "record ID collision".to_string(),
+            safemesh_crdt::WireError::RecordCollision => {
+                safemesh_crdt::WireError::RecordCollision.to_string()
+            }
             safemesh_crdt::WireError::ReplicaCountMismatch { .. } => {
                 "replica count mismatch".to_string()
             }
-            safemesh_crdt::WireError::DeltaTypeMismatch => "delta type mismatch".to_string(),
+            safemesh_crdt::WireError::DeltaTypeMismatch => {
+                safemesh_crdt::WireError::DeltaTypeMismatch.to_string()
+            }
             safemesh_crdt::WireError::MissingShape => "event log missing shape".to_string(),
             // Same text as the single-record path: it names the record and a recovery step.
             error @ (safemesh_crdt::WireError::ZeroSequenceAdd { .. }
