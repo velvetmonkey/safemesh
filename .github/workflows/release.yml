@@ -147,6 +147,12 @@ jobs:
             cmp "$name" "$RUNNER_TEMP/original/$name"
           done < SHA256SUMS
           test "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = true
+      - name: Check clean release installs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$GITHUB_REF_NAME" "https://github.com/$GITHUB_REPOSITORY.git" "$RUNNER_TEMP/install-check-source"
+          bash "$RUNNER_TEMP/install-check-source/scripts/check-release-install.sh" "$RUNNER_TEMP/draft"
 
   publish:
     needs: verify-draft

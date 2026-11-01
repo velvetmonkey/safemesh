@@ -24,7 +24,7 @@ def plant(folder, names=NAMES, corrupt=None):
 
 
 def check(name, names=NAMES, corrupt=None, expected=''):
-    with tempfile.TemporaryDirectory(prefix='release-install-test-') as raw:
+    with tempfile.TemporaryDirectory(prefix='release-install-test-', dir=ROOT.parent) as raw:
         folder = Path(raw)
         plant(folder, names, corrupt)
         result = subprocess.run(['bash', str(SCRIPT), str(folder)],

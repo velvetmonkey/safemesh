@@ -15,7 +15,7 @@ fi
   sha256sum --check SHA256SUMS
 ) || { echo 'release install: SHA256SUMS check failed' >&2; exit 1; }
 
-work="$(mktemp -d "${TMPDIR:-${RUNNER_TEMP:-$PWD}}/safemesh-release-install.XXXXXXXX")"
+work="$(mktemp -d "${TMPDIR:-${RUNNER_TEMP:-/var/tmp}}/safemesh-release-install.XXXXXXXX")"
 cleanup() { python3 - "$work" <<'PY'
 import shutil, sys
 shutil.rmtree(sys.argv[1])

@@ -31,6 +31,15 @@ def check(path: Path) -> list[str]:
         'draft state before publish': r'Publish only the verified draft.*isDraft.*gh release edit.*--draft=false',
     }
     errors = [name for name, pattern in required.items() if not re.search(pattern, text, re.S)]
+    verify_draft = text.split('  verify-draft:', 1)[-1].split('\n  publish:', 1)[0]
+    install_step = re.search(
+        r'^      - name: Check clean release installs\n'
+        r'(?:(?!^      - |^  [\w-]+:).)*'
+        r'bash "\$RUNNER_TEMP/install-check-source/scripts/check-release-install\.sh" "\$RUNNER_TEMP/draft"',
+        verify_draft, re.M | re.S,
+    )
+    if not install_step or verify_draft.find('Download and verify the draft bytes') > install_step.start():
+        errors.append('verify-draft clean release installs')
     release_steps = (
         'Create a draft from the checked assets',
         'Download and verify the draft bytes',
