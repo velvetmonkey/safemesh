@@ -67,7 +67,7 @@ Every function that takes a handle or an owned buffer is `unsafe extern "C"` on 
 
 From Rust, these functions can only be called inside an `unsafe` block. `tests/compile_fail.rs` compiles planted safe-Rust callers, including the double free, and requires that rustc rejects each with error `E0133`.
 
-`safemesh-ffi` has a versioned path dependency on `safemesh-crdt`. A crates.io publish dry-run for this wrapper can only pass after the core crate exists in the registry; v0.2 CI dry-runs the core crate and builds this wrapper locally.
+`safemesh-ffi` has a versioned path dependency on `safemesh-crdt`. A crates.io publish dry-run for this wrapper can only pass after the core crate exists in the registry; v1.0 CI dry-runs the core crate and builds this wrapper locally.
 
 ## Checked coordinates and OR-Set
 
