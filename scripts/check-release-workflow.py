@@ -73,13 +73,13 @@ def check(path: Path) -> list[str]:
             errors.append(f'repository bound: {name}')
     for name in ('safemesh-crdt', 'safemesh-ffi', 'safemesh-python', 'safemesh-wasm'):
         data = tomllib.loads((ROOT / 'rust/crates' / name / 'Cargo.toml').read_text())
-        if data['package']['version'] != '0.2.2':
+        if data['package']['version'] != '1.0.0':
             errors.append(f'{name} version')
-        if name != 'safemesh-crdt' and data['dependencies']['safemesh-crdt']['version'] != '0.2.2':
+        if name != 'safemesh-crdt' and data['dependencies']['safemesh-crdt']['version'] != '1.0.0':
             errors.append(f'{name} core dependency')
-    if tomllib.loads((ROOT / 'rust/crates/safemesh-python/pyproject.toml').read_text())['project']['version'] != '0.2.2':
+    if tomllib.loads((ROOT / 'rust/crates/safemesh-python/pyproject.toml').read_text())['project']['version'] != '1.0.0':
         errors.append('Python package version')
-    if json.loads((ROOT / 'web/package.json').read_text())['version'] != '0.2.2':
+    if json.loads((ROOT / 'web/package.json').read_text())['version'] != '1.0.0':
         errors.append('web package version')
     return errors
 
