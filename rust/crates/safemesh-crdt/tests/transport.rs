@@ -578,3 +578,189 @@ fn sync_preserves_drop_duplicate_and_partition_recovery() {
             .is_empty()
     );
 }
+
+fn limited_exchange(
+    sender: &safemesh_crdt::Replica<safemesh_crdt::GCounter>,
+    receiver: &mut safemesh_crdt::Replica<safemesh_crdt::GCounter>,
+    bounded: bool,
+) -> Result<Vec<Admission>, safemesh_crdt::ReplicaError> {
+    use safemesh_crdt::{DecodeLimits, EventLog};
+    let records = if bounded {
+        sender.since_bounded(receiver.version(), 3)
+    } else {
+        sender.since(receiver.version())
+    };
+    let mut bytes = Vec::new();
+    EventLog::encode_records(Some(2), &records, &mut bytes).unwrap();
+    receiver.merge_log_bytes(
+        &bytes,
+        DecodeLimits {
+            max_records: Some(3),
+            ..DecodeLimits::default()
+        },
+    )
+}
+
+fn gap_pair() -> (
+    safemesh_crdt::Replica<safemesh_crdt::GCounter>,
+    safemesh_crdt::Replica<safemesh_crdt::GCounter>,
+) {
+    use safemesh_crdt::{GCounter, Replica};
+    let mut sender = Replica::new(GCounter::new(2));
+    let mut receiver = Replica::new(GCounter::new(2));
+    for tally in 1..=7 {
+        let record = sender
+            .append(1, GCounterDelta { replica: 1, tally })
+            .unwrap();
+        if matches!(tally, 1 | 3 | 4) {
+            assert_eq!(receiver.admit(record), Admission::Accepted);
+        }
+    }
+    assert_eq!(receiver.version().get(1), 1);
+    (sender, receiver)
+}
+
+#[test]
+fn since_stalls_under_small_record_limit() {
+    use safemesh_crdt::{DecodeError, ReplicaError};
+    let (sender, mut receiver) = gap_pair();
+    for _ in 0..3 {
+        assert_eq!(
+            limited_exchange(&sender, &mut receiver, false),
+            Err(ReplicaError::LogDecode(DecodeError::RecordLimitExceeded {
+                max_records: 3
+            }))
+        );
+        assert_eq!(receiver.version().get(1), 1);
+        assert_eq!(receiver.log().records().len(), 3);
+    }
+}
+
+#[test]
+fn since_bounded_repairs_under_small_record_limit() {
+    let (sender, mut receiver) = gap_pair();
+    assert_eq!(
+        limited_exchange(&sender, &mut receiver, true).unwrap(),
+        vec![
+            Admission::Accepted,
+            Admission::Duplicate,
+            Admission::Duplicate
+        ]
+    );
+    assert_eq!(receiver.version().get(1), 4);
+    assert_eq!(
+        limited_exchange(&sender, &mut receiver, true).unwrap(),
+        vec![Admission::Accepted; 3]
+    );
+    assert_eq!(receiver.version(), sender.version());
+    assert_eq!(receiver.state(), sender.state());
+}
+
+#[test]
+fn since_bounded_round_robin_does_not_starve_other_writer() {
+    use safemesh_crdt::{GCounter, Record, RecordId, Replica};
+    let mut sender = Replica::new(GCounter::new(2));
+    let mut receiver = Replica::new(GCounter::new(2));
+    for sequence in [1].into_iter().chain(3..=10) {
+        assert_eq!(
+            sender.admit(Record {
+                id: RecordId {
+                    replica: 0,
+                    sequence,
+                },
+                delta: GCounterDelta {
+                    replica: 0,
+                    tally: sequence,
+                },
+            }),
+            Admission::Accepted
+        );
+    }
+    for tally in 1..=4 {
+        sender
+            .append(1, GCounterDelta { replica: 1, tally })
+            .unwrap();
+    }
+    for _ in 0..4 {
+        assert_eq!(
+            limited_exchange(&sender, &mut receiver, true)
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+    assert_eq!(receiver.version().get(1), 4);
+    assert_eq!(
+        receiver
+            .log()
+            .records()
+            .iter()
+            .filter(|record| record.id.replica == 1)
+            .count(),
+        4
+    );
+}
+
+#[test]
+fn since_bounded_respects_every_record_bound_and_order() {
+    use std::collections::BTreeSet;
+    let (sender, receiver) = gap_pair();
+    let all = sender.since(receiver.version());
+    let all_ids: BTreeSet<_> = all.iter().map(|record| record.id).collect();
+    for n in 0..=all.len() + 2 {
+        let selected = sender.since_bounded(receiver.version(), n);
+        let ids: BTreeSet<_> = selected.iter().map(|record| record.id).collect();
+        assert_eq!(selected.len(), n.min(all.len()));
+        assert_eq!(ids.len(), selected.len());
+        assert!(ids.is_subset(&all_ids));
+    }
+    assert!(sender.since_bounded(receiver.version(), 0).is_empty());
+    assert_eq!(
+        sender
+            .since_bounded(receiver.version(), usize::MAX)
+            .iter()
+            .map(|record| record.id)
+            .collect::<BTreeSet<_>>(),
+        all_ids
+    );
+}
+
+#[test]
+fn since_bounded_full_set_includes_sequence_zero() {
+    use safemesh_crdt::{EventLog, Record, RecordId, VersionVector, WireDecode};
+    use std::collections::BTreeSet;
+    let records = [
+        Record {
+            id: RecordId {
+                replica: 0,
+                sequence: 0,
+            },
+            delta: GCounterDelta {
+                replica: 0,
+                tally: 0,
+            },
+        },
+        Record {
+            id: RecordId {
+                replica: 0,
+                sequence: 1,
+            },
+            delta: GCounterDelta {
+                replica: 0,
+                tally: 1,
+            },
+        },
+    ];
+    let mut bytes = Vec::new();
+    EventLog::encode_records(Some(2), &records, &mut bytes).unwrap();
+    let log = EventLog::<GCounterDelta>::from_wire_bytes(&bytes).unwrap();
+    let peer = VersionVector::new();
+    let all: BTreeSet<_> = log.since(&peer).iter().map(|record| record.id).collect();
+    let bounded: BTreeSet<_> = log
+        .since_bounded(&peer, usize::MAX)
+        .iter()
+        .map(|record| record.id)
+        .collect();
+    assert!(bounded.contains(&records[0].id));
+    assert_eq!(bounded, all);
+}

@@ -89,6 +89,12 @@ impl<C: Crdt> Replica<C> {
     {
         self.log.since(peer)
     }
+    pub fn since_bounded(&self, peer: &VersionVector, max_records: usize) -> Vec<Record<C::Delta>>
+    where
+        C::Delta: Clone,
+    {
+        self.log.since_bounded(peer, max_records)
+    }
     /// A Collision verdict also raises the collision alarm; see
     /// [`Self::collisions`] and [`Self::collision_report_bytes`].
     pub fn admit(&mut self, record: Record<C::Delta>) -> Admission

@@ -12,7 +12,7 @@ export CARGO_TARGET_DIR="$CHECKLIST_SCRATCH/target"
 export SAFEMESH_CONSUMER="$CHECKLIST_SCRATCH/consumer"
 mkdir -p "$SAFEMESH_CONSUMER"
 ./scripts/package-wasm.sh nodejs "$CHECKLIST_SCRATCH/pkg-node"
-(cd "$SAFEMESH_CONSUMER" && npm init -y && npm install "$CHECKLIST_SCRATCH/pkg-node/safemesh-wasm-0.2.2.tgz")
+(cd "$SAFEMESH_CONSUMER" && npm init -y && npm install "$CHECKLIST_SCRATCH/pkg-node/safemesh-wasm-1.0.0.tgz")
 node demos/wasm-checklist/journey.mjs
 ```
 

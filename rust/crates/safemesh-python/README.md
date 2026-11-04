@@ -49,7 +49,7 @@ See the repository `CLAIMS.md` and `WHAT-IS-PROVEN.md` for the full wording rule
 
 ## Install
 
-Build a local wheel with maturin; v0.2 CI performs a wheel build and install smoke test but does not publish to PyPI.
+Build a local wheel with maturin; v1.0 CI performs a wheel build and install smoke test but does not publish to PyPI.
 
 The Linux x64 wheel reaches CPython 3.8 and later through PyO3's `abi3-py38` stable ABI. This is
 artifact reach, not a claim that every interpreter or platform is tested; macOS, Windows, ARM64,

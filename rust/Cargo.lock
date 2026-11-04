@@ -359,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "safemesh-crdt"
-version = "0.2.2"
+version = "1.0.0"
 dependencies = [
  "proptest",
  "serde_json",
@@ -367,14 +367,14 @@ dependencies = [
 
 [[package]]
 name = "safemesh-ffi"
-version = "0.2.2"
+version = "1.0.0"
 dependencies = [
  "safemesh-crdt",
 ]
 
 [[package]]
 name = "safemesh-python"
-version = "0.2.2"
+version = "1.0.0"
 dependencies = [
  "pyo3",
  "safemesh-crdt",
@@ -382,7 +382,7 @@ dependencies = [
 
 [[package]]
 name = "safemesh-wasm"
-version = "0.2.2"
+version = "1.0.0"
 dependencies = [
  "safemesh-crdt",
  "wasm-bindgen",

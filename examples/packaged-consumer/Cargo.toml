@@ -7,4 +7,4 @@ publish = false
 [workspace]
 
 [dependencies]
-safemesh-crdt = { path = "../safemesh-crdt-0.2.2", features = ["local-writer"] }
+safemesh-crdt = { path = "../safemesh-crdt-1.0.0", features = ["local-writer"] }

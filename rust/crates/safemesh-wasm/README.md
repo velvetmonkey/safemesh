@@ -36,7 +36,7 @@ See the repository `CLAIMS.md` and `WHAT-IS-PROVEN.md` for the full wording rule
 
 ## Install
 
-The v0.2 distribution flow builds an npm package with `wasm-pack`; it does not publish to npm.
+The v1.0 distribution flow builds an npm package with `wasm-pack`; it does not publish to npm.
 The shared script includes the required JavaScript snippets and runs `npm pack`,
 leaving an installable `.tgz` in `pkg` (bundler) or `pkg-node` (Node).
 It accepts an optional output directory as its second argument.

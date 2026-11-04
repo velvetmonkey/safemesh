@@ -129,17 +129,55 @@ for (const [name, cls] of Object.entries(CLASSES)) {
   assert.deepEqual(cls.read(b), cls.read(a));
   assert.deepEqual(b.mergeLogBytes(a.sinceLogBytes(b.versionVector())), []);
 
-  // Budgets: the since batch refuses what B's mergeLogBytes would refuse.
+  // Budgets: record selection is bounded; collection refusal still matches merge.
   const probe = cls.make(7n);
-  for (const budgets of [[undefined, 7], [undefined, 0], [0, undefined], [1, undefined]]) {
+  for (const budgets of [[0, undefined], [1, undefined]]) {
     const sent = refusal(() => a.sinceLogBytes(peer, ...budgets));
     const merged = refusal(() => probe.mergeLogBytes(batch, ...budgets));
     assert.deepEqual(sent, merged, `${name}: budgets ${budgets} match mergeLogBytes`);
   }
-  assert.deepEqual(refusal(() => a.sinceLogBytes(peer, undefined, 7)), {
+  const second = cls.make(10n);
+  const initialWriters = AUTHORS.map(author => cls.make(author));
+  for (let i = 1; i <= 6; i++) {
+    initialWriters.forEach((w, index) => cls.append(w, AUTHORS[index], i));
+  }
+  for (const w of initialWriters) second.mergeLogBytes(w.logBytes());
+  assert.deepEqual(pairs(second.recordIds()), bIds);
+  const b7 = a.sinceLogBytes(peer, undefined, 7);
+  const firstVerdicts = second.mergeLogBytes(b7, undefined, 7);
+  assert.deepEqual(firstVerdicts, Array(7).fill("accepted"));
+  const firstIds = pairs(second.recordIds()).filter(id => !bIds.includes(id));
+  assert.equal(firstIds.length, 7);
+  assert.equal(new Set(firstIds).size, 7);
+  assert(firstIds.every(id => missing.includes(id)));
+  const last = a.sinceLogBytes(second.versionVector(), undefined, 7);
+  assert.deepEqual(second.mergeLogBytes(last, undefined, 7), ["accepted"]);
+  assert.deepEqual(
+    [...pairs(second.recordIds())].sort(),
+    [...aIds].sort(),
+    `${name}: bounded repair holds the same record IDs`,
+  );
+  assert.deepEqual(cls.read(second), cls.read(a), `${name}: bounded repair holds the same state`);
+  assert.deepEqual(
+    Array.from(second.versionVector()),
+    Array.from(a.versionVector()),
+    `${name}: bounded repair holds the same version`,
+  );
+  assert.deepEqual(
+    second.mergeLogBytes(a.sinceLogBytes(second.versionVector()), undefined, 7),
+    [],
+    `${name}: bounded repair has nothing left to send`,
+  );
+  for (const handle of [...initialWriters, second]) handle.free();
+  assert.deepEqual(refusal(() => probe.mergeLogBytes(batch, undefined, 7)), {
     code: 1,
     message: "failed to decode event log: RecordLimitExceeded: 7",
   });
+  const zeroBatch = a.sinceLogBytes(peer, undefined, 0);
+  const emptyProbe = cls.make(6n);
+  assert.equal(hex(zeroBatch), hex(emptyProbe.logBytes()), `${name}: maxRecords 0 returns an empty log frame`);
+  emptyProbe.free();
+  assert.deepEqual(probe.mergeLogBytes(zeroBatch, undefined, 0), []);
   assert.deepEqual(hex(a.sinceLogBytes(peer, undefined, 8)), hex(batch));
   assert.equal(refusal(() => a.sinceLogBytes(peer, undefined, -1)).code, 2);
   assert.equal(refusal(() => a.sinceLogBytes(peer, 1.5)).code, 2);
