@@ -532,9 +532,10 @@ The full gate
 
 The
 [python](https://github.com/velvetmonkey/safemesh/blob/main/.github/workflows/ci.yml)
-job matrix is CPython 3.8–3.14 on `ubuntu-latest`, including
-`cargo test -p safemesh-python`. The full-gate job runs on `ubuntu-latest` and
-sets Node 24. The
+job matrix is CPython 3.8–3.14 on `ubuntu-24.04`, including
+`cargo test -p safemesh-python`.
+
+The full-gate job runs on `ubuntu-latest` and sets Node 24. The
 [documentation workflow](https://github.com/velvetmonkey/safemesh/blob/main/.github/workflows/docs.yml)
 uses Node 24. wasm-pack **0.15.0** is the locked installer in both the floor
 job and the full gate.

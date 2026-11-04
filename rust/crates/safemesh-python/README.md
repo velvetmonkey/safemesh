@@ -34,7 +34,7 @@ python3 -m pip install 'maturin>=1.7,<2'
 This package provides binding glue with **API present** in `src/lib.rs`.
 **Artifact available** means a locally built wheel, not a PyPI release.
 **Build checked** and **runtime tested**: CI builds and installs a wheel and runs
-the Rust-side binding tests on Linux x64 (`ubuntu-latest`) with CPython 3.8, 3.9,
+the Rust-side binding tests on Linux x64 (`ubuntu-24.04`) with CPython 3.8, 3.9,
 3.10, 3.11, 3.12, 3.13, and 3.14.
 **Integration tested**: each matrix entry runs `examples/data_mule_demo.py` and
 `demos/two-app-inventory/test_sync.py` against the installed wheel.
@@ -57,8 +57,10 @@ and other operating-system or architecture combinations have no artifact evidenc
 
 The Python CI matrix builds and installs the wheel, runs the Rust-side binding tests, and executes
 the data-mule demo and two-app inventory sync test on Linux x64 with CPython 3.8, 3.9, 3.10, 3.11,
-3.12, 3.13, and 3.14. The `full-gate` job requires every matrix entry to pass and retains its Python
-3.11 distribution smoke test. Both use `ubuntu-latest`; other interpreters and future Python minors
+3.12, 3.13, and 3.14 on `ubuntu-24.04`.
+
+The `full-gate` job requires every matrix entry to pass and retains its Python
+3.11 distribution smoke test on `ubuntu-latest`; other interpreters and future Python minors
 are not established by this matrix, and maintainer support remains unknown.
 
 ```sh

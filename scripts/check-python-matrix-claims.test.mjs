@@ -82,10 +82,10 @@ test('a range with to is parsed', () => withTree(({ edit, run }) => {
   assert.equal(result.status, 0, result.stderr);
 }));
 test('a different named runner fails by path', () => withTree(({ edit, run }) => {
-  edit(readme, 'on `ubuntu-latest` with CPython', 'on `windows-latest` with CPython');
+  edit(readme, 'on `ubuntu-24.04` with CPython', 'on `windows-latest` with CPython');
   const result = run();
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /^FAIL README\.md:126: runner windows-latest differs from python job ubuntu-latest/m);
+  assert.match(result.stderr, /^FAIL README\.md:126: runner windows-latest differs from python job ubuntu-24\.04/m);
 }));
 test('F5: a version after a range fails README', () => withTree(({ edit, run }) => {
   edit(readme, 'CPython 3.8–3.14.', 'CPython 3.8–3.14 and 3.15.');
@@ -101,28 +101,28 @@ test('NEG: a later clause is not the matrix', () => withTree(({ edit, run }) => 
   assert.match(result.stdout, /PASS python matrix 3\.8\.\.3\.14 \(7 versions\), 5 surfaces/);
 }));
 test('a dotted job runner is parsed and differs from named prose runners', () => withTree(({ edit, run }) => {
-  edit(workflow, '  python:\n    runs-on: ubuntu-latest', '  python:\n    runs-on: ubuntu-24.04');
+  edit(workflow, '  python:\n    runs-on: ubuntu-24.04', '  python:\n    runs-on: ubuntu-22.04');
   const result = run();
   assert.equal(result.status, 1);
   assert.doesNotMatch(result.stderr, /invalid python job runner/);
   const lines = failureLines(result);
   assert.equal(lines.length, 4, result.stderr);
   assert.deepEqual(lines.map(line => line.match(/^FAIL ([^:]+):/)[1]), [readme, persist, crate, crate]);
-  assert.deepEqual(lines.map(line => line.match(/runner (.+) differs from python job ubuntu-24\.04$/)?.[1]),
-    ['ubuntu-latest', 'ubuntu-latest, ubuntu-latest', 'ubuntu-latest', 'ubuntu-latest']);
+  assert.deepEqual(lines.map(line => line.match(/runner (.+) differs from python job ubuntu-22\.04$/)?.[1]),
+    ['ubuntu-24.04', 'ubuntu-24.04', 'ubuntu-24.04', 'ubuntu-24.04']);
 }));
 test('matching dotted job and prose runners pass', () => withTree(({ edit, editAll, run }) => {
-  edit(workflow, '  python:\n    runs-on: ubuntu-latest', '  python:\n    runs-on: ubuntu-24.04');
-  for (const path of [readme, persist, crate]) editAll(path, '`ubuntu-latest`', '`ubuntu-24.04`');
+  edit(workflow, '  python:\n    runs-on: ubuntu-24.04', '  python:\n    runs-on: ubuntu-22.04');
+  for (const path of [readme, persist, crate]) editAll(path, '`ubuntu-24.04`', '`ubuntu-22.04`');
   const result = run();
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^PASS python matrix 3\.8\.\.3\.14 \(7 versions\), 5 surfaces$/m);
 }));
 test('a dotted prose runner mismatch fails README', () => withTree(({ edit, editAll, run }) => {
-  edit(workflow, '  python:\n    runs-on: ubuntu-latest', '  python:\n    runs-on: ubuntu-24.04');
-  for (const path of [readme, persist, crate]) editAll(path, '`ubuntu-latest`', '`ubuntu-24.04`');
-  edit(readme, '`ubuntu-24.04`', '`ubuntu-22.04`');
+  edit(workflow, '  python:\n    runs-on: ubuntu-24.04', '  python:\n    runs-on: ubuntu-22.04');
+  for (const path of [readme, persist, crate]) editAll(path, '`ubuntu-24.04`', '`ubuntu-22.04`');
+  edit(readme, '`ubuntu-22.04`', '`ubuntu-20.04`');
   const result = run();
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /^FAIL README\.md:126: runner ubuntu-22\.04 differs from python job ubuntu-24\.04/m);
+  assert.match(result.stderr, /^FAIL README\.md:126: runner ubuntu-20\.04 differs from python job ubuntu-22\.04/m);
 }));
