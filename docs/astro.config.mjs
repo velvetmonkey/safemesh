@@ -29,6 +29,7 @@ export default defineConfig({
       { label: 'The proof and its boundary', slug: 'proof' },
       { label: 'Using SafeMesh', slug: 'using-safemesh' },
       { label: 'When not to use it', slug: 'limits' },
+      { label: 'Behaviour contract', slug: 'behaviour-contract' },
       { label: 'Claims and evidence', slug: 'claims' },
       { label: 'Examples', slug: 'examples' },
       { label: 'API reference', slug: 'reference' },
